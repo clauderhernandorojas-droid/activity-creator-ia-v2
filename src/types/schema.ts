@@ -1,0 +1,213 @@
+import { z } from 'zod';
+
+// ==========================================
+// A. CONTENIDO DE CONSULTA / REFERENCIA PASIVA
+// ==========================================
+
+export const ReferenceTextBlockSchema = z.object({
+  type: z.literal('text'),
+  id: z.string(),
+  title: z.string().optional(),
+  content: z.string(),
+  category: z.enum(['reading', 'grammar_note', 'instructions', 'dialogue']).default('grammar_note'),
+});
+
+export const ReferenceTableBlockSchema = z.object({
+  type: z.literal('table_reference'),
+  id: z.string(),
+  title: z.string().optional(),
+  headers: z.array(z.string()),
+  rows: z.array(z.array(z.string())),
+  caption: z.string().optional(),
+});
+
+export const ReferenceMediaBlockSchema = z.object({
+  type: z.literal('media'),
+  id: z.string(),
+  mediaType: z.enum(['audio', 'image']),
+  url: z.string(),
+  title: z.string().optional(),
+  transcript: z.string().optional(),
+});
+
+export const ReferenceBlockSchema = z.discriminatedUnion('type', [
+  ReferenceTextBlockSchema,
+  ReferenceTableBlockSchema,
+  ReferenceMediaBlockSchema,
+]);
+
+export type ReferenceTextBlock = z.infer<typeof ReferenceTextBlockSchema>;
+export type ReferenceTableBlock = z.infer<typeof ReferenceTableBlockSchema>;
+export type ReferenceMediaBlock = z.infer<typeof ReferenceMediaBlockSchema>;
+export type ReferenceBlock = z.infer<typeof ReferenceBlockSchema>;
+
+// ==========================================
+// B. LAS 4 ÚNICAS PLANTILLAS UNIVERSALES DE INTERACCIÓN
+// ==========================================
+
+// 1. INPUT FIELDS (Rellenar espacios / respuesta escrita)
+export const InputFieldListItemSchema = z.object({
+  id: z.string(),
+  prompt: z.string(),
+  prefix: z.string().optional(),
+  suffix: z.string().optional(),
+  acceptedAnswers: z.array(z.string()),
+  hint: z.string().optional(),
+});
+
+export const InputFieldTableCellSchema = z.object({
+  text: z.string(),
+  isInput: z.boolean().default(false),
+  inputId: z.string().optional(),
+  acceptedAnswers: z.array(z.string()).default([]),
+});
+
+export const InputFieldsBlockSchema = z.object({
+  type: z.literal('input_fields'),
+  id: z.string(),
+  instruction: z.string(),
+  layoutMode: z.enum(['list', 'table', 'inline_paragraph']),
+  // Para layoutMode: 'list'
+  listItems: z.array(InputFieldListItemSchema).default([]),
+  // Para layoutMode: 'table'
+  tableHeaders: z.array(z.string()).default([]),
+  tableRows: z.array(z.array(InputFieldTableCellSchema)).default([]),
+  // Para layoutMode: 'inline_paragraph'
+  paragraphTemplate: z.string().default(''), // Ej: "Yesterday, Mick {{input_1}} at 8:00 AM and {{input_2}} his coffee."
+  paragraphInputs: z.record(z.string(), z.array(z.string())).default({}), // key: input_1 -> ["arrived", "got in"]
+});
+
+export type InputFieldListItem = z.infer<typeof InputFieldListItemSchema>;
+export type InputFieldTableCell = z.infer<typeof InputFieldTableCellSchema>;
+export type InputFieldsBlock = z.infer<typeof InputFieldsBlockSchema>;
+
+// 2. SELECTION (Opciones y marcación)
+export const SelectionOptionSchema = z.object({
+  id: z.string(),
+  text: z.string(),
+  isCorrect: z.boolean(),
+  feedback: z.string().optional(),
+});
+
+export const SelectionQuestionSchema = z.object({
+  id: z.string(),
+  prompt: z.string(),
+  contextText: z.string().optional(),
+  mode: z.enum(['single_choice', 'multiple_choice', 'dropdown']),
+  options: z.array(SelectionOptionSchema),
+});
+
+export const SelectionBlockSchema = z.object({
+  type: z.literal('selection'),
+  id: z.string(),
+  instruction: z.string(),
+  questions: z.array(SelectionQuestionSchema),
+});
+
+export type SelectionOption = z.infer<typeof SelectionOptionSchema>;
+export type SelectionQuestion = z.infer<typeof SelectionQuestionSchema>;
+export type SelectionBlock = z.infer<typeof SelectionBlockSchema>;
+
+// 3. BUCKETS MATCHING (Clasificación y emparejamiento)
+export const BucketTargetSchema = z.object({
+  id: z.string(),
+  label: z.string(),
+  description: z.string().optional(),
+  color: z.string().optional(),
+});
+
+export const BucketTokenSchema = z.object({
+  id: z.string(),
+  text: z.string(),
+  correctBucketId: z.string(),
+  hint: z.string().optional(),
+});
+
+export const BucketsMatchingBlockSchema = z.object({
+  type: z.literal('buckets_matching'),
+  id: z.string(),
+  instruction: z.string(),
+  buckets: z.array(BucketTargetSchema),
+  tokens: z.array(BucketTokenSchema),
+});
+
+export type BucketTarget = z.infer<typeof BucketTargetSchema>;
+export type BucketToken = z.infer<typeof BucketTokenSchema>;
+export type BucketsMatchingBlock = z.infer<typeof BucketsMatchingBlockSchema>;
+
+// 4. SEQUENCE (Orden secuencial)
+export const SequenceItemSchema = z.object({
+  id: z.string(),
+  text: z.string(),
+  correctOrder: z.number(), // 1-indexed
+  speaker: z.string().optional(),
+  hint: z.string().optional(),
+});
+
+export const SequenceBlockSchema = z.object({
+  type: z.literal('sequence'),
+  id: z.string(),
+  instruction: z.string(),
+  items: z.array(SequenceItemSchema),
+});
+
+export type SequenceItem = z.infer<typeof SequenceItemSchema>;
+export type SequenceBlock = z.infer<typeof SequenceBlockSchema>;
+
+// UNIÓN DE INTERACCIONES EVALUABLES
+export const InteractionBlockSchema = z.discriminatedUnion('type', [
+  InputFieldsBlockSchema,
+  SelectionBlockSchema,
+  BucketsMatchingBlockSchema,
+  SequenceBlockSchema,
+]);
+
+export type InteractionBlock = z.infer<typeof InteractionBlockSchema>;
+
+// ==========================================
+// C. ESTRUCTURA DE LA DIAPOSITIVA (SLIDE)
+// ==========================================
+
+export const SlideLayoutSchema = z.enum(['single_column', 'split_50_50', 'header_stacked']);
+export type SlideLayout = z.infer<typeof SlideLayoutSchema>;
+
+export const SlideSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  subtitle: z.string().optional(),
+  layout: SlideLayoutSchema.default('split_50_50'),
+  referenceContent: ReferenceBlockSchema.nullable().optional(),
+  interaction: InteractionBlockSchema.nullable().optional(),
+  notes: z.string().optional(),
+});
+
+export type Slide = z.infer<typeof SlideSchema>;
+
+// ==========================================
+// D. LECCIÓN / CURSO
+// ==========================================
+
+export const LessonSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  level: z.enum(['A1-A2', 'B1', 'B2', 'C1']),
+  unit: z.string(),
+  slides: z.array(SlideSchema),
+});
+
+export type Lesson = z.infer<typeof LessonSchema>;
+
+// ==========================================
+// E. FLUJO OCR Y EXTRACCIÓN LIMPIA (PASO 1 -> PASO 2)
+// ==========================================
+
+export const ExtractedBlockSchema = z.object({
+  id: z.string(),
+  rawText: z.string(),
+  detectedType: z.enum(['paragraph', 'table', 'numbered_list', 'dialogue', 'vocabulary']),
+  confidence: z.number().min(0).max(1),
+  sourceImageSnippetUrl: z.string().optional(),
+  parsedData: z.record(z.string(), z.any()).optional(),
+});
+
+export type ExtractedBlock = z.infer<typeof ExtractedBlockSchema>;
