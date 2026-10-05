@@ -6,6 +6,7 @@ import type {
   InteractionBlock,
   InputFieldsBlock,
   SelectionBlock,
+  SelectionOption,
   BucketsMatchingBlock,
   SequenceBlock,
   BucketTarget,
@@ -303,60 +304,82 @@ export function mapBlockToInputFields(block: ExtractedBlock): InputFieldsBlock {
 }
 
 /**
- * Universal Zero-Hardcoding Mapper for Multiple Choice Selection
+ * Universal Zero-Hardcoding Mapper for Selection (Quiz Mode or Flat Selection List)
  */
 export function mapBlockToSelection(block: ExtractedBlock): SelectionBlock {
   const parsed = block.parsedData || {};
 
-  let questions: any[] = [];
+  // Case 1: Payload explicitly contains closed question/options pairs
+  const hasExplicitQuestions =
+    Array.isArray(parsed.questions) &&
+    parsed.questions.length > 0 &&
+    parsed.questions.some((q: any) => Array.isArray(q.options) && q.options.length > 0);
 
-  if (Array.isArray(parsed.questions) && parsed.questions.length > 0) {
-    questions = parsed.questions.map((q: any, qi: number) => ({
+  if (hasExplicitQuestions) {
+    const questions = parsed.questions.map((q: any, qi: number) => ({
       id: generateId('q'),
-      prompt: q.prompt || `Question ${qi + 1}`,
-      mode: q.mode || 'single_choice',
+      prompt: String(q.prompt || q.question || `Pregunta ${qi + 1}`).trim(),
+      mode: q.mode || (q.options?.filter((o: any) => o.isCorrect)?.length > 1 ? 'multiple_choice' : 'single_choice'),
       options: (q.options || []).map((opt: any) => ({
         id: generateId('opt'),
         text: String(opt.text || opt.label || '').trim(),
-        isCorrect: Boolean(opt.isCorrect),
+        isCorrect: typeof opt.isCorrect === 'boolean' ? opt.isCorrect : undefined,
         feedback: opt.feedback
       }))
     }));
-  } else if (Array.isArray(parsed.items) && parsed.items.length > 0) {
-    questions = parsed.items.map((it: any, idx: number) => ({
-      id: generateId('q'),
-      prompt: it.text || `Item ${idx + 1}`,
-      mode: 'single_choice',
-      options: [
-        { id: generateId('opt'), text: it.answer || 'Correct Option', isCorrect: true },
-        { id: generateId('opt'), text: 'Alternative Option', isCorrect: false }
-      ]
-    }));
-  } else if (block.rawText) {
-    questions = [
-      {
-        id: generateId('q'),
-        prompt: parsed.title || 'Choose the grammatically accurate statement:',
-        mode: 'single_choice',
-        options: block.rawText
-          .split('\n')
-          .map((l) => l.trim())
-          .filter(Boolean)
-          .slice(0, 4)
-          .map((line, i) => ({
-            id: generateId('opt'),
-            text: line.replace(/^[A-Da-d][\s).:-]+/, '').trim(),
-            isCorrect: i === 0
-          }))
-      }
-    ];
+
+    return {
+      type: 'selection',
+      id: generateId('inter-sel'),
+      instruction: parsed.instruction || 'Elige la opción correcta para cada enunciado:',
+      questions
+    };
   }
+
+  // Case 2: Flat list of items, phrases, tokens, or text lines (ZERO MOCKS, ZERO HARDCODING)
+  let flatItems: string[] = [];
+
+  if (Array.isArray(parsed.options) && parsed.options.length > 0) {
+    flatItems = parsed.options
+      .map((opt: any) => (typeof opt === 'string' ? opt.trim() : String(opt.text || opt.label || '').trim()))
+      .filter(Boolean);
+  } else if (Array.isArray(parsed.items) && parsed.items.length > 0) {
+    flatItems = parsed.items
+      .map((it: any) => (typeof it === 'string' ? it.trim() : String(it.text || it.prompt || it.phrase || it.word || '').trim()))
+      .filter(Boolean);
+  } else if (Array.isArray(parsed.tokens) && parsed.tokens.length > 0) {
+    flatItems = parsed.tokens
+      .map((t: any) => (typeof t === 'string' ? t.trim() : String(t.text || t.word || '').trim()))
+      .filter(Boolean);
+  } else if (block.rawText) {
+    const lines = block.rawText
+      .split('\n')
+      .map((l) => l.trim())
+      .filter((line) => {
+        if (!line) return false;
+        if (parsed.title && line.toLowerCase().includes(parsed.title.toLowerCase())) return false;
+        if (/^(vocabulary:|exercise|\d+\s*[a-z]?\s*choose|select all|read and mark)/i.test(line)) return false;
+        return true;
+      });
+
+    flatItems = lines
+      .map((l) => l.replace(/^(\d+[\s.)-]+|[a-z][\s.)-]+|[-*•]\s*)/i, '').trim())
+      .filter(Boolean);
+  }
+
+  const options: SelectionOption[] = flatItems.map((text) => ({
+    id: generateId('opt'),
+    text
+    // Note: isCorrect is left undefined because no artificial correct answers are forced!
+  }));
 
   return {
     type: 'selection',
     id: generateId('inter-sel'),
-    instruction: parsed.instruction || 'Choose the grammatically accurate option for each item:',
-    questions
+    instruction: parsed.instruction || parsed.title || 'Selecciona los elementos correspondientes:',
+    allowMultiple: true,
+    options,
+    questions: []
   };
 }
 

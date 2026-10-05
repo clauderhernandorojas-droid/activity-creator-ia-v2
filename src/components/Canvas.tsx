@@ -245,8 +245,8 @@ export const Canvas: React.FC = () => {
                           prompt: 'Which sentence is grammatically correct?',
                           mode: 'single_choice',
                           options: [
-                            { id: 'o-1', text: 'Option A (Correct)', isCorrect: true },
-                            { id: 'o-2', text: 'Option B (Distractor)', isCorrect: false }
+                            { id: 'o-1', text: 'She has lived here for three years.', isCorrect: true },
+                            { id: 'o-2', text: 'She has lived here since three years.', isCorrect: false }
                           ]
                         }
                       ]

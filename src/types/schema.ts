@@ -85,7 +85,7 @@ export type InputFieldsBlock = z.infer<typeof InputFieldsBlockSchema>;
 export const SelectionOptionSchema = z.object({
   id: z.string(),
   text: z.string(),
-  isCorrect: z.boolean(),
+  isCorrect: z.boolean().optional(),
   feedback: z.string().optional(),
 });
 
@@ -101,7 +101,12 @@ export const SelectionBlockSchema = z.object({
   type: z.literal('selection'),
   id: z.string(),
   instruction: z.string(),
-  questions: z.array(SelectionQuestionSchema),
+  // Dual support:
+  // a) Quiz / Questionnaire Mode: per-item questions
+  questions: z.array(SelectionQuestionSchema).optional().default([]),
+  // b) Flat Selection Mode: flat list of selectable items/cards
+  options: z.array(SelectionOptionSchema).optional(),
+  allowMultiple: z.boolean().optional(),
 });
 
 export type SelectionOption = z.infer<typeof SelectionOptionSchema>;

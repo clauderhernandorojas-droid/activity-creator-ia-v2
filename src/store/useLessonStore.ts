@@ -10,6 +10,24 @@ import type {
 import { initialLesson, sampleExtractedBlocks } from '../data/sampleData';
 import { digitizeBook, createManualBlock, type ManualTemplateType } from '../core/ai/digitizeBook';
 import { mapBlockToRole, type PedagogicalRole } from '../core/ai/payloadMapper';
+import { useSessionStore } from './useSessionStore';
+
+export interface HistorySnapshot {
+  lesson: Lesson;
+  activeSlideId: string;
+}
+
+const MAX_HISTORY = 40;
+
+let lastTextEditTime = 0;
+function shouldRecordTextSnapshot(): boolean {
+  const now = Date.now();
+  if (now - lastTextEditTime > 600) {
+    lastTextEditTime = now;
+    return true;
+  }
+  return false;
+}
 
 interface LessonState {
   lesson: Lesson;
@@ -17,6 +35,17 @@ interface LessonState {
   lastExtractedPayload: ExtractedBlock[] | null;
   ocrProcessing: boolean;
   pastedImagePreview: string | null;
+
+  // History (Undo / Redo)
+  past: HistorySnapshot[];
+  future: HistorySnapshot[];
+  canUndo: boolean;
+  canRedo: boolean;
+  undo: () => void;
+  redo: () => void;
+
+  // Actions - Reset OCR Session
+  resetOcrState: () => void;
 
   // Actions - Slide Structure
   addSlide: (layout?: SlideLayout) => string;
@@ -55,12 +84,107 @@ interface LessonState {
   ) => void;
 }
 
+function recordHistory(state: LessonState): Partial<LessonState> {
+  const activeSlideId = useSessionStore.getState().currentSlideId || '';
+  const snapshot: HistorySnapshot = {
+    lesson: JSON.parse(JSON.stringify(state.lesson)),
+    activeSlideId
+  };
+  const newPast = [...state.past, snapshot].slice(-MAX_HISTORY);
+  return {
+    past: newPast,
+    future: [],
+    canUndo: true,
+    canRedo: false
+  };
+}
+
 export const useLessonStore = create<LessonState>((set, get) => ({
   lesson: initialLesson,
   extractedBlocks: sampleExtractedBlocks,
   lastExtractedPayload: sampleExtractedBlocks,
   ocrProcessing: false,
   pastedImagePreview: null,
+
+  // History State
+  past: [],
+  future: [],
+  canUndo: false,
+  canRedo: false,
+
+  undo: () => {
+    const state = get();
+    if (state.past.length === 0) return;
+
+    const previousPast = [...state.past];
+    const previousSnapshot = previousPast.pop();
+    if (!previousSnapshot) return;
+
+    const currentSlideId = useSessionStore.getState().currentSlideId || '';
+    const currentSnapshot: HistorySnapshot = {
+      lesson: JSON.parse(JSON.stringify(state.lesson)),
+      activeSlideId: currentSlideId
+    };
+
+    const newFuture = [currentSnapshot, ...state.future].slice(0, MAX_HISTORY);
+
+    set({
+      lesson: previousSnapshot.lesson,
+      past: previousPast,
+      future: newFuture,
+      canUndo: previousPast.length > 0,
+      canRedo: true
+    });
+
+    if (previousSnapshot.activeSlideId) {
+      useSessionStore.getState().setCurrentSlideId(previousSnapshot.activeSlideId);
+    } else if (previousSnapshot.lesson.slides.length > 0) {
+      useSessionStore.getState().setCurrentSlideId(previousSnapshot.lesson.slides[0].id);
+    } else {
+      useSessionStore.getState().setCurrentSlideId('');
+    }
+  },
+
+  redo: () => {
+    const state = get();
+    if (state.future.length === 0) return;
+
+    const nextFuture = [...state.future];
+    const nextSnapshot = nextFuture.shift();
+    if (!nextSnapshot) return;
+
+    const currentSlideId = useSessionStore.getState().currentSlideId || '';
+    const currentSnapshot: HistorySnapshot = {
+      lesson: JSON.parse(JSON.stringify(state.lesson)),
+      activeSlideId: currentSlideId
+    };
+
+    const newPast = [...state.past, currentSnapshot].slice(-MAX_HISTORY);
+
+    set({
+      lesson: nextSnapshot.lesson,
+      past: newPast,
+      future: nextFuture,
+      canUndo: true,
+      canRedo: nextFuture.length > 0
+    });
+
+    if (nextSnapshot.activeSlideId) {
+      useSessionStore.getState().setCurrentSlideId(nextSnapshot.activeSlideId);
+    } else if (nextSnapshot.lesson.slides.length > 0) {
+      useSessionStore.getState().setCurrentSlideId(nextSnapshot.lesson.slides[0].id);
+    } else {
+      useSessionStore.getState().setCurrentSlideId('');
+    }
+  },
+
+  resetOcrState: () => {
+    set({
+      pastedImagePreview: null,
+      extractedBlocks: [],
+      lastExtractedPayload: null
+    });
+  },
 
   addSlide: (layout = 'split_50_50') => {
     const newId = `slide-${Date.now()}`;
@@ -97,6 +221,7 @@ export const useLessonStore = create<LessonState>((set, get) => ({
     };
 
     set((state) => ({
+      ...recordHistory(state),
       lesson: {
         ...state.lesson,
         slides: [...state.lesson.slides, newSlide],
@@ -108,6 +233,7 @@ export const useLessonStore = create<LessonState>((set, get) => ({
 
   deleteSlide: (id) => {
     set((state) => ({
+      ...recordHistory(state),
       lesson: {
         ...state.lesson,
         slides: state.lesson.slides.filter((s) => s.id !== id),
@@ -117,6 +243,7 @@ export const useLessonStore = create<LessonState>((set, get) => ({
 
   clearLesson: () => {
     set((state) => ({
+      ...recordHistory(state),
       lesson: {
         ...state.lesson,
         slides: [],
@@ -130,26 +257,25 @@ export const useLessonStore = create<LessonState>((set, get) => ({
     const newId = `slide-${Date.now()}`;
     const title = block?.parsedData?.title || 'Diapositiva Digitalizada';
     const subtitle = block?.parsedData?.instruction || 'Contenido adaptado desde libro de texto';
+    const mapped = block ? mapBlockToRole(block, role) : {};
 
     const newSlide: Slide = {
       id: newId,
       title,
       subtitle,
       layout: 'split_50_50',
-      referenceContent: null,
-      interaction: null,
+      referenceContent: mapped.reference || null,
+      interaction: mapped.interaction || null,
     };
 
     set((s) => ({
+      ...recordHistory(s),
       lesson: {
         ...s.lesson,
         slides: [...s.lesson.slides, newSlide],
       },
     }));
 
-    if (block) {
-      get().assignExtractedBlock(newId, block.id, role);
-    }
     return newId;
   },
 
@@ -169,9 +295,10 @@ export const useLessonStore = create<LessonState>((set, get) => ({
     const newSlides = [...state.lesson.slides];
     newSlides.splice(index + 1, 0, clonedSlide);
 
-    set({
-      lesson: { ...state.lesson, slides: newSlides },
-    });
+    set((s) => ({
+      ...recordHistory(s),
+      lesson: { ...s.lesson, slides: newSlides },
+    }));
 
     return cloneId;
   },
@@ -182,6 +309,7 @@ export const useLessonStore = create<LessonState>((set, get) => ({
       const [removed] = slides.splice(startIndex, 1);
       slides.splice(endIndex, 0, removed);
       return {
+        ...recordHistory(state),
         lesson: { ...state.lesson, slides },
       };
     });
@@ -189,6 +317,7 @@ export const useLessonStore = create<LessonState>((set, get) => ({
 
   updateSlideTitle: (id, title) => {
     set((state) => ({
+      ...(shouldRecordTextSnapshot() ? recordHistory(state) : {}),
       lesson: {
         ...state.lesson,
         slides: state.lesson.slides.map((s) => (s.id === id ? { ...s, title } : s)),
@@ -198,6 +327,7 @@ export const useLessonStore = create<LessonState>((set, get) => ({
 
   updateSlideSubtitle: (id, subtitle) => {
     set((state) => ({
+      ...(shouldRecordTextSnapshot() ? recordHistory(state) : {}),
       lesson: {
         ...state.lesson,
         slides: state.lesson.slides.map((s) => (s.id === id ? { ...s, subtitle } : s)),
@@ -207,6 +337,7 @@ export const useLessonStore = create<LessonState>((set, get) => ({
 
   updateSlideLayout: (id, layout) => {
     set((state) => ({
+      ...recordHistory(state),
       lesson: {
         ...state.lesson,
         slides: state.lesson.slides.map((s) => (s.id === id ? { ...s, layout } : s)),
@@ -216,6 +347,7 @@ export const useLessonStore = create<LessonState>((set, get) => ({
 
   updateSlideNotes: (id, notes) => {
     set((state) => ({
+      ...(shouldRecordTextSnapshot() ? recordHistory(state) : {}),
       lesson: {
         ...state.lesson,
         slides: state.lesson.slides.map((s) => (s.id === id ? { ...s, notes } : s)),
@@ -225,6 +357,7 @@ export const useLessonStore = create<LessonState>((set, get) => ({
 
   updateReferenceBlock: (slideId, block) => {
     set((state) => ({
+      ...recordHistory(state),
       lesson: {
         ...state.lesson,
         slides: state.lesson.slides.map((s) =>
@@ -236,6 +369,7 @@ export const useLessonStore = create<LessonState>((set, get) => ({
 
   updateInteractionBlock: (slideId, block) => {
     set((state) => ({
+      ...recordHistory(state),
       lesson: {
         ...state.lesson,
         slides: state.lesson.slides.map((s) =>
@@ -343,11 +477,19 @@ export const useLessonStore = create<LessonState>((set, get) => ({
     if (!block) return;
 
     const mapped = mapBlockToRole(block, role);
-    if (mapped.reference) {
-      state.updateReferenceBlock(slideId, mapped.reference);
-    }
-    if (mapped.interaction) {
-      state.updateInteractionBlock(slideId, mapped.interaction);
-    }
+    set((s) => ({
+      ...recordHistory(s),
+      lesson: {
+        ...s.lesson,
+        slides: s.lesson.slides.map((slide) => {
+          if (slide.id !== slideId) return slide;
+          return {
+            ...slide,
+            ...(mapped.reference ? { referenceContent: mapped.reference } : {}),
+            ...(mapped.interaction ? { interaction: mapped.interaction } : {}),
+          };
+        }),
+      },
+    }));
   },
 }));

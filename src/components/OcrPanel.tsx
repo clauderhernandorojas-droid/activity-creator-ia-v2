@@ -41,6 +41,7 @@ export const OcrPanel: React.FC = () => {
     assignExtractedBlock,
     createSlideFromBlock,
     addSlide,
+    resetOcrState,
   } = useLessonStore();
 
   const {
@@ -124,22 +125,24 @@ export const OcrPanel: React.FC = () => {
 
   /**
    * Primary Action: Creates a new slide with the selected role, assigns content,
-   * switches Canvas to real interactive/preview mode, and closes modal.
+   * switches Canvas to real interactive/preview mode, resets OCR session, and closes modal.
    */
   const handleCreateAsNewSlide = (blockId: string, role: PedagogicalRole) => {
     const newSlideId = createSlideFromBlock(blockId, role);
     setCurrentSlideId(newSlideId);
     setMode('preview'); // Instantly activates real playable containers & tokens on Canvas
+    resetOcrState(); // Automatically resets OCR state to blank
     setIsOcrDrawerOpen(false);
   };
 
   /**
-   * Secondary Action: Assigns to the existing current slide, activates interactive mode, closes modal.
+   * Secondary Action: Assigns to the existing current slide, activates interactive mode, resets OCR, closes modal.
    */
   const handleAssignToCurrentSlide = (blockId: string, role: PedagogicalRole) => {
     if (!currentSlideId) return;
     assignExtractedBlock(currentSlideId, blockId, role);
     setMode('preview'); // Instantly activates real playable containers & tokens on Canvas
+    resetOcrState(); // Automatically resets OCR state to blank
     setIsOcrDrawerOpen(false);
   };
 
@@ -163,6 +166,7 @@ export const OcrPanel: React.FC = () => {
     directAssignTemplate(newSlideId, template);
     setCurrentSlideId(newSlideId);
     setMode('preview'); // Instantly activates real playable containers & tokens on Canvas
+    resetOcrState(); // Automatically resets OCR state to blank
     setIsOcrDrawerOpen(false);
   };
 
@@ -606,7 +610,33 @@ export const OcrPanel: React.FC = () => {
                             </li>
                           ))}
                         </ul>
-                      ) : mappedPreview.interaction?.type === 'selection' && mappedPreview.interaction.questions.length > 0 ? (
+                      ) : mappedPreview.interaction?.type === 'selection' && mappedPreview.interaction.options && mappedPreview.interaction.options.length > 0 ? (
+                        /* Flat selection options preview */
+                        <div className="space-y-1.5 text-xs text-slate-800">
+                          <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">
+                            Opciones de Selección ({mappedPreview.interaction.options.length}):
+                          </p>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                            {mappedPreview.interaction.options.map((opt) => (
+                              <div
+                                key={opt.id}
+                                className={`p-2 rounded-lg bg-white border text-[11px] flex items-center justify-between gap-2 ${
+                                  opt.isCorrect
+                                    ? 'border-emerald-300 bg-emerald-50/50 text-emerald-900 font-semibold'
+                                    : 'border-slate-200/80 text-slate-700'
+                                }`}
+                              >
+                                <span className="truncate">{opt.text}</span>
+                                {opt.isCorrect && (
+                                  <span className="text-[10px] bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded font-bold">
+                                    ✓
+                                  </span>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ) : mappedPreview.interaction?.type === 'selection' && mappedPreview.interaction.questions && mappedPreview.interaction.questions.length > 0 ? (
                         /* Selection questions */
                         <div className="space-y-2 text-xs text-slate-800">
                           {mappedPreview.interaction.questions.map((q, qi) => (

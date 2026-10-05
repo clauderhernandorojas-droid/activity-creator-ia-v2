@@ -10,11 +10,20 @@ import {
   Wand2,
   ChevronLeft,
   ChevronRight,
-  Trash2
+  Trash2,
+  Undo2,
+  Redo2
 } from 'lucide-react';
 
 export const Header: React.FC = () => {
-  const { lesson, clearLesson } = useLessonStore();
+  const { 
+    lesson, 
+    clearLesson, 
+    undo, 
+    redo, 
+    canUndo, 
+    canRedo 
+  } = useLessonStore();
   const { 
     mode, 
     setMode, 
@@ -94,6 +103,29 @@ export const Header: React.FC = () => {
 
       {/* Right Controls */}
       <div className="flex items-center gap-2.5">
+        {/* Global Undo & Redo Controls */}
+        <div className="flex items-center gap-1 bg-slate-100/90 p-1 rounded-xl border border-slate-200/80">
+          <button
+            onClick={undo}
+            disabled={!canUndo}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold text-slate-700 hover:text-indigo-700 hover:bg-white disabled:opacity-30 disabled:pointer-events-none transition shadow-2xs"
+            title="Deshacer última acción (Ctrl + Z)"
+          >
+            <Undo2 className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">Deshacer</span>
+          </button>
+
+          <button
+            onClick={redo}
+            disabled={!canRedo}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold text-slate-700 hover:text-indigo-700 hover:bg-white disabled:opacity-30 disabled:pointer-events-none transition shadow-2xs"
+            title="Rehacer acción (Ctrl + Y o Ctrl + Shift + Z)"
+          >
+            <Redo2 className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">Rehacer</span>
+          </button>
+        </div>
+
         {/* Vaciar Lección Button (Only in Edit Mode when slides exist) */}
         {mode === 'edit' && lesson.slides.length > 0 && (
           <button

@@ -5,8 +5,10 @@ import { Canvas } from './components/Canvas';
 import { OcrPanel } from './components/OcrPanel';
 import { ReferenceDrawer } from './components/scaffolding/ReferenceDrawer';
 import { useSessionStore } from './store/useSessionStore';
+import { useHistoryKeyboard } from './core/hooks/useHistoryKeyboard';
 
 export const App: React.FC = () => {
+  useHistoryKeyboard();
   const { mode } = useSessionStore();
 
   return (
