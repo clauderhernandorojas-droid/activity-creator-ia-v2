@@ -342,29 +342,127 @@ export function mapBlockToBuckets(block: ExtractedBlock): BucketsMatchingBlock {
 export function mapBlockToInputFields(block: ExtractedBlock): InputFieldsBlock {
   const parsed = block.parsedData || {};
 
-  let listItems: Array<{ id: string; prompt: string; acceptedAnswers: string[]; prefix?: string; hint?: string }> = [];
+  let listItems: Array<{
+    id: string;
+    prompt: string;
+    expectedAnswer: string;
+    acceptedAnswers: string[];
+    prefix?: string;
+    hint?: string;
+    explanation?: string;
+  }> = [];
+
+  const extractItemCanonicalAndVariants = (rawItem: any, fallbackPrompt = '') => {
+    let canonical = '';
+    if (typeof rawItem === 'object' && rawItem !== null) {
+      if (typeof rawItem.expectedAnswer === 'string' && rawItem.expectedAnswer.trim()) {
+        canonical = rawItem.expectedAnswer.trim();
+      } else if (typeof rawItem.answer === 'string' && rawItem.answer.trim()) {
+        canonical = rawItem.answer.trim();
+      } else if (typeof rawItem.correctAnswer === 'string' && rawItem.correctAnswer.trim()) {
+        canonical = rawItem.correctAnswer.trim();
+      } else if (Array.isArray(rawItem.acceptedAnswers) && rawItem.acceptedAnswers.length > 0) {
+        const first = String(rawItem.acceptedAnswers[0]).trim();
+        if (first) canonical = first;
+      }
+    }
+
+    const promptText = typeof rawItem === 'object' && rawItem !== null
+      ? String(rawItem.text || rawItem.prompt || fallbackPrompt).trim()
+      : String(rawItem || fallbackPrompt).trim();
+
+    // Derive answer from prompt markers like [XYZ] or => XYZ
+    if (!canonical) {
+      const bracketMatch = promptText.match(/\[(?:correct|answer|key)?\s*:?\s*([^\]]+)\]/i);
+      if (bracketMatch) {
+        canonical = bracketMatch[1].trim();
+      } else {
+        const arrowMatch = promptText.match(/(?:=>|->|=)\s*([a-zA-Z0-9\s'-]+)$/);
+        if (arrowMatch) {
+          canonical = arrowMatch[1].trim();
+        }
+      }
+    }
+
+    // Verb hint in parentheses: e.g. "She _______ (live) in London"
+    if (!canonical) {
+      const parenMatch = promptText.match(/\(([^)]+)\)/);
+      if (parenMatch && parenMatch[1].trim().length < 30 && !parenMatch[1].toLowerCase().includes('párrafo')) {
+        canonical = parenMatch[1].trim();
+      }
+    }
+
+    // Fallback: Never leave canonical empty
+    if (!canonical) {
+      if (typeof rawItem === 'object' && rawItem?.hint && typeof rawItem.hint === 'string' && rawItem.hint.trim()) {
+        canonical = rawItem.hint.trim();
+      } else {
+        canonical = 'Respuesta según texto';
+      }
+    }
+
+    // Extract variants
+    let variants: string[] = [];
+    if (typeof rawItem === 'object' && rawItem !== null && Array.isArray(rawItem.acceptedAnswers) && rawItem.acceptedAnswers.length > 0) {
+      variants = rawItem.acceptedAnswers.map((a: any) => String(a).trim()).filter(Boolean);
+    } else if (typeof rawItem === 'object' && rawItem !== null && rawItem.answer) {
+      variants = [String(rawItem.answer).trim()];
+    }
+
+    if (!variants.includes(canonical)) {
+      variants.unshift(canonical);
+    }
+
+    if (variants.length === 0) {
+      variants = [canonical];
+    }
+
+    const hint = typeof rawItem === 'object' && rawItem !== null
+      ? (rawItem.hint || rawItem.explanation || undefined)
+      : undefined;
+
+    return {
+      prompt: promptText,
+      expectedAnswer: canonical,
+      acceptedAnswers: variants,
+      hint,
+      prefix: typeof rawItem === 'object' && rawItem !== null ? rawItem.prefix : undefined
+    };
+  };
 
   if (Array.isArray(parsed.items) && parsed.items.length > 0) {
     listItems = parsed.items
-      .map((item: any) => ({
-        id: generateId('item'),
-        prompt: String(item.text || item.prompt || '').trim(),
-        acceptedAnswers: item.acceptedAnswers || (item.answer ? [String(item.answer).trim()] : []),
-        prefix: item.prefix || undefined,
-        hint: item.hint
-      }))
+      .map((item: any) => {
+        const extracted = extractItemCanonicalAndVariants(item);
+        return {
+          id: generateId('item'),
+          prompt: extracted.prompt,
+          expectedAnswer: extracted.expectedAnswer,
+          acceptedAnswers: extracted.acceptedAnswers,
+          prefix: extracted.prefix,
+          hint: extracted.hint
+        };
+      })
       .filter((item) => item.prompt.length > 0);
   } else if (block.rawText) {
     const lines = block.rawText
       .split('\n')
       .map((l) => l.trim())
-      .filter((l) => l.length > 0);
+      .filter((l) => {
+        if (!l) return false;
+        if (parsed.title && l.toLowerCase().includes(parsed.title.toLowerCase())) return false;
+        if (parsed.instruction && l.toLowerCase().includes(parsed.instruction.toLowerCase())) return false;
+        return true;
+      });
 
     listItems = lines.map((line) => {
+      const extracted = extractItemCanonicalAndVariants(null, line);
       return {
         id: generateId('item'),
         prompt: line,
-        acceptedAnswers: []
+        expectedAnswer: extracted.expectedAnswer,
+        acceptedAnswers: extracted.acceptedAnswers,
+        hint: extracted.hint
       };
     });
   }
@@ -620,6 +718,7 @@ export function slideToExtractedBlock(slide: Slide): ExtractedBlock {
   const instruction = inter?.instruction || slide.subtitle || 'Instrucciones de la actividad';
 
   let items: string[] = [];
+  let structuredItems: any[] = [];
   let buckets: string[] = [];
   let tableHeaders: string[] = [];
   let tableRows: string[][] = [];
@@ -629,6 +728,13 @@ export function slideToExtractedBlock(slide: Slide): ExtractedBlock {
       case 'input_fields':
         if (inter.listItems && inter.listItems.length > 0) {
           items = inter.listItems.map((i) => i.prompt);
+          structuredItems = inter.listItems.map((i) => ({
+            text: i.prompt,
+            expectedAnswer: i.expectedAnswer || i.acceptedAnswers[0] || 'Respuesta canónica',
+            acceptedAnswers: i.acceptedAnswers && i.acceptedAnswers.length > 0 ? i.acceptedAnswers : [i.expectedAnswer || 'Respuesta canónica'],
+            hint: i.hint,
+            explanation: i.explanation
+          }));
         } else if (inter.tableRows && inter.tableRows.length > 0) {
           tableHeaders = inter.tableHeaders || [];
           tableRows = inter.tableRows.map((r) => r.map((c) => c.text));
@@ -679,7 +785,7 @@ export function slideToExtractedBlock(slide: Slide): ExtractedBlock {
     parsedData: {
       title,
       instruction,
-      items,
+      items: structuredItems.length > 0 ? structuredItems : items,
       buckets: buckets.length > 0 ? buckets : undefined,
       targetSlots: (inter?.type === 'buckets_matching' && inter.targetSlots) ? inter.targetSlots : undefined,
       sourceItems: (inter?.type === 'buckets_matching' && inter.sourceItems) ? inter.sourceItems : undefined,

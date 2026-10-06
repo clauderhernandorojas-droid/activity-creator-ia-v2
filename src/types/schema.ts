@@ -53,8 +53,10 @@ export const InputFieldListItemSchema = z.object({
   prompt: z.string(),
   prefix: z.string().optional(),
   suffix: z.string().optional(),
+  expectedAnswer: z.string().optional(),
   acceptedAnswers: z.array(z.string()),
   hint: z.string().optional(),
+  explanation: z.string().optional(),
 });
 
 export const InputFieldTableCellSchema = z.object({

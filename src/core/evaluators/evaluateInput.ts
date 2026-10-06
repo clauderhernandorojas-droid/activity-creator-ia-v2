@@ -1,10 +1,13 @@
-import { normalizeAnswer } from '../text/normalize';
+import { validateFillInBlank, type FlexibleValidationResult } from './fillBlankValidator';
 import type { InputFieldsBlock } from '../../types/schema';
+
+export type EvaluationItemFeedback = FlexibleValidationResult;
 
 export interface EvaluationResult {
   score: number;
   maxScore: number;
   details: Record<string, boolean>; // key -> isCorrect
+  itemFeedback?: Record<string, EvaluationItemFeedback>;
 }
 
 export function evaluateInput(
@@ -14,21 +17,23 @@ export function evaluateInput(
   let score = 0;
   let maxScore = 0;
   const details: Record<string, boolean> = {};
+  const itemFeedback: Record<string, EvaluationItemFeedback> = {};
 
   if (block.layoutMode === 'list') {
     maxScore = block.listItems.length;
 
     block.listItems.forEach((item) => {
       const rawUserVal = String(studentAnswers[item.id] || '');
-      const normalizedUser = normalizeAnswer(rawUserVal);
+      const validation = validateFillInBlank(
+        rawUserVal,
+        item.acceptedAnswers,
+        item.expectedAnswer,
+        item.hint || item.explanation
+      );
 
-      const isRight = item.acceptedAnswers.some((accepted) => {
-        const normalizedAccepted = normalizeAnswer(accepted);
-        return normalizedUser === normalizedAccepted;
-      });
-
-      details[item.id] = isRight;
-      if (isRight) score++;
+      details[item.id] = validation.isCorrect;
+      itemFeedback[item.id] = validation;
+      if (validation.isCorrect) score++;
     });
   } else if (block.layoutMode === 'table') {
     let inputCount = 0;
@@ -39,14 +44,11 @@ export function evaluateInput(
           inputCount++;
           const cellKey = `cell-${rIdx}-${cIdx}`;
           const rawUserVal = String(studentAnswers[cellKey] || '');
-          const normalizedUser = normalizeAnswer(rawUserVal);
+          const validation = validateFillInBlank(rawUserVal, cell.acceptedAnswers);
 
-          const isRight = cell.acceptedAnswers.some(
-            (accepted) => normalizeAnswer(accepted) === normalizedUser
-          );
-
-          details[cellKey] = isRight;
-          if (isRight) score++;
+          details[cellKey] = validation.isCorrect;
+          itemFeedback[cellKey] = validation;
+          if (validation.isCorrect) score++;
         }
       });
     });
@@ -58,17 +60,14 @@ export function evaluateInput(
 
     keys.forEach((key) => {
       const rawUserVal = String(studentAnswers[key] || '');
-      const normalizedUser = normalizeAnswer(rawUserVal);
       const acceptedList = block.paragraphInputs[key] || [];
+      const validation = validateFillInBlank(rawUserVal, acceptedList);
 
-      const isRight = acceptedList.some(
-        (accepted) => normalizeAnswer(accepted) === normalizedUser
-      );
-
-      details[key] = isRight;
-      if (isRight) score++;
+      details[key] = validation.isCorrect;
+      itemFeedback[key] = validation;
+      if (validation.isCorrect) score++;
     });
   }
 
-  return { score, maxScore, details };
+  return { score, maxScore, details, itemFeedback };
 }

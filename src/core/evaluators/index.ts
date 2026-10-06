@@ -2,6 +2,7 @@ export * from './evaluateInput';
 export * from './evaluateSelection';
 export * from './evaluateBuckets';
 export * from './evaluateSequence';
+export * from './fillBlankValidator';
 
 import type { InteractionBlock } from '../../types/schema';
 import type { EvaluationResult } from './evaluateInput';

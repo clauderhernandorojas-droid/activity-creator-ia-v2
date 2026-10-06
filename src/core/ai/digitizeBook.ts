@@ -17,10 +17,26 @@ export const MANUAL_TEMPLATES: Record<ManualTemplateType, {
 3. They _______ (not finish) their homework yet.`,
     parsedData: {
       title: 'Manual: Fill in the Blanks',
+      instruction: 'Complete the sentences with the correct verb form:',
       items: [
-        { text: '1. She _______ (live) in London for three years.', answer: 'has lived', hint: 'Present perfect (affirmative)' },
-        { text: '2. We _______ (already / see) that documentary.', answer: 'have already seen', hint: 'Present perfect with already' },
-        { text: '3. They _______ (not finish) their homework yet.', answer: "haven't finished", hint: 'Present perfect (negative)' }
+        {
+          text: '1. She _______ (live) in London for three years.',
+          expectedAnswer: 'has lived',
+          acceptedAnswers: ['has lived', 'has been living', 'lived'],
+          hint: 'Present perfect (affirmative)'
+        },
+        {
+          text: '2. We _______ (already / see) that documentary.',
+          expectedAnswer: 'have already seen',
+          acceptedAnswers: ['have already seen', 'already saw', 'have seen'],
+          hint: 'Present perfect with already'
+        },
+        {
+          text: '3. They _______ (not finish) their homework yet.',
+          expectedAnswer: "haven't finished",
+          acceptedAnswers: ["haven't finished", 'have not finished', 'did not finish'],
+          hint: 'Present perfect (negative)'
+        }
       ]
     }
   },
@@ -243,9 +259,12 @@ SPECIAL RULE FOR CATEGORIZATION / BUCKETS:
 - "tokens": Array of objects for EVERY single phrase or item found:
   {"text": "phrase text", "target": "Family (F)"}.
 
-SPECIAL RULE FOR NUMBERED LISTS / FILL IN BLANKS:
-- "items": Array of all sentences or questions, with:
-  {"text": "sentence or question prompt", "answer": "expected answer", "hint": "clue if any"}.
+SPECIAL RULE FOR NUMBERED LISTS / FILL IN BLANKS / COMPREHENSION QUESTIONS:
+- "items": Array of all sentences or questions. FOR EVERY SINGLE ITEM, YOU MUST EXTRACT:
+  - "text": The complete sentence with blank (e.g. "1. She _______ (live) in London for three years.") or question.
+  - "expectedAnswer": MANDATORY canonical correct answer derived directly from the reading passage text or grammar rule (e.g. "has lived", "twenty years old"). NEVER LEAVE EMPTY.
+  - "acceptedAnswers": MANDATORY array of valid alternative variants (e.g. ["has lived", "has been living", "lived"], ["twenty years old", "20 years old", "twenty", "20"], with or without initial prepositions/articles like 'the', 'a', short forms, numerals). NEVER LEAVE EMPTY. Must always include expectedAnswer.
+  - "hint": (optional) brief clue, explanation or reading passage excerpt justifying where this answer is found (e.g. "From paragraph 2: '...she has lived...'").
 
 Return ONLY a valid JSON array containing exactly ONE consolidated block object:
 [
@@ -261,7 +280,14 @@ Return ONLY a valid JSON array containing exactly ONE consolidated block object:
       "paragraphs": [{"id": "1", "text": "..."}],
       "buckets": ["Category 1", "Category 2"],
       "tokens": [{"text": "phrase 1", "target": "Category 1"}],
-      "items": [{"text": "item 1", "answer": "answer"}],
+      "items": [
+        {
+          "text": "1. She _______ (live) in London for three years.",
+          "expectedAnswer": "has lived",
+          "acceptedAnswers": ["has lived", "has been living", "lived"],
+          "hint": "Present perfect: 'has lived'"
+        }
+      ],
       "headers": ["Col 1", "Col 2"],
       "rows": [["Val 1", "Val 2"]]
     }

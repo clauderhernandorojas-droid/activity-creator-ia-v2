@@ -11,6 +11,7 @@ import type {
 import { digitizeBook, createManualBlock, type ManualTemplateType } from '../core/ai/digitizeBook';
 import { mapBlockToRole, convertSlideToRole, type PedagogicalRole } from '../core/ai/payloadMapper';
 import { useSessionStore } from './useSessionStore';
+export { validateFillInBlank, type FlexibleValidationResult } from '../core/evaluators/fillBlankValidator';
 
 export interface HistorySnapshot {
   lesson: Lesson;
