@@ -193,6 +193,9 @@ export function consolidateBlocks(blocks: ExtractedBlock[], sourceUrl?: string):
     if (Array.isArray(pd.items)) items.push(...pd.items);
     if (Array.isArray(pd.headers) && tableHeaders.length === 0) tableHeaders = pd.headers;
     if (Array.isArray(pd.rows)) tableRows.push(...pd.rows);
+    if (Array.isArray(pd.wordBank) && pd.wordBank.length > 0 && !mergedParsed.wordBank) {
+      mergedParsed.wordBank = pd.wordBank;
+    }
   }
 
   if (bucketsSet.size > 0) {
@@ -278,6 +281,19 @@ C. BUCKETS / PREPOSITIONS / CATEGORIZATION:
 D. SEQUENCE / ORDERING:
 - "items": Steps or dialogue turns with "order": 1, 2, 3... in solved chronological sequence.
 
+E. WORD BANKS & DIDACTIC MATCHING TABLES (Column A vs Column B, e.g. 'question word | meaning'):
+- "wordBank": If the clipping contains a box, frame, or pool of key words to choose from (e.g. ["Who", "Where", "When", "Why", "What", "Which", "How"]):
+  * Extract them strictly into "wordBank": ["Who", "Where", "When", "Why", "What", "Which", "How"].
+  * CRITICAL: NEVER convert the Word Bank or its listed words into question items or blank inputs!
+- Matching / Didactic Tables (e.g. 'question word | meaning', 'term | definition'):
+  * NEVER convert table headers ('question word', 'meaning', 'term', 'definition') into question items!
+  * Each row is ONE exercise item in "items":
+    - "text": The visible definition or clue formatted clearly: e.g. "1. _______ : a person", "2. _______ : a time", "3. _______ : a place".
+    - "expectedAnswer": The correct word from the Word Bank (e.g. "Who", "When", "Where").
+    - "isExample": If the textbook already has that row filled as a model/example (e.g. "1 Who -> a person"), set "isExample": true, "expectedAnswer": "Who".
+- EDITORIAL ARTIFACT FILTERING:
+  * Strictly IGNORE and PURGE any textbook layout metadata, page numbers, lesson stamps, unit codes (e.g. '1A 5 p5', 'Unit 1A', 'p. 5', 'V1.1', 'English File'). DO NOT create exercise items from page codes or lesson headers!
+
 Return ONLY a valid JSON array containing exactly ONE consolidated block object:
 [
   {
@@ -290,6 +306,7 @@ Return ONLY a valid JSON array containing exactly ONE consolidated block object:
       "instruction": "Exercise Instruction",
       "content": "Full reading passage text if present...",
       "paragraphs": [{"id": "1", "text": "..."}],
+      "wordBank": ["Who", "What", "Where", "When", "Why", "Which", "How"],
       "buckets": ["FOR", "IN", "TO", "WITH"],
       "tokens": [
         {"text": "apologize", "target": "FOR"},
@@ -297,16 +314,18 @@ Return ONLY a valid JSON array containing exactly ONE consolidated block object:
       ],
       "items": [
         {
-          "text": "1. She _______ (not / go) to the party yesterday.",
-          "expectedAnswer": "didn't go",
-          "acceptedAnswers": ["didn't go", "did not go"],
-          "hint": "Past Simple for a completed action at a specific time in the past"
+          "text": "1. _______ : a person",
+          "expectedAnswer": "Who",
+          "acceptedAnswers": ["Who"],
+          "hint": "Refers to a person",
+          "isExample": true
         },
         {
-          "text": "2. We _______ (already / see) that film.",
-          "expectedAnswer": "have already seen",
-          "acceptedAnswers": ["have already seen", "have seen", "'ve already seen"],
-          "hint": "Present Perfect affirmative with 'already'"
+          "text": "2. _______ : a time",
+          "expectedAnswer": "When",
+          "acceptedAnswers": ["When"],
+          "hint": "Refers to a time or moment",
+          "isExample": false
         }
       ],
       "questions": [
@@ -419,9 +438,39 @@ function cloneSampleBlocks(sourceImageSnippetUrl?: string): ExtractedBlock[] {
 function sanitizeExtractedBlock(block: ExtractedBlock): ExtractedBlock {
   const pd = block.parsedData || {};
 
+  // 0. Clean wordBank if present
+  if (Array.isArray(pd.wordBank)) {
+    pd.wordBank = pd.wordBank.map((w: any) => String(w).trim()).filter(Boolean);
+  }
+
+  // Helper to detect editorial artifacts (page codes, table headers, etc.)
+  const isEditorialArtifact = (rawStr: string): boolean => {
+    const s = rawStr.trim();
+    if (!s) return true;
+    // Page codes like "1A 5 p5", "1A p5", "p. 5", "page 5", "Unit 1A"
+    if (/^(?:\d+[A-Z]?\s*\d*\s*p\.?\s*\d+|p\.?\s*\d+|page\s*\d+|unit\s*\d+[a-z]?|v\d+\.\d+)$/i.test(s)) {
+      return true;
+    }
+    // Table headers mistakenly captured as items: "question word | meaning", "question words", "meaning"
+    if (/^(?:question\s*words?|meanings?|question\s*word\s*\|\s*meaning|word\s*bank|vocabulary)$/i.test(s)) {
+      return true;
+    }
+    return false;
+  };
+
   // 1. Sanitize items (numbered_list / fill-in-blanks)
   if (Array.isArray(pd.items)) {
+    // Filter out editorial artifacts and standalone wordBank duplicates
+    pd.items = pd.items.filter((it: any) => {
+      const text = typeof it === 'string' ? it : String(it.text || it.prompt || '');
+      return !isEditorialArtifact(text);
+    });
+
     pd.items = pd.items.map((it: any, idx: number) => {
+      const isExample = typeof it === 'object' && it !== null
+        ? Boolean(it.isExample || it.example || /\[example\]|\(example\)/i.test(String(it.text || '')))
+        : false;
+
       if (typeof it === 'string') {
         const text = it.trim();
         const parenMatch = text.match(/\(([^)]+)\)/);
@@ -430,7 +479,8 @@ function sanitizeExtractedBlock(block: ExtractedBlock): ExtractedBlock {
           text,
           expectedAnswer: derived,
           acceptedAnswers: [derived],
-          hint: 'Solución gramatical canónica'
+          hint: 'Solución gramatical canónica',
+          isExample
         };
       }
       if (typeof it === 'object' && it !== null) {
@@ -466,7 +516,8 @@ function sanitizeExtractedBlock(block: ExtractedBlock): ExtractedBlock {
           text: prompt,
           expectedAnswer: expected,
           acceptedAnswers: accepted,
-          hint: it.hint || it.explanation || 'Regla gramatical aplicada según el contexto'
+          hint: it.hint || it.explanation || 'Regla gramatical aplicada según el contexto',
+          isExample
         };
       }
       return it;

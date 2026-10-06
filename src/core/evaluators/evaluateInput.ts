@@ -24,13 +24,20 @@ export function evaluateInput(
     maxScore = block.listItems.length;
 
     block.listItems.forEach((item) => {
-      const rawUserVal = String(studentAnswers[item.id] || '');
+      const isExample = Boolean(item.isExample);
+      const rawUserVal = String(studentAnswers[item.id] || (isExample ? item.expectedAnswer : '') || '');
       const validation = validateFillInBlank(
         rawUserVal,
         item.acceptedAnswers,
         item.expectedAnswer,
         item.hint || item.explanation
       );
+
+      if (isExample) {
+        validation.isCorrect = true;
+        validation.status = 'correct';
+        validation.feedback = 'Ejemplo resuelto como modelo pedagógico.';
+      }
 
       details[item.id] = validation.isCorrect;
       itemFeedback[item.id] = validation;

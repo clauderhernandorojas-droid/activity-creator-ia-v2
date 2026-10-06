@@ -8,6 +8,7 @@ export interface SemanticQuestionItem {
   acceptedAnswers?: string[];
   hint?: string;
   explanation?: string;
+  isExample?: boolean;
 }
 
 export interface SemanticEvaluatorParams {
@@ -47,7 +48,8 @@ export function evaluateAnswersLocally(
   let score = 0;
 
   questions.forEach((q, idx) => {
-    const rawUserVal = String(userAnswers[q.id] || '');
+    const isExample = Boolean(q.isExample);
+    const rawUserVal = String(userAnswers[q.id] || (isExample ? q.expectedAnswer : '') || '');
     const validation = validateFillInBlank(
       rawUserVal,
       q.acceptedAnswers,
@@ -55,18 +57,22 @@ export function evaluateAnswersLocally(
       q.hint || q.explanation
     );
 
-    details[q.id] = validation.isCorrect;
+    const isCorrect = isExample ? true : validation.isCorrect;
+    const status = isExample ? 'correct' : validation.status;
+    const feedback = isExample ? 'Ejemplo resuelto del libro de texto.' : validation.feedback;
+
+    details[q.id] = isCorrect;
     itemFeedback[q.id] = {
       index: idx,
       id: q.id,
-      isCorrect: validation.isCorrect,
-      status: validation.status,
-      feedback: validation.feedback,
-      explanation: validation.feedback,
+      isCorrect,
+      status,
+      feedback,
+      explanation: feedback,
       canonicalAnswer: validation.expectedAnswer,
       expectedAnswer: validation.expectedAnswer,
     };
-    if (validation.isCorrect) score++;
+    if (isCorrect) score++;
   });
 
   return {

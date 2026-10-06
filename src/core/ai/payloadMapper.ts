@@ -353,6 +353,10 @@ export function mapBlockToBuckets(block: ExtractedBlock): BucketsMatchingBlock {
 export function mapBlockToInputFields(block: ExtractedBlock): InputFieldsBlock {
   const parsed = block.parsedData || {};
 
+  const wordBank: string[] | undefined = Array.isArray(parsed.wordBank) && parsed.wordBank.length > 0
+    ? parsed.wordBank.map((w: any) => String(w).trim()).filter(Boolean)
+    : undefined;
+
   let listItems: Array<{
     id: string;
     prompt: string;
@@ -361,7 +365,16 @@ export function mapBlockToInputFields(block: ExtractedBlock): InputFieldsBlock {
     prefix?: string;
     hint?: string;
     explanation?: string;
+    isExample?: boolean;
   }> = [];
+
+  const isEditorialNoise = (text: string): boolean => {
+    const s = text.trim();
+    if (!s) return true;
+    if (/^(?:\d+[A-Z]?\s*\d*\s*p\.?\s*\d+|p\.?\s*\d+|page\s*\d+|unit\s*\d+[a-z]?|v\d+\.\d+)$/i.test(s)) return true;
+    if (/^(?:question\s*words?|meanings?|question\s*word\s*\|\s*meaning|word\s*bank|vocabulary)$/i.test(s)) return true;
+    return false;
+  };
 
   const extractItemCanonicalAndVariants = (rawItem: any, fallbackPrompt = '') => {
     let canonical = '';
@@ -443,24 +456,58 @@ export function mapBlockToInputFields(block: ExtractedBlock): InputFieldsBlock {
 
   if (Array.isArray(parsed.items) && parsed.items.length > 0) {
     listItems = parsed.items
+      .filter((item: any) => {
+        const text = typeof item === 'object' && item !== null
+          ? String(item.text || item.prompt || '')
+          : String(item || '');
+        return !isEditorialNoise(text);
+      })
       .map((item: any) => {
         const extracted = extractItemCanonicalAndVariants(item);
+        const isExample = typeof item === 'object' && item !== null
+          ? Boolean(item.isExample || item.example || /\[example\]|\(example\)/i.test(String(item.text || '')))
+          : false;
+
         return {
           id: generateId('item'),
           prompt: extracted.prompt,
           expectedAnswer: extracted.expectedAnswer,
           acceptedAnswers: extracted.acceptedAnswers,
           prefix: extracted.prefix,
-          hint: extracted.hint
+          hint: extracted.hint,
+          isExample,
         };
       })
       .filter((item) => item.prompt.length > 0);
+  } else if (Array.isArray(parsed.rows) && parsed.rows.length > 0) {
+    // If two-column matching table (e.g. question word | meaning) was parsed as rows
+    listItems = parsed.rows
+      .filter((row: any) => Array.isArray(row) && row.length >= 2 && !row.every((c: any) => isEditorialNoise(String(c))))
+      .map((row: any, rIdx: number) => {
+        const col1 = String(row[0] || '').trim();
+        const col2 = String(row[1] || '').trim();
+        const isCol1Word = /^[A-Za-z]+$/.test(col1) || /^\d+\s+[A-Za-z]+$/.test(col1);
+        const word = isCol1Word ? col1.replace(/^\d+\s*/, '').trim() : col2.replace(/^\d+\s*/, '').trim();
+        const definition = isCol1Word ? col2 : col1;
+        const isExample = /^\d+\s+[A-Za-z]+/.test(col1) && Boolean(word) && !col1.includes('___');
+        const prompt = definition.startsWith(':') ? definition : `: ${definition}`;
+
+        return {
+          id: generateId('item'),
+          prompt: `${rIdx + 1}. _______ ${prompt}`,
+          expectedAnswer: word,
+          acceptedAnswers: [word],
+          hint: `Definición: ${definition}`,
+          isExample,
+        };
+      });
   } else if (block.rawText) {
     const lines = block.rawText
       .split('\n')
       .map((l) => l.trim())
       .filter((l) => {
         if (!l) return false;
+        if (isEditorialNoise(l)) return false;
         if (parsed.title && l.toLowerCase().includes(parsed.title.toLowerCase())) return false;
         if (parsed.instruction && l.toLowerCase().includes(parsed.instruction.toLowerCase())) return false;
         return true;
@@ -473,7 +520,8 @@ export function mapBlockToInputFields(block: ExtractedBlock): InputFieldsBlock {
         prompt: line,
         expectedAnswer: extracted.expectedAnswer,
         acceptedAnswers: extracted.acceptedAnswers,
-        hint: extracted.hint
+        hint: extracted.hint,
+        isExample: false,
       };
     });
   }
@@ -483,6 +531,7 @@ export function mapBlockToInputFields(block: ExtractedBlock): InputFieldsBlock {
     id: generateId('inter-inp'),
     instruction: parsed.instruction || 'Escribe la respuesta correcta en cada espacio:',
     layoutMode: 'list',
+    wordBank,
     listItems,
     tableHeaders: [],
     tableRows: [],

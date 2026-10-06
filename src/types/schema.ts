@@ -57,6 +57,7 @@ export const InputFieldListItemSchema = z.object({
   acceptedAnswers: z.array(z.string()),
   hint: z.string().optional(),
   explanation: z.string().optional(),
+  isExample: z.boolean().optional(),
 });
 
 export const InputFieldTableCellSchema = z.object({
@@ -64,6 +65,8 @@ export const InputFieldTableCellSchema = z.object({
   isInput: z.boolean().default(false),
   inputId: z.string().optional(),
   acceptedAnswers: z.array(z.string()).default([]),
+  expectedAnswer: z.string().optional(),
+  isExample: z.boolean().optional(),
 });
 
 export const InputFieldsBlockSchema = z.object({
@@ -71,6 +74,7 @@ export const InputFieldsBlockSchema = z.object({
   id: z.string(),
   instruction: z.string(),
   layoutMode: z.enum(['list', 'table', 'inline_paragraph']),
+  wordBank: z.array(z.string()).optional(),
   // Para layoutMode: 'list'
   listItems: z.array(InputFieldListItemSchema).default([]),
   // Para layoutMode: 'table'
