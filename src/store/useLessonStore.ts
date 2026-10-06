@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { persist, createJSONStorage } from 'zustand/middleware';
 import type { 
   Lesson, 
   Slide, 
@@ -7,9 +8,8 @@ import type {
   SlideLayout, 
   ExtractedBlock 
 } from '../types/schema';
-import { initialLesson, sampleExtractedBlocks } from '../data/sampleData';
 import { digitizeBook, createManualBlock, type ManualTemplateType } from '../core/ai/digitizeBook';
-import { mapBlockToRole, type PedagogicalRole } from '../core/ai/payloadMapper';
+import { mapBlockToRole, convertSlideToRole, type PedagogicalRole } from '../core/ai/payloadMapper';
 import { useSessionStore } from './useSessionStore';
 
 export interface HistorySnapshot {
@@ -29,12 +29,33 @@ function shouldRecordTextSnapshot(): boolean {
   return false;
 }
 
+export const defaultInitialSlide: Slide = {
+  id: 'slide-1',
+  title: 'Diapositiva 1',
+  subtitle: '',
+  layout: 'split_50_50',
+  referenceContent: null,
+  interaction: null,
+  notes: '',
+};
+
+export const defaultInitialLesson: Lesson = {
+  id: 'lesson-1',
+  title: 'Nueva Lección',
+  level: 'B1',
+  unit: 'Unidad 1',
+  slides: [defaultInitialSlide],
+};
+
 interface LessonState {
   lesson: Lesson;
+  activeSlideId: string;
+  setActiveSlideId: (id: string) => void;
   extractedBlocks: ExtractedBlock[];
   lastExtractedPayload: ExtractedBlock[] | null;
   ocrProcessing: boolean;
   pastedImagePreview: string | null;
+  pastedImages: string[];
 
   // History (Undo / Redo)
   past: HistorySnapshot[];
@@ -65,12 +86,18 @@ interface LessonState {
   // Actions - Block Content
   updateReferenceBlock: (slideId: string, block: ReferenceBlock | null) => void;
   updateInteractionBlock: (slideId: string, block: InteractionBlock | null) => void;
+  convertSlideRole: (slideId: string, role: PedagogicalRole) => void;
 
   // Actions - OCR Transcription (Step 1 & 2)
   setPastedImagePreview: (url: string | null) => void;
+  addPastedImage: (url: string) => void;
+  removePastedImage: (index: number) => void;
+  clearPastedImages: () => void;
+  processPastedImages: (images?: string[]) => Promise<void>;
   processPastedImage: (fileOrUrl: string) => Promise<void>;
   loadPresetBookSample: (sampleIndex: number) => void;
   removeExtractedBlock: (id: string) => void;
+  updateExtractedBlock: (id: string, updates: Partial<ExtractedBlock>) => void;
   restoreExtractedBlocks: () => void;
   addManualBlock: (template: ManualTemplateType) => ExtractedBlock;
   directAssignTemplate: (
@@ -85,7 +112,7 @@ interface LessonState {
 }
 
 function recordHistory(state: LessonState): Partial<LessonState> {
-  const activeSlideId = useSessionStore.getState().currentSlideId || '';
+  const activeSlideId = state.activeSlideId || useSessionStore.getState().currentSlideId || '';
   const snapshot: HistorySnapshot = {
     lesson: JSON.parse(JSON.stringify(state.lesson)),
     activeSlideId
@@ -99,397 +126,517 @@ function recordHistory(state: LessonState): Partial<LessonState> {
   };
 }
 
-export const useLessonStore = create<LessonState>((set, get) => ({
-  lesson: initialLesson,
-  extractedBlocks: sampleExtractedBlocks,
-  lastExtractedPayload: sampleExtractedBlocks,
-  ocrProcessing: false,
-  pastedImagePreview: null,
-
-  // History State
-  past: [],
-  future: [],
-  canUndo: false,
-  canRedo: false,
-
-  undo: () => {
-    const state = get();
-    if (state.past.length === 0) return;
-
-    const previousPast = [...state.past];
-    const previousSnapshot = previousPast.pop();
-    if (!previousSnapshot) return;
-
-    const currentSlideId = useSessionStore.getState().currentSlideId || '';
-    const currentSnapshot: HistorySnapshot = {
-      lesson: JSON.parse(JSON.stringify(state.lesson)),
-      activeSlideId: currentSlideId
-    };
-
-    const newFuture = [currentSnapshot, ...state.future].slice(0, MAX_HISTORY);
-
-    set({
-      lesson: previousSnapshot.lesson,
-      past: previousPast,
-      future: newFuture,
-      canUndo: previousPast.length > 0,
-      canRedo: true
-    });
-
-    if (previousSnapshot.activeSlideId) {
-      useSessionStore.getState().setCurrentSlideId(previousSnapshot.activeSlideId);
-    } else if (previousSnapshot.lesson.slides.length > 0) {
-      useSessionStore.getState().setCurrentSlideId(previousSnapshot.lesson.slides[0].id);
-    } else {
-      useSessionStore.getState().setCurrentSlideId('');
-    }
-  },
-
-  redo: () => {
-    const state = get();
-    if (state.future.length === 0) return;
-
-    const nextFuture = [...state.future];
-    const nextSnapshot = nextFuture.shift();
-    if (!nextSnapshot) return;
-
-    const currentSlideId = useSessionStore.getState().currentSlideId || '';
-    const currentSnapshot: HistorySnapshot = {
-      lesson: JSON.parse(JSON.stringify(state.lesson)),
-      activeSlideId: currentSlideId
-    };
-
-    const newPast = [...state.past, currentSnapshot].slice(-MAX_HISTORY);
-
-    set({
-      lesson: nextSnapshot.lesson,
-      past: newPast,
-      future: nextFuture,
-      canUndo: true,
-      canRedo: nextFuture.length > 0
-    });
-
-    if (nextSnapshot.activeSlideId) {
-      useSessionStore.getState().setCurrentSlideId(nextSnapshot.activeSlideId);
-    } else if (nextSnapshot.lesson.slides.length > 0) {
-      useSessionStore.getState().setCurrentSlideId(nextSnapshot.lesson.slides[0].id);
-    } else {
-      useSessionStore.getState().setCurrentSlideId('');
-    }
-  },
-
-  resetOcrState: () => {
-    set({
-      pastedImagePreview: null,
+export const useLessonStore = create<LessonState>()(
+  persist(
+    (set, get) => ({
+      lesson: defaultInitialLesson,
+      activeSlideId: defaultInitialSlide.id,
+      setActiveSlideId: (id: string) => {
+        set({ activeSlideId: id });
+        const sessionState = useSessionStore.getState();
+        if (sessionState.currentSlideId !== id) {
+          sessionState.setCurrentSlideId(id);
+        }
+      },
       extractedBlocks: [],
-      lastExtractedPayload: null
-    });
-  },
+      lastExtractedPayload: null,
+      ocrProcessing: false,
+      pastedImagePreview: null,
+      pastedImages: [],
 
-  addSlide: (layout = 'split_50_50') => {
-    const newId = `slide-${Date.now()}`;
-    const newSlide: Slide = {
-      id: newId,
-      title: 'New ELT Activity Slide',
-      subtitle: 'Click to edit subtitle or add textbook instructions',
-      layout,
-      referenceContent: {
-        type: 'text',
-        id: `ref-${Date.now()}`,
-        title: 'Grammar or Reading Reference',
-        content: 'Enter reading passage, context dialogue or grammar rule here.',
-        category: 'grammar_note',
+      // History State
+      past: [],
+      future: [],
+      canUndo: false,
+      canRedo: false,
+
+      undo: () => {
+        const state = get();
+        if (state.past.length === 0) return;
+
+        const previousPast = [...state.past];
+        const previousSnapshot = previousPast.pop();
+        if (!previousSnapshot) return;
+
+        const currentSlideId = state.activeSlideId || useSessionStore.getState().currentSlideId || '';
+        const currentSnapshot: HistorySnapshot = {
+          lesson: JSON.parse(JSON.stringify(state.lesson)),
+          activeSlideId: currentSlideId
+        };
+
+        const newFuture = [currentSnapshot, ...state.future].slice(0, MAX_HISTORY);
+        const activeId = previousSnapshot.activeSlideId || (previousSnapshot.lesson.slides[0]?.id ?? '');
+
+        set({
+          lesson: previousSnapshot.lesson,
+          activeSlideId: activeId,
+          past: previousPast,
+          future: newFuture,
+          canUndo: previousPast.length > 0,
+          canRedo: true
+        });
+
+        useSessionStore.getState().setCurrentSlideId(activeId);
       },
-      interaction: {
-        type: 'input_fields',
-        id: `inter-${Date.now()}`,
-        instruction: 'Complete the sentences with the correct grammatical form:',
-        layoutMode: 'list',
-        listItems: [
-          {
-            id: `item-1`,
-            prompt: 'She _______ (work) in London since 2015.',
-            acceptedAnswers: ['has worked', 'has been working'],
-            hint: 'Use present perfect'
-          }
-        ],
-        tableHeaders: [],
-        tableRows: [],
-        paragraphTemplate: '',
-        paragraphInputs: {}
+
+      redo: () => {
+        const state = get();
+        if (state.future.length === 0) return;
+
+        const nextFuture = [...state.future];
+        const nextSnapshot = nextFuture.shift();
+        if (!nextSnapshot) return;
+
+        const currentSlideId = state.activeSlideId || useSessionStore.getState().currentSlideId || '';
+        const currentSnapshot: HistorySnapshot = {
+          lesson: JSON.parse(JSON.stringify(state.lesson)),
+          activeSlideId: currentSlideId
+        };
+
+        const newPast = [...state.past, currentSnapshot].slice(-MAX_HISTORY);
+        const activeId = nextSnapshot.activeSlideId || (nextSnapshot.lesson.slides[0]?.id ?? '');
+
+        set({
+          lesson: nextSnapshot.lesson,
+          activeSlideId: activeId,
+          past: newPast,
+          future: nextFuture,
+          canUndo: true,
+          canRedo: nextFuture.length > 0
+        });
+
+        useSessionStore.getState().setCurrentSlideId(activeId);
       },
-    };
 
-    set((state) => ({
-      ...recordHistory(state),
-      lesson: {
-        ...state.lesson,
-        slides: [...state.lesson.slides, newSlide],
+      resetOcrState: () => {
+        set({
+          pastedImagePreview: null,
+          pastedImages: [],
+          extractedBlocks: [],
+          lastExtractedPayload: null
+        });
       },
-    }));
 
-    return newId;
-  },
+      addSlide: (layout: SlideLayout = 'split_50_50') => {
+        const newId = `slide-${Date.now()}`;
+        const nextNumber = get().lesson.slides.length + 1;
+        const newSlide: Slide = {
+          id: newId,
+          title: `Diapositiva ${nextNumber}`,
+          subtitle: '',
+          layout,
+          referenceContent: null,
+          interaction: null,
+          notes: '',
+        };
 
-  deleteSlide: (id) => {
-    set((state) => ({
-      ...recordHistory(state),
-      lesson: {
-        ...state.lesson,
-        slides: state.lesson.slides.filter((s) => s.id !== id),
+        set((state) => ({
+          ...recordHistory(state),
+          activeSlideId: newId,
+          lesson: {
+            ...state.lesson,
+            slides: [...state.lesson.slides, newSlide],
+          },
+        }));
+
+        useSessionStore.getState().setCurrentSlideId(newId);
+        return newId;
       },
-    }));
-  },
 
-  clearLesson: () => {
-    set((state) => ({
-      ...recordHistory(state),
-      lesson: {
-        ...state.lesson,
-        slides: [],
+      deleteSlide: (id) => {
+        const state = get();
+        const remaining = state.lesson.slides.filter((s) => s.id !== id);
+        let nextActiveId = state.activeSlideId;
+        if (state.activeSlideId === id) {
+          nextActiveId = remaining.length > 0 ? remaining[0].id : '';
+        }
+        set((s) => ({
+          ...recordHistory(s),
+          activeSlideId: nextActiveId,
+          lesson: {
+            ...s.lesson,
+            slides: remaining,
+          },
+        }));
+        useSessionStore.getState().setCurrentSlideId(nextActiveId);
       },
-    }));
-  },
 
-  createSlideFromBlock: (blockId, role) => {
-    const state = get();
-    const block = state.extractedBlocks.find((b) => b.id === blockId) || state.extractedBlocks[0];
-    const newId = `slide-${Date.now()}`;
-    const title = block?.parsedData?.title || 'Diapositiva Digitalizada';
-    const subtitle = block?.parsedData?.instruction || 'Contenido adaptado desde libro de texto';
-    const mapped = block ? mapBlockToRole(block, role) : {};
-
-    const newSlide: Slide = {
-      id: newId,
-      title,
-      subtitle,
-      layout: 'split_50_50',
-      referenceContent: mapped.reference || null,
-      interaction: mapped.interaction || null,
-    };
-
-    set((s) => ({
-      ...recordHistory(s),
-      lesson: {
-        ...s.lesson,
-        slides: [...s.lesson.slides, newSlide],
+      clearLesson: () => {
+        set((state) => ({
+          ...recordHistory(state),
+          activeSlideId: '',
+          lesson: {
+            ...state.lesson,
+            slides: [],
+          },
+        }));
+        useSessionStore.getState().setCurrentSlideId('');
       },
-    }));
 
-    return newId;
-  },
+      createSlideFromBlock: (blockId, role) => {
+        const state = get();
+        const block = state.extractedBlocks.find((b) => b.id === blockId) || state.extractedBlocks[0];
+        const newId = `slide-${Date.now()}`;
+        const title = block?.parsedData?.title || 'Diapositiva Digitalizada';
+        const subtitle = block?.parsedData?.instruction || 'Contenido adaptado desde libro de texto';
+        const mapped = block ? mapBlockToRole(block, role) : {};
 
-  duplicateSlide: (id) => {
-    const state = get();
-    const slideToDuplicate = state.lesson.slides.find((s) => s.id === id);
-    if (!slideToDuplicate) return id;
+        const newSlide: Slide = {
+          id: newId,
+          title,
+          subtitle,
+          layout: 'split_50_50',
+          referenceContent: mapped.reference || null,
+          interaction: mapped.interaction || null,
+          notes: '',
+        };
 
-    const cloneId = `slide-${Date.now()}`;
-    const clonedSlide: Slide = {
-      ...JSON.parse(JSON.stringify(slideToDuplicate)),
-      id: cloneId,
-      title: `${slideToDuplicate.title} (Copy)`,
-    };
+        set((s) => ({
+          ...recordHistory(s),
+          activeSlideId: newId,
+          lesson: {
+            ...s.lesson,
+            slides: [...s.lesson.slides, newSlide],
+          },
+        }));
 
-    const index = state.lesson.slides.findIndex((s) => s.id === id);
-    const newSlides = [...state.lesson.slides];
-    newSlides.splice(index + 1, 0, clonedSlide);
-
-    set((s) => ({
-      ...recordHistory(s),
-      lesson: { ...s.lesson, slides: newSlides },
-    }));
-
-    return cloneId;
-  },
-
-  reorderSlides: (startIndex, endIndex) => {
-    set((state) => {
-      const slides = [...state.lesson.slides];
-      const [removed] = slides.splice(startIndex, 1);
-      slides.splice(endIndex, 0, removed);
-      return {
-        ...recordHistory(state),
-        lesson: { ...state.lesson, slides },
-      };
-    });
-  },
-
-  updateSlideTitle: (id, title) => {
-    set((state) => ({
-      ...(shouldRecordTextSnapshot() ? recordHistory(state) : {}),
-      lesson: {
-        ...state.lesson,
-        slides: state.lesson.slides.map((s) => (s.id === id ? { ...s, title } : s)),
+        useSessionStore.getState().setCurrentSlideId(newId);
+        return newId;
       },
-    }));
-  },
 
-  updateSlideSubtitle: (id, subtitle) => {
-    set((state) => ({
-      ...(shouldRecordTextSnapshot() ? recordHistory(state) : {}),
-      lesson: {
-        ...state.lesson,
-        slides: state.lesson.slides.map((s) => (s.id === id ? { ...s, subtitle } : s)),
+      duplicateSlide: (id) => {
+        const state = get();
+        const slideToDuplicate = state.lesson.slides.find((s) => s.id === id);
+        if (!slideToDuplicate) return id;
+
+        const cloneId = `slide-${Date.now()}`;
+        const clonedSlide: Slide = {
+          ...JSON.parse(JSON.stringify(slideToDuplicate)),
+          id: cloneId,
+          title: `${slideToDuplicate.title} (Copia)`,
+        };
+
+        const index = state.lesson.slides.findIndex((s) => s.id === id);
+        const newSlides = [...state.lesson.slides];
+        newSlides.splice(index + 1, 0, clonedSlide);
+
+        set((s) => ({
+          ...recordHistory(s),
+          activeSlideId: cloneId,
+          lesson: { ...s.lesson, slides: newSlides },
+        }));
+
+        useSessionStore.getState().setCurrentSlideId(cloneId);
+        return cloneId;
       },
-    }));
-  },
 
-  updateSlideLayout: (id, layout) => {
-    set((state) => ({
-      ...recordHistory(state),
-      lesson: {
-        ...state.lesson,
-        slides: state.lesson.slides.map((s) => (s.id === id ? { ...s, layout } : s)),
-      },
-    }));
-  },
-
-  updateSlideNotes: (id, notes) => {
-    set((state) => ({
-      ...(shouldRecordTextSnapshot() ? recordHistory(state) : {}),
-      lesson: {
-        ...state.lesson,
-        slides: state.lesson.slides.map((s) => (s.id === id ? { ...s, notes } : s)),
-      },
-    }));
-  },
-
-  updateReferenceBlock: (slideId, block) => {
-    set((state) => ({
-      ...recordHistory(state),
-      lesson: {
-        ...state.lesson,
-        slides: state.lesson.slides.map((s) =>
-          s.id === slideId ? { ...s, referenceContent: block } : s
-        ),
-      },
-    }));
-  },
-
-  updateInteractionBlock: (slideId, block) => {
-    set((state) => ({
-      ...recordHistory(state),
-      lesson: {
-        ...state.lesson,
-        slides: state.lesson.slides.map((s) =>
-          s.id === slideId ? { ...s, interaction: block } : s
-        ),
-      },
-    }));
-  },
-
-  setPastedImagePreview: (url) => {
-    set({ pastedImagePreview: url });
-  },
-
-  processPastedImage: async (fileOrUrl) => {
-    set({ ocrProcessing: true, pastedImagePreview: fileOrUrl });
-    try {
-      const extracted = await digitizeBook(fileOrUrl);
-      set({
-        ocrProcessing: false,
-        extractedBlocks: extracted,
-        lastExtractedPayload: extracted
-      });
-    } catch (err) {
-      console.error('Error processing image with AI:', err);
-      set({ ocrProcessing: false });
-    }
-  },
-
-  loadPresetBookSample: (sampleIndex) => {
-    const block = sampleExtractedBlocks[sampleIndex % sampleExtractedBlocks.length];
-    if (block) {
-      const cloned = { ...block, id: `ext-clone-${Date.now()}` };
-      set((state) => ({
-        extractedBlocks: [cloned, ...state.extractedBlocks],
-        lastExtractedPayload: [cloned, ...(state.lastExtractedPayload || [])]
-      }));
-    }
-  },
-
-  removeExtractedBlock: (id) => {
-    set((state) => ({
-      extractedBlocks: state.extractedBlocks.filter((b) => b.id !== id)
-    }));
-  },
-
-  restoreExtractedBlocks: () => {
-    const state = get();
-    const sourceBlocks = (state.lastExtractedPayload && state.lastExtractedPayload.length > 0)
-      ? state.lastExtractedPayload
-      : sampleExtractedBlocks;
-
-    const restored = sourceBlocks.map((b, idx) => ({
-      ...JSON.parse(JSON.stringify(b)),
-      id: `restored-${Date.now()}-${idx}`
-    }));
-
-    set({
-      extractedBlocks: restored,
-      lastExtractedPayload: restored
-    });
-  },
-
-  addManualBlock: (template) => {
-    const manualBlock = createManualBlock(template);
-    set((state) => ({
-      extractedBlocks: [manualBlock, ...state.extractedBlocks],
-      lastExtractedPayload: [manualBlock, ...(state.lastExtractedPayload || [])]
-    }));
-    return manualBlock;
-  },
-
-  directAssignTemplate: (slideId, template) => {
-    const state = get();
-    if (template === 'reference_text') {
-      const refBlock: ReferenceBlock = {
-        type: 'text',
-        id: `ref-text-${Date.now()}`,
-        title: 'Manual Reading Passage',
-        content: 'Enter the reading text, dialogue or grammar context here for student reference.',
-        category: 'reading'
-      };
-      state.updateReferenceBlock(slideId, refBlock);
-      return;
-    }
-
-    const manualBlock = createManualBlock(template === 'sequence' ? 'input_fields' : template);
-    const role: PedagogicalRole = 
-      template === 'reference_table' ? 'reference_table' :
-      template === 'buckets' ? 'interaction_buckets' :
-      template === 'selection' ? 'interaction_selection' :
-      template === 'sequence' ? 'interaction_sequence' : 'interaction_inputs';
-
-    const mapped = mapBlockToRole(manualBlock, role);
-    if (mapped.reference) {
-      state.updateReferenceBlock(slideId, mapped.reference);
-    }
-    if (mapped.interaction) {
-      state.updateInteractionBlock(slideId, mapped.interaction);
-    }
-  },
-
-  assignExtractedBlock: (slideId, blockId, role) => {
-    const state = get();
-    const block = state.extractedBlocks.find((b) => b.id === blockId);
-    if (!block) return;
-
-    const mapped = mapBlockToRole(block, role);
-    set((s) => ({
-      ...recordHistory(s),
-      lesson: {
-        ...s.lesson,
-        slides: s.lesson.slides.map((slide) => {
-          if (slide.id !== slideId) return slide;
+      reorderSlides: (startIndex, endIndex) => {
+        set((state) => {
+          const slides = [...state.lesson.slides];
+          const [removed] = slides.splice(startIndex, 1);
+          slides.splice(endIndex, 0, removed);
           return {
-            ...slide,
-            ...(mapped.reference ? { referenceContent: mapped.reference } : {}),
-            ...(mapped.interaction ? { interaction: mapped.interaction } : {}),
+            ...recordHistory(state),
+            lesson: { ...state.lesson, slides },
           };
-        }),
+        });
       },
-    }));
-  },
-}));
+
+      updateSlideTitle: (id, title) => {
+        set((state) => ({
+          ...(shouldRecordTextSnapshot() ? recordHistory(state) : {}),
+          lesson: {
+            ...state.lesson,
+            slides: state.lesson.slides.map((s) => (s.id === id ? { ...s, title } : s)),
+          },
+        }));
+      },
+
+      updateSlideSubtitle: (id, subtitle) => {
+        set((state) => ({
+          ...(shouldRecordTextSnapshot() ? recordHistory(state) : {}),
+          lesson: {
+            ...state.lesson,
+            slides: state.lesson.slides.map((s) => (s.id === id ? { ...s, subtitle } : s)),
+          },
+        }));
+      },
+
+      updateSlideLayout: (id, layout) => {
+        set((state) => ({
+          ...recordHistory(state),
+          lesson: {
+            ...state.lesson,
+            slides: state.lesson.slides.map((s) => (s.id === id ? { ...s, layout } : s)),
+          },
+        }));
+      },
+
+      updateSlideNotes: (id, notes) => {
+        set((state) => ({
+          ...(shouldRecordTextSnapshot() ? recordHistory(state) : {}),
+          lesson: {
+            ...state.lesson,
+            slides: state.lesson.slides.map((s) => (s.id === id ? { ...s, notes } : s)),
+          },
+        }));
+      },
+
+      updateReferenceBlock: (slideId, block) => {
+        set((state) => ({
+          ...recordHistory(state),
+          lesson: {
+            ...state.lesson,
+            slides: state.lesson.slides.map((s) =>
+              s.id === slideId ? { ...s, referenceContent: block } : s
+            ),
+          },
+        }));
+      },
+
+      updateInteractionBlock: (slideId, block) => {
+        set((state) => ({
+          ...recordHistory(state),
+          lesson: {
+            ...state.lesson,
+            slides: state.lesson.slides.map((s) =>
+              s.id === slideId ? { ...s, interaction: block } : s
+            ),
+          },
+        }));
+      },
+
+      convertSlideRole: (slideId, role) => {
+        set((state) => {
+          const slide = state.lesson.slides.find((s) => s.id === slideId);
+          if (!slide) return state;
+
+          const converted = convertSlideToRole(slide, role);
+          return {
+            ...recordHistory(state),
+            lesson: {
+              ...state.lesson,
+              slides: state.lesson.slides.map((s) => (s.id === slideId ? converted : s)),
+            },
+          };
+        });
+      },
+
+      setPastedImagePreview: (url) => {
+        set({
+          pastedImagePreview: url,
+          pastedImages: url ? [url] : []
+        });
+      },
+
+      addPastedImage: (url) => {
+        set((state) => {
+          const nextImages = [...state.pastedImages, url];
+          return {
+            pastedImages: nextImages,
+            pastedImagePreview: nextImages[0] || null
+          };
+        });
+      },
+
+      removePastedImage: (index) => {
+        set((state) => {
+          const nextImages = state.pastedImages.filter((_, i) => i !== index);
+          return {
+            pastedImages: nextImages,
+            pastedImagePreview: nextImages[0] || null
+          };
+        });
+      },
+
+      clearPastedImages: () => {
+        set({
+          pastedImages: [],
+          pastedImagePreview: null
+        });
+      },
+
+      processPastedImages: async (imagesToProcess) => {
+        const state = get();
+        const images = imagesToProcess || state.pastedImages;
+        if (!images || images.length === 0) return;
+
+        set({ ocrProcessing: true });
+        try {
+          const extracted = await digitizeBook(images);
+          set({
+            ocrProcessing: false,
+            extractedBlocks: extracted,
+            lastExtractedPayload: extracted
+          });
+        } catch (err) {
+          console.error('Error processing images with AI:', err);
+          set({ ocrProcessing: false });
+        }
+      },
+
+      processPastedImage: async (fileOrUrl) => {
+        const state = get();
+        const nextImages = state.pastedImages.includes(fileOrUrl)
+          ? state.pastedImages
+          : [...state.pastedImages, fileOrUrl];
+
+        set({
+          pastedImages: nextImages,
+          pastedImagePreview: nextImages[0] || null,
+          ocrProcessing: true
+        });
+
+        try {
+          const extracted = await digitizeBook(nextImages.length > 0 ? nextImages : [fileOrUrl]);
+          set({
+            ocrProcessing: false,
+            extractedBlocks: extracted,
+            lastExtractedPayload: extracted
+          });
+        } catch (err) {
+          console.error('Error processing images with AI:', err);
+          set({ ocrProcessing: false });
+        }
+      },
+
+      loadPresetBookSample: (_sampleIndex) => {
+        // Presets removed - no-op for backward compatibility
+      },
+
+      removeExtractedBlock: (id) => {
+        set((state) => ({
+          extractedBlocks: state.extractedBlocks.filter((b) => b.id !== id)
+        }));
+      },
+
+      updateExtractedBlock: (id, updates) => {
+        set((state) => ({
+          extractedBlocks: state.extractedBlocks.map((b) => {
+            if (b.id !== id) return b;
+            return {
+              ...b,
+              ...updates,
+              parsedData: {
+                ...b.parsedData,
+                ...(updates.parsedData || {}),
+              },
+            };
+          }),
+          lastExtractedPayload: state.lastExtractedPayload
+            ? state.lastExtractedPayload.map((b) => {
+                if (b.id !== id) return b;
+                return {
+                  ...b,
+                  ...updates,
+                  parsedData: {
+                    ...b.parsedData,
+                    ...(updates.parsedData || {}),
+                  },
+                };
+              })
+            : null,
+        }));
+      },
+
+      restoreExtractedBlocks: () => {
+        const state = get();
+        const sourceBlocks = (state.lastExtractedPayload && state.lastExtractedPayload.length > 0)
+          ? state.lastExtractedPayload
+          : [];
+
+        const restored = sourceBlocks.map((b, idx) => ({
+          ...JSON.parse(JSON.stringify(b)),
+          id: `restored-${Date.now()}-${idx}`
+        }));
+
+        set({
+          extractedBlocks: restored,
+          lastExtractedPayload: restored
+        });
+      },
+
+      addManualBlock: (template) => {
+        const manualBlock = createManualBlock(template);
+        set((state) => ({
+          extractedBlocks: [manualBlock, ...state.extractedBlocks],
+          lastExtractedPayload: [manualBlock, ...(state.lastExtractedPayload || [])]
+        }));
+        return manualBlock;
+      },
+
+      directAssignTemplate: (slideId, template) => {
+        const state = get();
+        if (template === 'reference_text') {
+          const refBlock: ReferenceBlock = {
+            type: 'text',
+            id: `ref-text-${Date.now()}`,
+            title: 'Manual Reading Passage',
+            content: 'Enter the reading text, dialogue or grammar context here for student reference.',
+            category: 'reading'
+          };
+          state.updateReferenceBlock(slideId, refBlock);
+          return;
+        }
+
+        const manualBlock = createManualBlock(template === 'sequence' ? 'input_fields' : template);
+        const role: PedagogicalRole = 
+          template === 'reference_table' ? 'reference_table' :
+          template === 'buckets' ? 'interaction_buckets' :
+          template === 'selection' ? 'interaction_selection' :
+          template === 'sequence' ? 'interaction_sequence' : 'interaction_inputs';
+
+        const mapped = mapBlockToRole(manualBlock, role);
+        if (mapped.reference) {
+          state.updateReferenceBlock(slideId, mapped.reference);
+        }
+        if (mapped.interaction) {
+          state.updateInteractionBlock(slideId, mapped.interaction);
+        }
+      },
+
+      assignExtractedBlock: (slideId, blockId, role) => {
+        const state = get();
+        const block = state.extractedBlocks.find((b) => b.id === blockId);
+        if (!block) return;
+
+        const mapped = mapBlockToRole(block, role);
+        set((s) => ({
+          ...recordHistory(s),
+          lesson: {
+            ...s.lesson,
+            slides: s.lesson.slides.map((slide) => {
+              if (slide.id !== slideId) return slide;
+              return {
+                ...slide,
+                ...(mapped.reference ? { referenceContent: mapped.reference } : {}),
+                ...(mapped.interaction ? { interaction: mapped.interaction } : {}),
+              };
+            }),
+          },
+        }));
+      },
+    }),
+    {
+      name: 'elt-slide-builder-storage',
+      storage: createJSONStorage(() => localStorage),
+      partialize: (state) => ({
+        lesson: state.lesson,
+        activeSlideId: state.activeSlideId,
+        extractedBlocks: state.extractedBlocks,
+        lastExtractedPayload: state.lastExtractedPayload,
+      }),
+      onRehydrateStorage: () => (state) => {
+        if (state) {
+          const validSlideId = state.lesson.slides.some((s) => s.id === state.activeSlideId)
+            ? state.activeSlideId
+            : (state.lesson.slides[0]?.id ?? '');
+          if (validSlideId !== state.activeSlideId) {
+            state.activeSlideId = validSlideId;
+          }
+          useSessionStore.getState().setCurrentSlideId(validSlideId);
+        }
+      },
+    }
+  )
+);

@@ -1,7 +1,6 @@
 import { create } from 'zustand';
 import type { EvaluationResult } from '../core/evaluators';
 import { evaluateInteraction } from '../core/evaluators';
-import { initialLesson } from '../data/sampleData';
 import { useLessonStore } from './useLessonStore';
 
 export interface SessionEvaluation extends EvaluationResult {
@@ -35,7 +34,7 @@ interface SessionState {
 }
 
 export const useSessionStore = create<SessionState>((set, get) => ({
-  currentSlideId: initialLesson.slides[0]?.id || '',
+  currentSlideId: 'slide-1',
   mode: 'edit',
   liveSyncEnabled: true,
 
@@ -57,6 +56,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       studentEvaluation: { isSubmitted: false, score: 0, maxScore: 0, details: {} },
       isReferenceDrawerOpen: false,
     });
+    const lessonStore = useLessonStore.getState();
+    if (lessonStore.activeSlideId !== id) {
+      lessonStore.setActiveSlideId(id);
+    }
   },
 
   setMode: (mode) => {

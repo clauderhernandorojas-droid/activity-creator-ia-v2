@@ -9,8 +9,10 @@ import type {
   SelectionOption,
   BucketsMatchingBlock,
   SequenceBlock,
-  BucketTarget,
-  BucketToken
+  BucketToken,
+  TargetSlot,
+  SourceItem,
+  Slide
 } from '../../types/schema';
 
 export type PedagogicalRole = 
@@ -91,52 +93,104 @@ export function extractCategoriesFromText(text: string): string[] {
 /**
  * Universal Zero-Hardcoding Mapper for Buckets Matching
  */
+/**
+ * Universal Zero-Hardcoding Mapper for Buckets & Universal Matching
+ */
 export function mapBlockToBuckets(block: ExtractedBlock): BucketsMatchingBlock {
   const parsed = block.parsedData || {};
 
-  // 1. EXTRACT BUCKET CATEGORIES DYNAMICALLY
-  let rawCategories: string[] = [];
-  if (Array.isArray(parsed.buckets) && parsed.buckets.length > 0) {
-    rawCategories = parsed.buckets
-      .map((b: any) => (typeof b === 'string' ? b.trim() : String(b.label || b.name || '').trim()))
-      .filter(Boolean);
-  } else if (Array.isArray(parsed.suggestedBuckets) && parsed.suggestedBuckets.length > 0) {
-    rawCategories = parsed.suggestedBuckets.map((c: any) => String(c).trim()).filter(Boolean);
-  } else if (Array.isArray(parsed.categories) && parsed.categories.length > 0) {
-    rawCategories = parsed.categories.map((c: any) => String(c).trim()).filter(Boolean);
+  // 1. EXTRACT TARGET SLOTS / BUCKETS DYNAMICALLY (1:1 STRICT TRANSFORMER)
+  let targetSlots: TargetSlot[] = [];
+
+  // A. If already structured targetSlots:
+  if (Array.isArray(parsed.targetSlots) && parsed.targetSlots.length > 0) {
+    targetSlots = parsed.targetSlots
+      .map((ts: any, idx: number) => {
+        const label = typeof ts === 'string' ? ts.trim() : String(ts.label || ts.name || ts.title || '').trim();
+        return {
+          id: typeof ts === 'object' && ts.id ? String(ts.id) : `slot-${slugify(label)}-${idx}`,
+          label,
+          description: typeof ts === 'object' && ts.description ? String(ts.description) : undefined,
+          color: typeof ts === 'object' && ts.color ? ts.color : BUCKET_COLORS[idx % BUCKET_COLORS.length]
+        };
+      })
+      .filter((ts: TargetSlot) => ts.label.length > 0);
   }
 
-  // If no categories in parsedData, extract from instruction or rawText
-  if (rawCategories.length === 0) {
+  // B. Explicit buckets / categories:
+  if (targetSlots.length === 0) {
+    let rawCategories: string[] = [];
+    if (Array.isArray(parsed.buckets) && parsed.buckets.length > 0) {
+      rawCategories = parsed.buckets
+        .map((b: any) => (typeof b === 'string' ? b.trim() : String(b.label || b.name || '').trim()))
+        .filter(Boolean);
+    } else if (Array.isArray(parsed.categories) && parsed.categories.length > 0) {
+      rawCategories = parsed.categories.map((c: any) => String(c).trim()).filter(Boolean);
+    } else if (Array.isArray(parsed.suggestedBuckets) && parsed.suggestedBuckets.length > 0) {
+      rawCategories = parsed.suggestedBuckets.map((c: any) => String(c).trim()).filter(Boolean);
+    }
+
+    if (rawCategories.length > 0) {
+      targetSlots = rawCategories.map((cat, idx) => ({
+        id: `slot-${slugify(cat)}-${idx}`,
+        label: cat,
+        description: cat,
+        color: BUCKET_COLORS[idx % BUCKET_COLORS.length]
+      }));
+    }
+  }
+
+  // C. If exercise associates elements with paragraphs of a linked reading text:
+  // Dynamically map slots to match the paragraph identifiers (1, 2, 3, 4...)
+  if (targetSlots.length === 0 && Array.isArray(parsed.paragraphs) && parsed.paragraphs.length > 0) {
+    targetSlots = parsed.paragraphs.map((p: any, idx: number) => {
+      const pId = typeof p === 'object' && p.id ? String(p.id) : String(idx + 1);
+      const label = typeof p === 'string'
+        ? `Párrafo ${idx + 1}`
+        : (p.label || `Párrafo ${pId}`);
+      return {
+        id: `slot-p-${pId}`,
+        label,
+        description: typeof p === 'object' && p.text ? p.text.substring(0, 50) + '...' : undefined,
+        color: BUCKET_COLORS[idx % BUCKET_COLORS.length]
+      };
+    });
+  }
+
+  // D. Extract categories mentioned in instruction or raw text if still empty:
+  if (targetSlots.length === 0) {
+    let extractedTextCats: string[] = [];
     if (parsed.instruction) {
-      rawCategories = extractCategoriesFromText(parsed.instruction);
+      extractedTextCats = extractCategoriesFromText(parsed.instruction);
     }
-    if (rawCategories.length === 0 && block.rawText) {
-      rawCategories = extractCategoriesFromText(block.rawText);
+    if (extractedTextCats.length === 0 && block.rawText) {
+      extractedTextCats = extractCategoriesFromText(block.rawText);
     }
-    if (rawCategories.length === 0 && block.rawText) {
+    if (extractedTextCats.length === 0 && block.rawText) {
       const lines = block.rawText.split('\n').map((l) => l.trim()).filter(Boolean);
       const catHeaderLine = lines.find((l) => /^(categories|prepositions|buckets|groups):\s*/i.test(l));
       if (catHeaderLine) {
         const rest = catHeaderLine.replace(/^(categories|prepositions|buckets|groups):\s*/i, '');
-        rawCategories = rest.split(/[,;/|]+/).map((s) => s.trim()).filter(Boolean);
+        extractedTextCats = rest.split(/[,;/|]+/).map((s) => s.trim()).filter(Boolean);
       }
+    }
+    if (extractedTextCats.length > 0) {
+      targetSlots = extractedTextCats.map((cat, idx) => ({
+        id: `slot-${slugify(cat)}-${idx}`,
+        label: cat,
+        description: cat,
+        color: BUCKET_COLORS[idx % BUCKET_COLORS.length]
+      }));
     }
   }
 
-  const buckets: BucketTarget[] = rawCategories.map((cat, idx) => ({
-    id: `b-${slugify(cat)}-${idx}`,
-    label: cat,
-    description: `Category: ${cat}`,
-    color: BUCKET_COLORS[idx % BUCKET_COLORS.length]
-  }));
-
-  // 2. EXTRACT TOKENS DYNAMICALLY (ZERO HARDCODING)
-  let rawTokens: Array<{ text: string; target?: string }> = [];
+  // 2. EXTRACT SOURCE ITEMS / TOKENS DYNAMICALLY (ZERO HARDCODING)
+  let rawItems: Array<{ text: string; target?: string }> = [];
 
   // Helper to extract lines from rawText as candidate tokens
   const extractTokensFromRawTextLines = (): Array<{ text: string; target?: string }> => {
     if (!block.rawText) return [];
+    const rawCategoryLabels = targetSlots.map((ts) => ts.label.toLowerCase());
     const lines = block.rawText
       .split('\n')
       .map((l) => l.trim())
@@ -145,18 +199,18 @@ export function mapBlockToBuckets(block: ExtractedBlock): BucketsMatchingBlock {
         // Ignore lines that are the title
         if (parsed.title && line.toLowerCase().includes(parsed.title.toLowerCase())) return false;
         // Ignore lines that are exercise instruction statements
-        if (/^(vocabulary:|exercise|\d+\s*[a-z]?\s*are these|write the letters|complete the|classify each)/i.test(line)) return false;
+        if (/^(vocabulary:|exercise|\d+\s*[a-z]?\s*are these|write the letters|complete the|classify each|match the)/i.test(line)) return false;
         // Ignore lines that merely define category lists
-        if (rawCategories.some((c) => c.toLowerCase() === line.toLowerCase())) return false;
+        if (rawCategoryLabels.some((c) => c === line.toLowerCase())) return false;
         return true;
       });
 
     return lines
       .map((line) => {
         // Strip leading numbering or bullet (e.g. "1. ", "1 ", "• ", "- ")
-        let clean = line.replace(/^(\d+[\s.)-]+|[a-z][\s.)-]+|[-*•]\s*)/i, '').trim();
+        const clean = line.replace(/^(\d+[\s.)-]+|[a-z][\s.)-]+|[-*•]\s*)/i, '').trim();
 
-        // Check for parenthesized category: "spend time with someone (F)" or "(FT)"
+        // Check for parenthesized category or paragraph target: "spend time with someone (F)" or "(1)"
         const matchParen = clean.match(/^(.*?)\s*\(([A-Za-z0-9\s]+)\)$/);
         if (matchParen) {
           return {
@@ -165,7 +219,7 @@ export function mapBlockToBuckets(block: ExtractedBlock): BucketsMatchingBlock {
           };
         }
 
-        // Check for delimiter: "apply - FOR" or "apply: FOR"
+        // Check for delimiter: "apply - FOR" or "Heading A - Paragraph 1"
         const matchDelimiter = clean.match(/^(.*?)\s*[:\-–—]\s*([A-Za-z0-9\s]+)$/);
         if (matchDelimiter) {
           return {
@@ -179,15 +233,22 @@ export function mapBlockToBuckets(block: ExtractedBlock): BucketsMatchingBlock {
       .filter((t) => t.text.length > 0);
   };
 
-  if (Array.isArray(parsed.tokens) && parsed.tokens.length > 0) {
-    rawTokens = parsed.tokens
+  if (Array.isArray(parsed.sourceItems) && parsed.sourceItems.length > 0) {
+    rawItems = parsed.sourceItems
+      .map((it: any) => ({
+        text: typeof it === 'string' ? it.trim() : String(it.text || it.name || '').trim(),
+        target: typeof it === 'object' ? String(it.target || it.correctTargetId || it.answer || '').trim() : undefined
+      }))
+      .filter((t) => t.text.length > 0);
+  } else if (Array.isArray(parsed.tokens) && parsed.tokens.length > 0) {
+    rawItems = parsed.tokens
       .map((t: any) => ({
         text: typeof t === 'string' ? t.trim() : String(t.text || t.word || t.token || '').trim(),
-        target: typeof t === 'object' ? String(t.target || t.category || t.bucket || '').trim() : undefined
+        target: typeof t === 'object' ? String(t.target || t.category || t.bucket || t.answer || '').trim() : undefined
       }))
       .filter((t) => t.text.length > 0);
   } else if (Array.isArray(parsed.items) && parsed.items.length > 0) {
-    rawTokens = parsed.items
+    rawItems = parsed.items
       .map((item: any) => ({
         text: typeof item === 'string' ? item.trim() : String(item.text || item.prompt || item.phrase || '').trim(),
         target: typeof item === 'object' ? String(item.target || item.category || item.bucket || item.answer || '').trim() : undefined
@@ -195,65 +256,83 @@ export function mapBlockToBuckets(block: ExtractedBlock): BucketsMatchingBlock {
       .filter((t) => t.text.length > 0);
   }
 
-  // ROBUSTNESS RULE: Never create a slide with only 1 token if rawText has multiple lines!
+  // Extract from rawText if tokens were empty
   const textLineTokens = extractTokensFromRawTextLines();
-  if ((rawTokens.length <= 1 && textLineTokens.length > 1) || rawTokens.length === 0) {
-    rawTokens = textLineTokens;
+  if ((rawItems.length <= 1 && textLineTokens.length > 1) || rawItems.length === 0) {
+    rawItems = textLineTokens;
   }
 
-  // If buckets were empty but tokens had targets, derive buckets from targets!
-  if (buckets.length === 0 && rawTokens.some((t) => t.target)) {
-    const uniqueTargets = Array.from(new Set(rawTokens.map((t) => t.target).filter(Boolean))) as string[];
+  // If targetSlots were empty but tokens specified targets, derive target slots strictly from targets
+  if (targetSlots.length === 0 && rawItems.some((t) => t.target)) {
+    const uniqueTargets = Array.from(new Set(rawItems.map((t) => t.target).filter(Boolean))) as string[];
     uniqueTargets.forEach((ut, idx) => {
-      buckets.push({
-        id: `b-${slugify(ut)}-${idx}`,
+      targetSlots.push({
+        id: `slot-${slugify(ut)}-${idx}`,
         label: ut,
-        description: `Category: ${ut}`,
+        description: ut,
         color: BUCKET_COLORS[idx % BUCKET_COLORS.length]
       });
     });
   }
 
-  // 3. MAP TO BUCKET TOKENS WITH AUTOMATIC TARGET MATCHING
-  const tokens: BucketToken[] = rawTokens.map((t, idx) => {
-    let matchedBucket: BucketTarget | undefined;
+  // STRICT PURGE: If still no targetSlots exist, DO NOT inject fake ['Categoría A', 'Categoría B']!
+  // The transformer remains 1:1 strict.
 
-    if (t.target && buckets.length > 0) {
+  // 3. MAP ITEMS TO TARGET SLOTS WITHOUT FICTITIOUS ASSIGNMENTS
+  const tokens: BucketToken[] = rawItems.map((t) => {
+    let matchedSlot: TargetSlot | undefined;
+
+    if (t.target && targetSlots.length > 0) {
       const targetLower = t.target.toLowerCase();
-      // Match exact label, parenthesized code (e.g. 'F' in 'Family (F)'), prefix, or substring
-      matchedBucket = buckets.find((b) => {
-        const bLabelLower = b.label.toLowerCase();
-        const parenCode = b.label.match(/\(([^)]+)\)/)?.[1]?.toLowerCase();
+      // Match exact label, parenthesized code, paragraph number, or substring
+      matchedSlot = targetSlots.find((slot) => {
+        const sLabelLower = slot.label.toLowerCase();
+        const parenCode = slot.label.match(/\(([^)]+)\)/)?.[1]?.toLowerCase();
+        const numMatch = slot.label.match(/\d+/)?.[0];
         return (
-          bLabelLower === targetLower ||
+          sLabelLower === targetLower ||
           parenCode === targetLower ||
-          bLabelLower.startsWith(targetLower) ||
-          targetLower.startsWith(bLabelLower) ||
-          bLabelLower.includes(targetLower) ||
-          targetLower.includes(bLabelLower)
+          (numMatch && numMatch === targetLower) ||
+          slot.id.toLowerCase() === targetLower ||
+          sLabelLower.startsWith(targetLower) ||
+          targetLower.startsWith(sLabelLower) ||
+          sLabelLower.includes(targetLower) ||
+          targetLower.includes(sLabelLower)
         );
       });
-    }
-
-    // If no explicit match found and buckets exist, distribute evenly across buckets
-    if (!matchedBucket && buckets.length > 0) {
-      matchedBucket = buckets[idx % buckets.length];
     }
 
     return {
       id: generateId('tok'),
       text: t.text,
-      correctBucketId: matchedBucket ? matchedBucket.id : '',
-      hint: matchedBucket ? `Category: ${matchedBucket.label}` : undefined
+      correctBucketId: matchedSlot ? matchedSlot.id : '',
+      hint: matchedSlot ? matchedSlot.label : undefined
     };
+  });
+
+  const sourceItems: SourceItem[] = tokens.map((t) => ({
+    id: t.id,
+    text: t.text,
+    correctTargetId: t.correctBucketId || undefined,
+    hint: t.hint
+  }));
+
+  const correctPairs: Record<string, string> = {};
+  tokens.forEach((t) => {
+    if (t.correctBucketId) {
+      correctPairs[t.id] = t.correctBucketId;
+    }
   });
 
   return {
     type: 'buckets_matching',
     id: generateId('inter-buc'),
-    instruction: parsed.instruction || 'Classify each word into its respective bucket category:',
-    buckets,
-    tokens
+    instruction: parsed.instruction || 'Relaciona cada elemento con su destino correspondiente:',
+    buckets: targetSlots,
+    tokens,
+    targetSlots,
+    sourceItems,
+    correctPairs: Object.keys(correctPairs).length > 0 ? correctPairs : undefined
   };
 }
 
@@ -266,26 +345,26 @@ export function mapBlockToInputFields(block: ExtractedBlock): InputFieldsBlock {
   let listItems: Array<{ id: string; prompt: string; acceptedAnswers: string[]; prefix?: string; hint?: string }> = [];
 
   if (Array.isArray(parsed.items) && parsed.items.length > 0) {
-    listItems = parsed.items.map((item: any, idx: number) => ({
-      id: generateId('item'),
-      prompt: String(item.text || item.prompt || `Exercise ${idx + 1}`).trim(),
-      acceptedAnswers: item.acceptedAnswers || (item.answer ? [String(item.answer).trim()] : []),
-      prefix: item.prefix || `Q${idx + 1}: `,
-      hint: item.hint
-    }));
+    listItems = parsed.items
+      .map((item: any) => ({
+        id: generateId('item'),
+        prompt: String(item.text || item.prompt || '').trim(),
+        acceptedAnswers: item.acceptedAnswers || (item.answer ? [String(item.answer).trim()] : []),
+        prefix: item.prefix || undefined,
+        hint: item.hint
+      }))
+      .filter((item) => item.prompt.length > 0);
   } else if (block.rawText) {
     const lines = block.rawText
       .split('\n')
       .map((l) => l.trim())
       .filter((l) => l.length > 0);
 
-    listItems = lines.map((line, idx) => {
-      // Look for blank markers or parenthesized hints
+    listItems = lines.map((line) => {
       return {
         id: generateId('item'),
         prompt: line,
-        acceptedAnswers: [],
-        prefix: `Q${idx + 1}: `
+        acceptedAnswers: []
       };
     });
   }
@@ -293,7 +372,7 @@ export function mapBlockToInputFields(block: ExtractedBlock): InputFieldsBlock {
   return {
     type: 'input_fields',
     id: generateId('inter-inp'),
-    instruction: parsed.instruction || 'Type the correct answer in the blanks provided:',
+    instruction: parsed.instruction || 'Escribe la respuesta correcta en cada espacio:',
     layoutMode: 'list',
     listItems,
     tableHeaders: [],
@@ -316,17 +395,19 @@ export function mapBlockToSelection(block: ExtractedBlock): SelectionBlock {
     parsed.questions.some((q: any) => Array.isArray(q.options) && q.options.length > 0);
 
   if (hasExplicitQuestions) {
-    const questions = parsed.questions.map((q: any, qi: number) => ({
-      id: generateId('q'),
-      prompt: String(q.prompt || q.question || `Pregunta ${qi + 1}`).trim(),
-      mode: q.mode || (q.options?.filter((o: any) => o.isCorrect)?.length > 1 ? 'multiple_choice' : 'single_choice'),
-      options: (q.options || []).map((opt: any) => ({
-        id: generateId('opt'),
-        text: String(opt.text || opt.label || '').trim(),
-        isCorrect: typeof opt.isCorrect === 'boolean' ? opt.isCorrect : undefined,
-        feedback: opt.feedback
+    const questions = parsed.questions
+      .map((q: any) => ({
+        id: generateId('q'),
+        prompt: String(q.prompt || q.question || '').trim(),
+        mode: q.mode || (q.options?.filter((o: any) => o.isCorrect)?.length > 1 ? 'multiple_choice' : 'single_choice'),
+        options: (q.options || []).map((opt: any) => ({
+          id: generateId('opt'),
+          text: String(opt.text || opt.label || '').trim(),
+          isCorrect: typeof opt.isCorrect === 'boolean' ? opt.isCorrect : undefined,
+          feedback: opt.feedback
+        }))
       }))
-    }));
+      .filter((q: any) => q.prompt.length > 0);
 
     return {
       type: 'selection',
@@ -460,34 +541,169 @@ export function mapBlockToReferenceTable(block: ExtractedBlock): ReferenceTableB
 export function mapBlockToReferenceText(block: ExtractedBlock): ReferenceTextBlock {
   const parsed = block.parsedData || {};
 
+  let textContent = parsed.content || '';
+  if (!textContent && Array.isArray(parsed.paragraphs) && parsed.paragraphs.length > 0) {
+    textContent = parsed.paragraphs
+      .map((p: any) => (typeof p === 'string' ? p : `${p.label ? `${p.label}\n` : ''}${p.text}`))
+      .join('\n\n');
+  }
+  if (!textContent) {
+    textContent = block.rawText || '';
+  }
+
   return {
     type: 'text',
     id: generateId('ref-txt'),
     title: parsed.title || 'Lectura de Referencia',
-    content: parsed.content || block.rawText || '',
-    category: parsed.category || 'reading'
+    content: textContent,
+    category: parsed.category || 'reading',
+    ...(parsed.imageUrl ? { imageUrl: parsed.imageUrl } : {})
   };
 }
 
 /**
  * Universal Dispatcher: Transforms any ExtractedBlock into the chosen role with ZERO hardcoding.
+ * When the block contains reading or table context alongside an activity, it seamlessly preserves BOTH.
  */
 export function mapBlockToRole(
   block: ExtractedBlock,
   role: PedagogicalRole
 ): { reference?: ReferenceBlock; interaction?: InteractionBlock } {
+  const parsed = block.parsedData || {};
+  const hasReadingContent = Boolean(
+    parsed.content ||
+    parsed.readingPassage ||
+    (Array.isArray(parsed.paragraphs) && parsed.paragraphs.length > 0)
+  );
+
+  const hasTableContent = Boolean(
+    Array.isArray(parsed.headers) &&
+    Array.isArray(parsed.rows) &&
+    parsed.rows.length > 0
+  );
+
+  const defaultReference = hasReadingContent
+    ? mapBlockToReferenceText(block)
+    : hasTableContent
+    ? mapBlockToReferenceTable(block)
+    : undefined;
+
   switch (role) {
     case 'reference_text':
       return { reference: mapBlockToReferenceText(block) };
     case 'reference_table':
       return { reference: mapBlockToReferenceTable(block) };
     case 'interaction_inputs':
-      return { interaction: mapBlockToInputFields(block) };
+      return { interaction: mapBlockToInputFields(block), reference: defaultReference };
     case 'interaction_selection':
-      return { interaction: mapBlockToSelection(block) };
+      return { interaction: mapBlockToSelection(block), reference: defaultReference };
     case 'interaction_buckets':
-      return { interaction: mapBlockToBuckets(block) };
+      return { interaction: mapBlockToBuckets(block), reference: defaultReference };
     case 'interaction_sequence':
-      return { interaction: mapBlockToSequence(block) };
+      return { interaction: mapBlockToSequence(block), reference: defaultReference };
   }
 }
+
+/**
+ * Synthesizes a unified ExtractedBlock from any existing Slide's active interaction or reference.
+ * Preserves all prompts, text lines, instructions, and titles without data loss.
+ */
+export function slideToExtractedBlock(slide: Slide): ExtractedBlock {
+  const inter = slide.interaction;
+  const ref = slide.referenceContent;
+
+  const title = slide.title || (ref && 'title' in ref ? ref.title : '') || 'Actividad Didáctica';
+  const instruction = inter?.instruction || slide.subtitle || 'Instrucciones de la actividad';
+
+  let items: string[] = [];
+  let buckets: string[] = [];
+  let tableHeaders: string[] = [];
+  let tableRows: string[][] = [];
+
+  if (inter) {
+    switch (inter.type) {
+      case 'input_fields':
+        if (inter.listItems && inter.listItems.length > 0) {
+          items = inter.listItems.map((i) => i.prompt);
+        } else if (inter.tableRows && inter.tableRows.length > 0) {
+          tableHeaders = inter.tableHeaders || [];
+          tableRows = inter.tableRows.map((r) => r.map((c) => c.text));
+          items = tableRows.map((r) => r.join(' | '));
+        } else if (inter.paragraphTemplate) {
+          items = inter.paragraphTemplate.split('\n').filter(Boolean);
+        }
+        break;
+
+      case 'selection':
+        if (inter.options && inter.options.length > 0) {
+          items = inter.options.map((o) => o.text);
+        } else if (inter.questions && inter.questions.length > 0) {
+          items = inter.questions.map((q) => q.prompt);
+        }
+        break;
+
+      case 'buckets_matching':
+        buckets = (inter.targetSlots || inter.buckets || []).map((b) => b.label);
+        items = (inter.sourceItems || inter.tokens || []).map((t) => t.text);
+        break;
+
+      case 'sequence':
+        items = inter.items.map((it) => (it.speaker ? `${it.speaker}: ${it.text}` : it.text));
+        break;
+    }
+  } else if (ref) {
+    if (ref.type === 'text') {
+      items = ref.content.split('\n').map((l) => l.trim()).filter(Boolean);
+    } else if (ref.type === 'table_reference') {
+      tableHeaders = ref.headers || [];
+      tableRows = ref.rows || [];
+      items = ref.rows.map((r) => r.join(' | '));
+    }
+  }
+
+  const rawText = [
+    title,
+    instruction,
+    ...items
+  ].filter(Boolean).join('\n');
+
+  return {
+    id: `converted-block-${Date.now()}`,
+    detectedType: 'vocabulary',
+    confidence: 1.0,
+    rawText,
+    parsedData: {
+      title,
+      instruction,
+      items,
+      buckets: buckets.length > 0 ? buckets : undefined,
+      targetSlots: (inter?.type === 'buckets_matching' && inter.targetSlots) ? inter.targetSlots : undefined,
+      sourceItems: (inter?.type === 'buckets_matching' && inter.sourceItems) ? inter.sourceItems : undefined,
+      headers: tableHeaders.length > 0 ? tableHeaders : undefined,
+      rows: tableRows.length > 0 ? tableRows : undefined,
+      content: ref && ref.type === 'text' ? ref.content : items.join('\n'),
+      imageUrl: (ref && ref.type === 'text' && ref.imageUrl) ? ref.imageUrl : undefined
+    }
+  };
+}
+
+/**
+ * Dynamically converts a Slide's archetype on-the-fly without losing extracted data.
+ */
+export function convertSlideToRole(slide: Slide, targetRole: PedagogicalRole): Slide {
+  const block = slideToExtractedBlock(slide);
+  const mapped = mapBlockToRole(block, targetRole);
+
+  const isTargetReference = targetRole === 'reference_text' || targetRole === 'reference_table';
+
+  return {
+    ...slide,
+    referenceContent: isTargetReference
+      ? mapped.reference || null
+      : slide.referenceContent,
+    interaction: isTargetReference
+      ? null
+      : mapped.interaction || null
+  };
+}
+

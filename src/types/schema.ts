@@ -10,6 +10,7 @@ export const ReferenceTextBlockSchema = z.object({
   title: z.string().optional(),
   content: z.string(),
   category: z.enum(['reading', 'grammar_note', 'instructions', 'dialogue']).default('grammar_note'),
+  imageUrl: z.string().optional(),
 });
 
 export const ReferenceTableBlockSchema = z.object({
@@ -114,13 +115,34 @@ export type SelectionQuestion = z.infer<typeof SelectionQuestionSchema>;
 export type SelectionBlock = z.infer<typeof SelectionBlockSchema>;
 
 // 3. BUCKETS MATCHING (Clasificación y emparejamiento)
-export const BucketTargetSchema = z.object({
+// 3. BUCKETS / EMPAREJAMIENTO UNIVERSAL (MATCHING)
+export const TargetSlotSchema = z.object({
   id: z.string(),
   label: z.string(),
   description: z.string().optional(),
   color: z.string().optional(),
 });
 
+export const SourceItemSchema = z.object({
+  id: z.string(),
+  text: z.string(),
+  correctTargetId: z.string().optional(),
+  hint: z.string().optional(),
+});
+
+export const CorrectPairSchema = z.object({
+  sourceId: z.string(),
+  targetId: z.string(),
+});
+
+export const MatchingPayloadSchema = z.object({
+  sourceItems: z.array(SourceItemSchema),
+  targetSlots: z.array(TargetSlotSchema),
+  correctPairs: z.record(z.string(), z.string()).or(z.array(CorrectPairSchema)).optional(),
+});
+
+// Backward-compatible alias schemas
+export const BucketTargetSchema = TargetSlotSchema;
 export const BucketTokenSchema = z.object({
   id: z.string(),
   text: z.string(),
@@ -134,11 +156,20 @@ export const BucketsMatchingBlockSchema = z.object({
   instruction: z.string(),
   buckets: z.array(BucketTargetSchema),
   tokens: z.array(BucketTokenSchema),
+  // Canonical Universal Matching relation (N to M or 1 to 1)
+  targetSlots: z.array(TargetSlotSchema).optional(),
+  sourceItems: z.array(SourceItemSchema).optional(),
+  correctPairs: z.record(z.string(), z.string()).or(z.array(CorrectPairSchema)).optional(),
 });
 
+export type TargetSlot = z.infer<typeof TargetSlotSchema>;
+export type SourceItem = z.infer<typeof SourceItemSchema>;
+export type CorrectPair = z.infer<typeof CorrectPairSchema>;
+export type MatchingPayload = z.infer<typeof MatchingPayloadSchema>;
 export type BucketTarget = z.infer<typeof BucketTargetSchema>;
 export type BucketToken = z.infer<typeof BucketTokenSchema>;
 export type BucketsMatchingBlock = z.infer<typeof BucketsMatchingBlockSchema>;
+export type MatchingBlock = BucketsMatchingBlock;
 
 // 4. SEQUENCE (Orden secuencial)
 export const SequenceItemSchema = z.object({

@@ -22,30 +22,44 @@ export const BucketsRenderer: React.FC<Props> = ({
 }) => {
   const [selectedTokenId, setSelectedTokenId] = useState<string | null>(null);
 
+  const targetSlots: BucketTarget[] =
+    block.targetSlots && block.targetSlots.length > 0 ? block.targetSlots : block.buckets;
+
   const handleBucketChange = (bIndex: number, field: keyof BucketTarget, val: any) => {
     if (!onChange) return;
-    const updated = [...block.buckets];
+    const updated = [...targetSlots];
     updated[bIndex] = { ...updated[bIndex], [field]: val };
-    onChange({ ...block, buckets: updated });
+    onChange({
+      ...block,
+      buckets: updated,
+      targetSlots: updated,
+    });
   };
 
   const addBucket = () => {
     if (!onChange) return;
     const colors = ['#4f46e5', '#0284c7', '#059669', '#d97706', '#db2777'];
     const newB: BucketTarget = {
-      id: `b-${Date.now()}`,
-      label: `CATEGORÍA ${block.buckets.length + 1}`,
-      description: 'Uso o preposición...',
-      color: colors[block.buckets.length % colors.length],
+      id: `slot-${Date.now()}`,
+      label: `Ranura ${targetSlots.length + 1}`,
+      description: '',
+      color: colors[targetSlots.length % colors.length],
     };
-    onChange({ ...block, buckets: [...block.buckets, newB] });
+    const nextSlots = [...targetSlots, newB];
+    onChange({
+      ...block,
+      buckets: nextSlots,
+      targetSlots: nextSlots,
+    });
   };
 
   const removeBucket = (bIndex: number) => {
-    if (!onChange || block.buckets.length <= 2) return;
+    if (!onChange || targetSlots.length <= 1) return;
+    const nextSlots = targetSlots.filter((_, idx) => idx !== bIndex);
     onChange({
       ...block,
-      buckets: block.buckets.filter((_, idx) => idx !== bIndex),
+      buckets: nextSlots,
+      targetSlots: nextSlots,
     });
   };
 
@@ -53,25 +67,36 @@ export const BucketsRenderer: React.FC<Props> = ({
     if (!onChange) return;
     const updated = [...block.tokens];
     updated[tIndex] = { ...updated[tIndex], [field]: val };
-    onChange({ ...block, tokens: updated });
+    onChange({
+      ...block,
+      tokens: updated,
+      sourceItems: updated.map((t) => ({ id: t.id, text: t.text, correctTargetId: t.correctBucketId })),
+    });
   };
 
   const addToken = () => {
     if (!onChange) return;
     const newT: BucketToken = {
       id: `tok-${Date.now()}`,
-      text: `Palabra ${block.tokens.length + 1}`,
-      correctBucketId: block.buckets[0]?.id || '',
-      hint: 'Pista pedagógica',
+      text: `Elemento ${block.tokens.length + 1}`,
+      correctBucketId: targetSlots[0]?.id || '',
+      hint: '',
     };
-    onChange({ ...block, tokens: [...block.tokens, newT] });
+    const nextTokens = [...block.tokens, newT];
+    onChange({
+      ...block,
+      tokens: nextTokens,
+      sourceItems: nextTokens.map((t) => ({ id: t.id, text: t.text, correctTargetId: t.correctBucketId })),
+    });
   };
 
   const removeToken = (tIndex: number) => {
-    if (!onChange || block.tokens.length <= 2) return;
+    if (!onChange || block.tokens.length <= 1) return;
+    const nextTokens = block.tokens.filter((_, idx) => idx !== tIndex);
     onChange({
       ...block,
-      tokens: block.tokens.filter((_, idx) => idx !== tIndex),
+      tokens: nextTokens,
+      sourceItems: nextTokens.map((t) => ({ id: t.id, text: t.text, correctTargetId: t.correctBucketId })),
     });
   };
 
@@ -79,6 +104,16 @@ export const BucketsRenderer: React.FC<Props> = ({
     if (evaluation.isSubmitted) return;
     onAnswerChange?.(tokenId, bucketId);
     setSelectedTokenId(null);
+  };
+
+  const getGridColsClass = (count: number) => {
+    if (count <= 1) return 'grid-cols-1';
+    if (count === 2) return 'grid-cols-1 sm:grid-cols-2';
+    if (count === 3) return 'grid-cols-1 sm:grid-cols-3';
+    if (count === 4) return 'grid-cols-2 md:grid-cols-4';
+    if (count === 5) return 'grid-cols-2 sm:grid-cols-3 lg:grid-cols-5';
+    if (count === 6) return 'grid-cols-2 sm:grid-cols-3 md:grid-cols-6';
+    return 'grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6';
   };
 
   return (
@@ -126,33 +161,40 @@ export const BucketsRenderer: React.FC<Props> = ({
           <div className="space-y-4">
             <div>
               <span className="text-[11px] font-semibold text-slate-500 block mb-1.5">
-                Contenedores de Clasificación:
+                Ranuras / Contenedores de Destino ({targetSlots.length}):
               </span>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-                {block.buckets.map((bucket, bIdx) => (
-                  <div
-                    key={bucket.id}
-                    className="p-3 rounded-xl border border-slate-200 bg-slate-50/70 space-y-1.5 shadow-2xs"
-                    style={{ borderTopColor: bucket.color || '#4f46e5', borderTopWidth: '3px' }}
-                  >
-                    <div className="flex items-center justify-between">
-                      <input
-                        type="text"
-                        value={bucket.label}
-                        onChange={(e) => handleBucketChange(bIdx, 'label', e.target.value)}
-                        className="text-xs font-bold text-slate-800 bg-white border border-slate-200 rounded px-2 py-1 w-24 outline-none"
-                      />
-                      <button
-                        onClick={() => removeBucket(bIdx)}
-                        disabled={block.buckets.length <= 2}
-                        className="text-slate-400 hover:text-rose-600 disabled:opacity-20"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
+              {targetSlots.length === 0 ? (
+                <div className="p-4 rounded-xl border border-dashed border-slate-300 text-center text-xs text-slate-500 bg-slate-50">
+                  No hay ranuras creadas. Haz clic en "+ Contenedor" arriba para añadir una.
+                </div>
+              ) : (
+                <div className={`grid ${getGridColsClass(targetSlots.length)} gap-2`}>
+                  {targetSlots.map((bucket, bIdx) => (
+                    <div
+                      key={bucket.id}
+                      className="p-3 rounded-xl border border-slate-200 bg-slate-50/70 space-y-1.5 shadow-2xs"
+                      style={{ borderTopColor: bucket.color || '#4f46e5', borderTopWidth: '3px' }}
+                    >
+                      <div className="flex items-center justify-between gap-1">
+                        <input
+                          type="text"
+                          value={bucket.label}
+                          onChange={(e) => handleBucketChange(bIdx, 'label', e.target.value)}
+                          className="text-xs font-bold text-slate-800 bg-white border border-slate-200 rounded px-2 py-1 w-full outline-none"
+                        />
+                        <button
+                          onClick={() => removeBucket(bIdx)}
+                          disabled={targetSlots.length <= 1}
+                          className="text-slate-400 hover:text-rose-600 disabled:opacity-20 flex-shrink-0"
+                          title="Eliminar ranura"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
                     </div>
-                  </div>
-                ))}
-              </div>
+                  ))}
+                </div>
+              )}
             </div>
 
             <div>
@@ -179,7 +221,8 @@ export const BucketsRenderer: React.FC<Props> = ({
                       onChange={(e) => handleTokenChange(tIdx, 'correctBucketId', e.target.value)}
                       className="text-xs bg-white text-indigo-700 font-bold border border-slate-200 rounded-lg px-2 py-1 outline-none"
                     >
-                      {block.buckets.map((b) => (
+                      <option value="">(Sin asignar)</option>
+                      {targetSlots.map((b) => (
                         <option key={b.id} value={b.id}>
                           {b.label}
                         </option>
@@ -188,7 +231,7 @@ export const BucketsRenderer: React.FC<Props> = ({
 
                     <button
                       onClick={() => removeToken(tIdx)}
-                      disabled={block.tokens.length <= 2}
+                      disabled={block.tokens.length <= 1}
                       className="p-1 text-slate-400 hover:text-rose-600 disabled:opacity-20"
                     >
                       <Trash2 className="w-3.5 h-3.5" />
@@ -246,37 +289,47 @@ export const BucketsRenderer: React.FC<Props> = ({
               );
             })()}
 
-            {/* Buckets Grid */}
-            <div className="flex-1 grid grid-cols-2 md:grid-cols-4 gap-3.5 min-h-[180px]">
-              {block.buckets.map((bucket) => {
-                const assignedTokens = block.tokens.filter(
-                  (tok) => studentAnswers[tok.id] === bucket.id
-                );
+            {/* Target Slots Grid */}
+            {targetSlots.length === 0 ? (
+              <div className="flex-1 flex flex-col items-center justify-center p-8 rounded-2xl border-2 border-dashed border-slate-200 bg-slate-50/50 text-center min-h-[160px]">
+                <p className="text-sm font-semibold text-slate-600">No hay ranuras o contenedores configurados</p>
+                <p className="text-xs text-slate-400 mt-1">Añade contenedores en el modo edición o mediante la extracción OCR.</p>
+              </div>
+            ) : (
+              <div className={`flex-1 grid ${getGridColsClass(targetSlots.length)} gap-3.5 min-h-[180px]`}>
+                {targetSlots.map((bucket) => {
+                  const assignedTokens = block.tokens.filter(
+                    (tok) => studentAnswers[tok.id] === bucket.id
+                  );
 
-                return (
-                  <div
-                    key={bucket.id}
-                    onClick={() => {
-                      if (selectedTokenId) {
-                        assignTokenToBucket(selectedTokenId, bucket.id);
-                      }
-                    }}
-                    className={`rounded-2xl border p-3.5 flex flex-col transition-all cursor-pointer ${
-                      selectedTokenId
-                        ? 'border-indigo-400 bg-indigo-50/30 hover:bg-indigo-50/60 ring-2 ring-indigo-200/50'
-                        : 'border-slate-200 bg-slate-50/50 hover:border-slate-300'
-                    }`}
-                    style={{ borderTopColor: bucket.color || '#4f46e5', borderTopWidth: '4px' }}
-                  >
-                    {/* Bucket Title */}
-                    <div className="flex items-center justify-between mb-2">
-                      <h4 className="text-xs font-black tracking-wider text-slate-800 uppercase">
-                        {bucket.label}
-                      </h4>
-                      <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-white border border-slate-200 text-slate-600 font-bold shadow-2xs">
-                        {assignedTokens.length}
-                      </span>
-                    </div>
+                  return (
+                    <div
+                      key={bucket.id}
+                      onClick={() => {
+                        if (selectedTokenId) {
+                          assignTokenToBucket(selectedTokenId, bucket.id);
+                        }
+                      }}
+                      className={`rounded-2xl border p-3.5 flex flex-col transition-all cursor-pointer ${
+                        selectedTokenId
+                          ? 'border-indigo-400 bg-indigo-50/30 hover:bg-indigo-50/60 ring-2 ring-indigo-200/50'
+                          : 'border-slate-200 bg-slate-50/50 hover:border-slate-300'
+                      }`}
+                      style={{ borderTopColor: bucket.color || '#4f46e5', borderTopWidth: '4px' }}
+                    >
+                      {/* Bucket Title */}
+                      <div className="flex items-center justify-between mb-2 gap-1.5">
+                        <h4 className="text-xs font-black tracking-wider text-slate-800 uppercase flex items-center gap-1.5 truncate">
+                          <span
+                            className="w-2 h-2 rounded-full flex-shrink-0"
+                            style={{ backgroundColor: bucket.color || '#4f46e5' }}
+                          />
+                          <span className="truncate">{bucket.label}</span>
+                        </h4>
+                        <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-white border border-slate-200 text-slate-600 font-bold shadow-2xs flex-shrink-0">
+                          {assignedTokens.length}
+                        </span>
+                      </div>
 
                     {/* Assigned tokens inside bucket */}
                     <div className="flex-1 space-y-1.5 overflow-y-auto">
@@ -335,6 +388,7 @@ export const BucketsRenderer: React.FC<Props> = ({
                 );
               })}
             </div>
+            )}
           </div>
         )}
       </div>

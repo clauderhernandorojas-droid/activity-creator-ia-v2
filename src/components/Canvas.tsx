@@ -4,6 +4,7 @@ import { useSessionStore } from '../store/useSessionStore';
 import { INTERACTION_RENDERER_REGISTRY, REFERENCE_RENDERER_REGISTRY } from './renderers/registry';
 import { SlideErrorBoundary } from './common/SlideErrorBoundary';
 import confetti from 'canvas-confetti';
+import type { PedagogicalRole } from '../core/ai/payloadMapper';
 import { 
   CheckCircle2, 
   RotateCcw, 
@@ -18,6 +19,20 @@ import {
   Wand2
 } from 'lucide-react';
 
+interface FormatSwitchOption {
+  id: PedagogicalRole;
+  label: string;
+  icon: string;
+}
+
+const FORMAT_SWITCH_OPTIONS: FormatSwitchOption[] = [
+  { id: 'interaction_inputs', label: 'Rellenar', icon: '📝' },
+  { id: 'interaction_selection', label: 'Selección', icon: '☑️' },
+  { id: 'interaction_buckets', label: 'Buckets', icon: '🗂️' },
+  { id: 'interaction_sequence', label: 'Secuencia', icon: '🔀' },
+  { id: 'reference_text', label: 'Referencia', icon: '📖' },
+];
+
 export const Canvas: React.FC = () => {
   const {
     lesson,
@@ -26,6 +41,7 @@ export const Canvas: React.FC = () => {
     updateSlideSubtitle,
     updateInteractionBlock,
     updateReferenceBlock,
+    convertSlideRole,
   } = useLessonStore();
 
   const {
@@ -119,6 +135,26 @@ export const Canvas: React.FC = () => {
     }
   };
 
+  const currentFormat: PedagogicalRole = (() => {
+    if (currentSlide.interaction) {
+      switch (currentSlide.interaction.type) {
+        case 'input_fields':
+          return 'interaction_inputs';
+        case 'selection':
+          return 'interaction_selection';
+        case 'buckets_matching':
+          return 'interaction_buckets';
+        case 'sequence':
+          return 'interaction_sequence';
+      }
+    }
+    if (currentSlide.referenceContent) {
+      if (currentSlide.referenceContent.type === 'table_reference') return 'reference_table';
+      return 'reference_text';
+    }
+    return 'interaction_inputs';
+  })();
+
   // Resolve renderers from registry
   const InteractionComponent = currentSlide.interaction
     ? INTERACTION_RENDERER_REGISTRY[currentSlide.interaction.type]
@@ -167,8 +203,8 @@ export const Canvas: React.FC = () => {
             )}
           </div>
 
-          {/* Floating Scaffolding Button (Consultar Material de Consulta) */}
-          {hasReference && (
+          {/* Floating Scaffolding Button / Screen Indicator */}
+          {hasReference && !hasInteraction && (
             <button
               onClick={toggleReferenceDrawer}
               className="flex items-center gap-2 px-4 py-2.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-semibold text-xs sm:text-sm rounded-xl border border-indigo-200 shadow-2xs transition transform active:scale-95"
@@ -178,12 +214,91 @@ export const Canvas: React.FC = () => {
               <span>{getReferenceButtonLabel()}</span>
             </button>
           )}
+          {hasReference && hasInteraction && (
+            <div className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 bg-indigo-50/80 text-indigo-700 text-xs font-semibold rounded-xl border border-indigo-200/80 shadow-2xs">
+              <BookOpen className="w-3.5 h-3.5 text-indigo-600" />
+              <span>Lectura Integrada en Pantalla</span>
+            </div>
+          )}
+        </div>
+
+        {/* Dynamic Archetype Conversion Toolbar (Segmented Control) */}
+        <div className="flex flex-wrap items-center justify-between gap-3 mb-5 px-3.5 py-2 bg-slate-50 border border-slate-200/80 rounded-xl">
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+              <Sparkles className="w-3.5 h-3.5 text-indigo-600" />
+              <span>Formato Activo:</span>
+            </span>
+            <span className="text-[11px] text-slate-400 hidden md:inline">
+              (Convierte en caliente preservando enunciados e ítems)
+            </span>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-1 bg-white p-1 rounded-lg border border-slate-200 shadow-2xs">
+            {FORMAT_SWITCH_OPTIONS.map((opt) => {
+              const isSelected = currentFormat === opt.id || (opt.id === 'reference_text' && currentFormat === 'reference_table');
+              return (
+                <button
+                  key={opt.id}
+                  type="button"
+                  onClick={() => {
+                    if (!isSelected) {
+                      convertSlideRole(currentSlide.id, opt.id);
+                    }
+                  }}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold transition-all cursor-pointer ${
+                    isSelected
+                      ? 'bg-indigo-600 text-white shadow-xs scale-[1.02]'
+                      : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                  }`}
+                  title={`Convertir diapositiva a formato ${opt.label} (Reversible con Ctrl+Z)`}
+                >
+                  <span className="text-xs">{opt.icon}</span>
+                  <span>{opt.label}</span>
+                </button>
+              );
+            })}
+          </div>
         </div>
 
         {/* Main Stage: Full Prominence for the Primary Pedagogical Purpose, natural vertical expansion */}
         <div className="flex-1 flex flex-col w-full">
           <SlideErrorBoundary fallbackTitle="Error al procesar el contenido de la diapositiva">
-            {hasInteraction && InteractionComponent ? (
+            {hasInteraction && hasReference && InteractionComponent && ReferenceComponent ? (
+              /* DUAL INTEGRATED LAYOUT: Both Reading/Reference and Interactive Activity on the Main Canvas Stage */
+              <div className="w-full grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+                {/* Left Column: Reading Passage / Reference Content */}
+                <div className="lg:col-span-5 2xl:col-span-5 bg-slate-50/80 border border-slate-200/90 rounded-2xl p-5 sm:p-6 shadow-2xs space-y-4 lg:sticky lg:top-4 max-h-[calc(100vh-14rem)] overflow-y-auto">
+                  <div className="flex items-center justify-between pb-2.5 border-b border-slate-200">
+                    <div className="flex items-center gap-2 text-xs font-bold text-indigo-700 uppercase tracking-wider">
+                      <BookOpen className="w-4 h-4 text-indigo-600" />
+                      <span>Material de Lectura / Consulta</span>
+                    </div>
+                    <span className="text-[10px] bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full font-bold">
+                      Referencia Activa
+                    </span>
+                  </div>
+
+                  <ReferenceComponent
+                    block={currentSlide.referenceContent}
+                    isEditMode={isEditMode}
+                    onChange={(updated: any) => updateReferenceBlock(currentSlide.id, updated)}
+                  />
+                </div>
+
+                {/* Right Column: Interactive Activity */}
+                <div className="lg:col-span-7 2xl:col-span-7 space-y-4">
+                  <InteractionComponent
+                    block={currentSlide.interaction}
+                    studentAnswers={studentAnswers}
+                    evaluation={studentEvaluation}
+                    isEditMode={isEditMode}
+                    onAnswerChange={(key: string, value: any) => setStudentAnswer(key, value)}
+                    onChange={(updated: any) => updateInteractionBlock(currentSlide.id, updated)}
+                  />
+                </div>
+              </div>
+            ) : hasInteraction && InteractionComponent ? (
               /* Primary Interactive Block takes the full stage */
               <InteractionComponent
                 block={currentSlide.interaction}

@@ -1,5 +1,4 @@
 import type { ExtractedBlock } from '../../types/schema';
-import { sampleExtractedBlocks } from '../../data/sampleData';
 
 export type ManualTemplateType = 'input_fields' | 'buckets' | 'selection' | 'reference_table';
 
@@ -201,56 +200,68 @@ export function consolidateBlocks(blocks: ExtractedBlock[], sourceUrl?: string):
 
 /**
  * Calls OpenRouter AI Vision API or returns structured extracted blocks.
- * Isolates the API call logic and token consumption.
+ * Supports simultaneous multi-clipping processing in a single unified multimodal array.
  */
-export async function digitizeBook(fileOrUrl: string): Promise<ExtractedBlock[]> {
+export async function digitizeBook(images: string | string[]): Promise<ExtractedBlock[]> {
   const apiKey = import.meta.env.VITE_OPENROUTER_API_KEY;
   const model = import.meta.env.VITE_OPENROUTER_MODEL || 'google/gemini-2.5-flash';
 
-  if (!apiKey || apiKey.trim() === '') {
+  const imageList = Array.isArray(images) ? images.filter(Boolean) : [images];
+  const primaryImage = imageList[0] || '';
+
+  if (!apiKey || apiKey.trim() === '' || imageList.length === 0) {
     console.warn('[digitizeBook] No VITE_OPENROUTER_API_KEY found, returning standard parsed sample blocks.');
-    return cloneSampleBlocks(fileOrUrl);
+    return cloneSampleBlocks(primaryImage);
   }
 
   const prompt = `You are an expert ELT (English Language Teaching) textbook digitizer.
 CRITICAL INSTRUCTION:
-This image snippet represents ONE SINGLE unified pedagogical activity. DO NOT fragment or split the snippet into separate blocks or tabs.
-Extract the entire snippet holistically into ONE single consolidated block object.
+The user has provided ${imageList.length} image clipping(s). These clippings represent ONE SINGLE unified pedagogical activity from a textbook (for example: clipping 1 may contain the reading passage/article/dialogue, and clipping 2 may contain the accompanying exercise questions, headings to match, cloze sentences, or vocabulary categorization).
+DO NOT fragment or split the clippings into separate blocks or tabs.
+Extract everything holistically into ONE single consolidated block object.
 
-Analyze the image carefully:
-1. "title": The detected section or exercise title (e.g. "Vocabulary: Day-to-day phrases", "Grammar Bank 4B").
-2. "instruction": The complete exercise instruction or prompt question (e.g. "Are these phrases about family (F), work (W), free time (FT), or study (S)? Write the letters next to the phrases.").
-3. "detectedType": Choose the best matching type for the primary activity:
-   - "vocabulary": for categorization / buckets / sorting phrases / dependent prepositions / matching words.
-   - "numbered_list": for fill-in-the-blanks, cloze sentences, or numbered questions.
-   - "table": for grammar charts or tabular reference data.
-   - "dialogue": for sequential conversations or ordering turns.
+Analyze the image(s) carefully:
+1. "title": The main section or reading title (e.g. "Reading: The Secrets of Happiness", "Vocabulary: Day-to-day phrases").
+2. "instruction": The complete exercise instruction (e.g. "Read the article and match headings A-D to paragraphs 1-4", "Complete the sentences with the correct preposition").
+3. "content": If any clipping contains a reading passage, article, dialogue, or grammar reference text, provide the FULL complete verbatim transcription of the text here (preserving paragraphs and line breaks).
+4. "paragraphs": If the reading text has numbered or lettered paragraphs (e.g. 1, 2, 3, 4), extract them as:
+   [{"id": "1", "label": "Paragraph 1", "text": "paragraph text..."}].
+5. "detectedType": Choose the best matching type for the primary interactive activity:
+   - "numbered_list": for questions, cloze sentences, matching headings to paragraphs, or fill-in-blanks.
+   - "vocabulary": for categorization / buckets / prepositions / sorting phrases.
+   - "dialogue": for sequential conversational turns.
+   - "table": for grammar charts or tabular data.
    - "paragraph": for pure reading text without exercises.
 
-SPECIAL RULE FOR CATEGORIZATION / BUCKETS EXERCISES:
-If the image asks to classify phrases, verbs, or words into categories (e.g. "about family (F), work (W), free time (FT), study (S)", or prepositions FOR/IN/TO/WITH):
-- "buckets": Array of clean category names, e.g. ["Family (F)", "Work (W)", "Free time (FT)", "Study (S)"].
-- "tokens": Array of objects for EVERY single phrase or item found in the list, with:
-  {"text": "phrase text", "target": "Family (F)" (matching the category name it belongs to)}.
-  NEVER omit tokens or return only a subset. Extract ALL phrases shown in the image list.
+SPECIAL RULE FOR READING TEXTS WITH EXERCISES:
+If both a reading text and an exercise are provided across the clippings:
+- Transcribe the entire reading passage into "content".
+- Put the exercise items (e.g. headings to match, questions, or sentences with blanks) into "items".
+
+SPECIAL RULE FOR CATEGORIZATION / BUCKETS:
+- "buckets": Array of clean category names, e.g. ["Family (F)", "Work (W)", "Free time (FT)"].
+- "tokens": Array of objects for EVERY single phrase or item found:
+  {"text": "phrase text", "target": "Family (F)"}.
 
 SPECIAL RULE FOR NUMBERED LISTS / FILL IN BLANKS:
 - "items": Array of all sentences or questions, with:
-  {"text": "full sentence with blanks _______", "answer": "expected answer", "hint": "clue if any"}.
+  {"text": "sentence or question prompt", "answer": "expected answer", "hint": "clue if any"}.
 
 Return ONLY a valid JSON array containing exactly ONE consolidated block object:
 [
   {
     "id": "block-consolidated",
-    "rawText": "complete exact transcription of all text in the image",
+    "rawText": "complete exact combined transcription of all clippings",
     "detectedType": "vocabulary" | "numbered_list" | "table" | "dialogue" | "paragraph",
     "confidence": 0.98,
     "parsedData": {
-      "title": "Exercise Title",
+      "title": "Exercise or Reading Title",
       "instruction": "Exercise Instruction",
+      "content": "Full reading passage text if present...",
+      "paragraphs": [{"id": "1", "text": "..."}],
       "buckets": ["Category 1", "Category 2"],
       "tokens": [{"text": "phrase 1", "target": "Category 1"}],
-      "items": [{"text": "sentence 1", "answer": "answer"}],
+      "items": [{"text": "item 1", "answer": "answer"}],
       "headers": ["Col 1", "Col 2"],
       "rows": [["Val 1", "Val 2"]]
     }
@@ -276,12 +287,12 @@ Return ONLY a valid JSON array containing exactly ONE consolidated block object:
                 type: 'text',
                 text: prompt
               },
-              {
+              ...imageList.map((url) => ({
                 type: 'image_url',
                 image_url: {
-                  url: fileOrUrl
+                  url
                 }
-              }
+              }))
             ]
           }
         ],
@@ -292,7 +303,7 @@ Return ONLY a valid JSON array containing exactly ONE consolidated block object:
     if (!response.ok) {
       const errText = await response.text();
       console.warn(`[digitizeBook] OpenRouter responded with ${response.status}: ${errText}. Using fallback extraction.`);
-      return cloneSampleBlocks(fileOrUrl);
+      return cloneSampleBlocks(primaryImage);
     }
 
     const data = await response.json();
@@ -300,7 +311,7 @@ Return ONLY a valid JSON array containing exactly ONE consolidated block object:
 
     if (!rawContent) {
       console.warn('[digitizeBook] Empty response content from OpenRouter. Using fallback extraction.');
-      return cloneSampleBlocks(fileOrUrl);
+      return cloneSampleBlocks(primaryImage);
     }
 
     // Clean JSON response (strip markdown fences if present)
@@ -317,29 +328,24 @@ Return ONLY a valid JSON array containing exactly ONE consolidated block object:
         rawText: item.rawText || '',
         detectedType: item.detectedType || 'paragraph',
         confidence: typeof item.confidence === 'number' ? item.confidence : 0.95,
-        sourceImageSnippetUrl: fileOrUrl,
+        sourceImageSnippetUrl: primaryImage,
         parsedData: item.parsedData || {}
       }));
 
       // Consolidate into 1 unified holistic activity block
-      return [consolidateBlocks(parsedBlocks, fileOrUrl)];
+      return [consolidateBlocks(parsedBlocks, primaryImage)];
     }
 
     console.warn('[digitizeBook] Parsed JSON is empty. Using fallback extraction.');
-    return cloneSampleBlocks(fileOrUrl);
+    return cloneSampleBlocks(primaryImage);
   } catch (error) {
     console.error('[digitizeBook] Error during vision API call:', error);
-    return cloneSampleBlocks(fileOrUrl);
+    return cloneSampleBlocks(primaryImage);
   }
 }
 
 function cloneSampleBlocks(sourceImageSnippetUrl?: string): ExtractedBlock[] {
-  // Return the vocabulary block consolidated as a clean holistic single block
-  const vocabBlock = sampleExtractedBlocks.find((b) => b.detectedType === 'vocabulary') || sampleExtractedBlocks[0];
-  const cloned = {
-    ...JSON.parse(JSON.stringify(vocabBlock)),
-    id: `extracted-restored-${Date.now()}`,
-    sourceImageSnippetUrl: sourceImageSnippetUrl || vocabBlock.sourceImageSnippetUrl
-  };
-  return [cloned];
+  const fallback = createManualBlock('input_fields');
+  fallback.sourceImageSnippetUrl = sourceImageSnippetUrl;
+  return [fallback];
 }
