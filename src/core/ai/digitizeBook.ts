@@ -281,24 +281,27 @@ CRITICAL PEDAGOGICAL DIRECTIVE (AUTONOMOUS RESOLUTION):
 The exercise provided across ${imageCount} clipping(s) MUST ARRIVE 100% COMPLETELY SOLVED AND READY BY DEFAULT.
 Under NO circumstances should any interactive item have an empty expectedAnswer (""), unassigned target, or unresolved question.
 
+REGLAS UNIVERSALES DE BANCO DE OPCIONES Y ASIGNACIÓN BIUNÍVOCA:
+- Regla Universal de Banco de Opciones: Cuando la imagen contenga un contenedor o lista de opciones (wordBank), el valor de expectedAnswer de cada ítem interactivo DEBE ser exactamente uno de los elementos presentes en dicho conjunto (ya consistan en una sola palabra o en cadenas multitérmino). NUNCA utilices texto perteneciente a enunciados o definiciones como valor de respuesta esperada.
+- Regla Universal de Muestras Impresas: Si en el documento original un ítem ya presenta de forma visible uno de los elementos del wordBank asignado a su posición de respuesta, clasifícalo obligatoriamente como isExample: true con dicho elemento en expectedAnswer.
+
 UNIVERSAL TAXONOMY & STRICT CONTRACT:
-1. "title": Formal activity or reading title (e.g. "Question Words and Meanings", "Past Simple vs Present Perfect", "Reading: Jamie Oliver").
+1. "title": Formal activity or reading title.
 2. "referenceContent": Passive consultation material. Put reading passages, articles, dialogues, or instructional guidance ('TIPS!') here that provide reference context and DO NOT require an interactive answer. (null if none).
-3. "wordBank": If the clipping contains a vocabulary box, word box, or pool of words to choose from (e.g. ["Who", "What", "Where", "When", "Why", "Which", "How"]), extract ONLY the words into "wordBank". (Empty array [] if none).
+3. "wordBank": If the clipping contains a vocabulary box, word box, container, or pool of options to choose from, extract ONLY the available options into "wordBank" as string[] (sean cadenas simples o compuestas por varios términos). (Empty array [] if none).
    * REGLA DE PARTICIÓN 1: NUNCA incluyas cajas de palabras (Word Banks), notas de apoyo ('TIPS!'), números de página o códigos de lección dentro de 'items'.
 4. "interactionType": Must be one of: 'fill_blanks', 'multiple_choice', 'matching', 'buckets'.
-   - Matching/vocabulary tables (e.g. 'question word | meaning', 'term | definition') are categorized as 'matching' or 'fill_blanks'.
+   - Matching/vocabulary tables (e.g. 'term | definition') are categorized as 'matching' or 'fill_blanks'.
 5. "items": Array of interactive items ONLY:
-   - "prompt": The visible text, sentence with blank, or clue/definition that the student reads (e.g. "2. _______ : a time" for matching, or "1. She _______ (live) in London." for cloze).
-   - "expectedAnswer": The canonical resolved solution deduced by you as an expert ELT teacher (e.g. "When" for "a time", "has lived" for "(live)"). MUST NEVER BE EMPTY.
+   - "prompt": The visible text, sentence with blank, or clue/definition that the student reads.
+   - "expectedAnswer": The canonical resolved solution deduced by you as an expert teacher. MUST NEVER BE EMPTY. Must follow the Regla Universal de Banco de Opciones whenever a wordBank is present.
    - "acceptedAnswers": List of valid variations (contractions, spelling, or synonyms). Must include expectedAnswer.
-   - "isExample": Booleano.
-     * REGLA DE PARTICIÓN 2: Las filas que ya tienen una respuesta visible de muestra (ej. '1 Who -> a person' o '5 Which -> a thing...') deben clasificarse como "isExample": true con su respuesta respectiva, NUNCA omitirse ni dejarse en blanco.
+   - "isExample": Booleano. Must follow the Regla Universal de Muestras Impresas: las filas o ítems que ya presentan una respuesta visible de muestra impresa en el material original deben clasificarse obligatoriamente como "isExample": true con dicho elemento en expectedAnswer, NUNCA omitirse ni dejarse en blanco.
    - "explanation": Brief 1-line pedagogical justification of the grammar rule or clue.
    - "options": (If multiple choice) array of choices to select from.
 
 CRITICAL NEGATIVE CONSTRAINTS:
-- NUNCA conviertas encabezados de tabla (ej. 'question word | meaning', 'preposition | example') ni códigos editoriales (ej. '1A 5 p5', 'Unit 1A', 'p. 5') en ítems interactivos.
+- NUNCA conviertas encabezados de tabla ni códigos editoriales en ítems interactivos.
 - Cada ítem interactivo debe ser un ítem real que el alumno debe completar o resolver.
 - Devuelve estrictamente el objeto JSON conforme al esquema estructurado.`;
 }

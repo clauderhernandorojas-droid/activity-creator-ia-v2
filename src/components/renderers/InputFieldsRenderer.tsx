@@ -68,19 +68,26 @@ export const InputFieldsRenderer: React.FC<Props> = ({
   onAnswerChange,
   onChange,
 }) => {
-  const hasWordBank = Boolean(block.wordBank && block.wordBank.length > 0);
+  const hasWordBank = Boolean(
+    block.wordBank && block.wordBank.filter((w) => typeof w === 'string' && w.trim().length > 0).length > 0
+  );
 
   // Compute set of words currently used in answers or examples
   const usedWords = React.useMemo(() => {
     const set = new Set<string>();
+    // Current input values from the student
     Object.values(studentAnswers || {}).forEach((val) => {
       if (typeof val === 'string' && val.trim()) {
         set.add(val.trim().toLowerCase());
       }
     });
+    // Canonical values assigned to items with isExample: true
     block.listItems.forEach((item) => {
-      if (item.isExample && item.expectedAnswer) {
-        set.add(item.expectedAnswer.trim().toLowerCase());
+      if (item.isExample) {
+        const canonical = item.expectedAnswer?.trim() || item.acceptedAnswers?.[0]?.trim();
+        if (canonical) {
+          set.add(canonical.toLowerCase());
+        }
       }
     });
     return set;
@@ -201,29 +208,31 @@ export const InputFieldsRenderer: React.FC<Props> = ({
         </div>
       ) : (
         hasWordBank && (
-          <div className="mb-5 p-3.5 bg-slate-50/90 border border-slate-200/80 rounded-2xl shadow-2xs">
+          <div className="mb-5 bg-indigo-50/60 border border-indigo-100 rounded-xl p-4 shadow-xs">
             <div className="flex items-center gap-1.5 mb-2.5">
               <Sparkles className="w-4 h-4 text-indigo-600" />
-              <span className="text-xs font-bold uppercase tracking-wider text-slate-600">
-                Word Bank / Palabras disponibles
+              <span className="text-xs font-bold uppercase tracking-wider text-indigo-900">
+                Word Bank / Opciones disponibles
               </span>
             </div>
             <div className="flex flex-wrap gap-2">
-              {block.wordBank!.map((word, wIdx) => {
-                const isUsed = usedWords.has(word.trim().toLowerCase());
-                return (
-                  <span
-                    key={`${word}-${wIdx}`}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition-all ${
-                      isUsed
-                        ? 'bg-slate-200/70 text-slate-400 border-slate-300 line-through select-none opacity-60'
-                        : 'bg-white text-indigo-900 border-indigo-200 shadow-2xs hover:border-indigo-300'
-                    }`}
-                  >
-                    {word}
-                  </span>
-                );
-              })}
+              {block.wordBank!
+                .filter((w) => typeof w === 'string' && w.trim().length > 0)
+                .map((word, wIdx) => {
+                  const isUsed = usedWords.has(word.trim().toLowerCase());
+                  return (
+                    <span
+                      key={`${word}-${wIdx}`}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition-all ${
+                        isUsed
+                          ? 'bg-slate-100 text-slate-400 border-slate-200 line-through opacity-60 select-none'
+                          : 'bg-white text-indigo-900 border-indigo-200 shadow-2xs hover:border-indigo-300'
+                      }`}
+                    >
+                      {word}
+                    </span>
+                  );
+                })}
             </div>
           </div>
         )

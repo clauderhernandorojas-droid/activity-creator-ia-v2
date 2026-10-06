@@ -1,0 +1,17 @@
+# POLÍTICA DE DESARROLLO Y ARQUITECTURA LIMPIA
+
+1. PROHIBICIÓN ESTRICTA DE PARCHEO POR CASOS:
+   - Queda terminantemente prohibido introducir condicionales (`if`, `regex`, listas de exclusión o conteos arbitrarios) basados en strings literales de ejercicios específicos, títulos de lección o temas de contenido particulares.
+   - Toda solución debe ser 100% abstracta y agnóstica al contenido, operando exclusivamente sobre tipos primitivos del esquema y las 4 primitivas universales: `fill_blanks`, `multiple_choice`, `matching`, `buckets`.
+   - Prueba ácida: "¿Esta lógica funcionaría de forma idéntica para un ejercicio de historia, biología, matemáticas o en cualquier otro idioma?". Si la respuesta es no, se rechaza por ser un parche.
+
+2. PROTOCOLO DE ALERTA DE INFRACCIÓN (GUARDIÁN ARQUITECTÓNICO):
+   - Si en cualquier momento el usuario o una instrucción solicita (explícita o implícitamente) crear un parche por caso, hardcodear texto, o introducir heurísticas frágiles para un ejercicio concreto:
+     * DETÉN la ejecución del código de inmediato.
+     * Emite una advertencia clara: "⚠️ ALERTA DE PARCHEO DETECTADA: Esta instrucción rompería el principio de agnosticismo porque [motivo conciso]."
+     * Propón de inmediato la alternativa limpia y abstracta a nivel de esquema, renderizado o prompt universal para resolver el problema de raíz.
+
+3. CONTRATO UNIVERSAL DE DATOS (JSON SCHEMA):
+   - Toda extracción OCR debe ajustarse estrictamente a `ExtractedStructuredPayloadSchema`.
+   - Si el ejercicio incluye un conjunto de opciones disponibles, van en `wordBank: string[]` (sean cadenas simples o compuestas por varios términos).
+   - Si el ejercicio tiene ítems ya resueltos en el material original como muestra o guía, se marcan con `isExample: true` y su respuesta canónica prellenada.
