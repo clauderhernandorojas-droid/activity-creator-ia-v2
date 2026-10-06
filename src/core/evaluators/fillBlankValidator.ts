@@ -66,6 +66,98 @@ export function stripLeadingIrrelevantParticles(text: string): string {
 }
 
 /**
+ * Generates legitimate grammar variations:
+ * 1. Contraction expansions and reductions (e.g. "didn't go" <-> "did not go", "I've seen" <-> "I have seen")
+ * 2. Standard UK/US spelling variants (e.g. "colour" <-> "color", "travelled" <-> "traveled")
+ */
+export function generateGrammarVariants(text: string): string[] {
+  if (!text) return [];
+  const variants = new Set<string>();
+  variants.add(text);
+
+  const contractions: Array<[RegExp, string]> = [
+    [/\bdidn't\b/gi, 'did not'],
+    [/\bdid not\b/gi, "didn't"],
+    [/\bhaven't\b/gi, 'have not'],
+    [/\bhave not\b/gi, "haven't"],
+    [/\bhasn't\b/gi, 'has not'],
+    [/\bhas not\b/gi, "hasn't"],
+    [/\bhadn't\b/gi, 'had not'],
+    [/\bhad not\b/gi, "hadn't"],
+    [/\bdon't\b/gi, 'do not'],
+    [/\bdo not\b/gi, "don't"],
+    [/\bdoesn't\b/gi, 'does not'],
+    [/\bdoes not\b/gi, "doesn't"],
+    [/\bwon't\b/gi, 'will not'],
+    [/\bwill not\b/gi, "won't"],
+    [/\bwouldn't\b/gi, 'would not'],
+    [/\bwould not\b/gi, "wouldn't"],
+    [/\bcan't\b/gi, 'cannot'],
+    [/\bcannot\b/gi, "can't"],
+    [/\bcouldn't\b/gi, 'could not'],
+    [/\bcould not\b/gi, "couldn't"],
+    [/\bshouldn't\b/gi, 'should not'],
+    [/\bshould not\b/gi, "shouldn't"],
+    [/\bisn't\b/gi, 'is not'],
+    [/\bis not\b/gi, "isn't"],
+    [/\baren't\b/gi, 'are not'],
+    [/\bare not\b/gi, "aren't"],
+    [/\bwasn't\b/gi, 'was not'],
+    [/\bwas not\b/gi, "wasn't"],
+    [/\bweren't\b/gi, 'were not'],
+    [/\bwere not\b/gi, "weren't"],
+    [/\bi'm\b/gi, 'I am'],
+    [/\bi am\b/gi, "I'm"],
+    [/\bi've\b/gi, 'I have'],
+    [/\bi have\b/gi, "I've"],
+    [/\byou've\b/gi, 'you have'],
+    [/\byou have\b/gi, "you've"],
+    [/\bwe've\b/gi, 'we have'],
+    [/\bwe have\b/gi, "we've"],
+    [/\bthey've\b/gi, 'they have'],
+    [/\bthey have\b/gi, "they've"],
+    [/\bhe's\b/gi, 'he is'],
+    [/\bshe's\b/gi, 'she is'],
+    [/\bit's\b/gi, 'it is'],
+  ];
+
+  for (const [regex, replacement] of contractions) {
+    if (regex.test(text)) {
+      variants.add(text.replace(regex, replacement));
+    }
+  }
+
+  const spellingVariants: Array<[RegExp, string]> = [
+    [/\bcolour\b/gi, 'color'],
+    [/\bcolor\b/gi, 'colour'],
+    [/\bflavour\b/gi, 'flavor'],
+    [/\bflavor\b/gi, 'flavour'],
+    [/\bneighbour\b/gi, 'neighbor'],
+    [/\bneighbor\b/gi, 'neighbour'],
+    [/\btravelled\b/gi, 'traveled'],
+    [/\btraveled\b/gi, 'travelled'],
+    [/\btravelling\b/gi, 'traveling'],
+    [/\btraveling\b/gi, 'travelling'],
+    [/\brealise\b/gi, 'realize'],
+    [/\brealize\b/gi, 'realise'],
+    [/\borganise\b/gi, 'organize'],
+    [/\borganize\b/gi, 'organise'],
+    [/\bcentre\b/gi, 'center'],
+    [/\bcenter\b/gi, 'centre'],
+    [/\btheatre\b/gi, 'theater'],
+    [/\btheater\b/gi, 'theatre'],
+  ];
+
+  for (const [regex, replacement] of spellingVariants) {
+    if (regex.test(text)) {
+      variants.add(text.replace(regex, replacement));
+    }
+  }
+
+  return Array.from(variants);
+}
+
+/**
  * Computes classic Levenshtein edit distance between two strings.
  */
 export function levenshteinDistance(a: string, b: string): number {
@@ -188,9 +280,13 @@ export function validateFillInBlank(
   const candidateSet = new Set<string>();
   if (canonical && canonical !== 'Respuesta canónica') {
     candidateSet.add(canonical);
+    generateGrammarVariants(canonical).forEach((v) => candidateSet.add(v));
   }
   acceptedAnswers.forEach((ans) => {
-    if (ans && ans.trim()) candidateSet.add(ans.trim());
+    if (ans && ans.trim()) {
+      candidateSet.add(ans.trim());
+      generateGrammarVariants(ans.trim()).forEach((v) => candidateSet.add(v));
+    }
   });
 
   if (candidateSet.size === 0) {

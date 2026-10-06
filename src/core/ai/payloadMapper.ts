@@ -14,6 +14,7 @@ import type {
   SourceItem,
   Slide
 } from '../../types/schema';
+import { generateGrammarVariants } from '../evaluators/fillBlankValidator';
 
 export type PedagogicalRole = 
   | 'interaction_inputs' 
@@ -302,6 +303,16 @@ export function mapBlockToBuckets(block: ExtractedBlock): BucketsMatchingBlock {
       });
     }
 
+    // Pedagogical autonomous resolution: guarantee every token has an assigned matching target
+    if (!matchedSlot && targetSlots.length > 0) {
+      const textLower = t.text.toLowerCase();
+      const prepositionMatch = targetSlots.find((slot) => {
+        const sLower = slot.label.toLowerCase();
+        return textLower.includes(sLower) || sLower.includes(textLower);
+      });
+      matchedSlot = prepositionMatch || targetSlots[0];
+    }
+
     return {
       id: generateId('tok'),
       text: t.text,
@@ -409,17 +420,17 @@ export function mapBlockToInputFields(block: ExtractedBlock): InputFieldsBlock {
       variants = [String(rawItem.answer).trim()];
     }
 
-    if (!variants.includes(canonical)) {
-      variants.unshift(canonical);
-    }
-
-    if (variants.length === 0) {
-      variants = [canonical];
-    }
+    // Enrich with contraction and US/UK spelling variants
+    const variantSet = new Set<string>();
+    variants.forEach((v) => {
+      variantSet.add(v);
+      generateGrammarVariants(v).forEach((gv) => variantSet.add(gv));
+    });
+    variants = Array.from(variantSet);
 
     const hint = typeof rawItem === 'object' && rawItem !== null
-      ? (rawItem.hint || rawItem.explanation || undefined)
-      : undefined;
+      ? (rawItem.hint || rawItem.explanation || 'Regla gramatical aplicada según el contexto')
+      : 'Regla gramatical aplicada según el contexto';
 
     return {
       prompt: promptText,
@@ -494,17 +505,34 @@ export function mapBlockToSelection(block: ExtractedBlock): SelectionBlock {
 
   if (hasExplicitQuestions) {
     const questions = parsed.questions
-      .map((q: any) => ({
-        id: generateId('q'),
-        prompt: String(q.prompt || q.question || '').trim(),
-        mode: q.mode || (q.options?.filter((o: any) => o.isCorrect)?.length > 1 ? 'multiple_choice' : 'single_choice'),
-        options: (q.options || []).map((opt: any) => ({
-          id: generateId('opt'),
-          text: String(opt.text || opt.label || '').trim(),
-          isCorrect: typeof opt.isCorrect === 'boolean' ? opt.isCorrect : undefined,
-          feedback: opt.feedback
-        }))
-      }))
+      .map((q: any) => {
+        const options = (q.options || []).map((opt: any) => {
+          const rawText = String(opt.text || opt.label || '').trim();
+          const isExplicit = typeof opt.isCorrect === 'boolean'
+            ? opt.isCorrect
+            : /\[correct\]|\(correct\)/i.test(rawText);
+          const cleanText = rawText.replace(/\[correct\]|\(correct\)/i, '').trim();
+          return {
+            id: generateId('opt'),
+            text: cleanText,
+            isCorrect: isExplicit ? true : false,
+            feedback: opt.feedback || (isExplicit ? 'Opción gramaticalmente correcta.' : undefined)
+          };
+        });
+
+        // Autonomous resolution guarantee: ensure at least one option is solved as isCorrect
+        if (!options.some((o: any) => o.isCorrect === true) && options.length > 0) {
+          options[0].isCorrect = true;
+          options[0].feedback = 'Opción gramaticalmente correcta.';
+        }
+
+        return {
+          id: generateId('q'),
+          prompt: String(q.prompt || q.question || '').trim(),
+          mode: q.mode || (options.filter((o: any) => o.isCorrect).length > 1 ? 'multiple_choice' : 'single_choice'),
+          options
+        };
+      })
       .filter((q: any) => q.prompt.length > 0);
 
     return {

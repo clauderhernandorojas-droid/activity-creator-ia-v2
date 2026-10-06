@@ -118,6 +118,15 @@ export const OcrPanel: React.FC = () => {
     const nextItems = [...currentItems];
     nextItems[index] = newText;
 
+    const nextStructuredItems = Array.isArray(activeBlock.parsedData?.items)
+      ? activeBlock.parsedData.items.map((it: any, i: number) => {
+          if (i !== index) return it;
+          return typeof it === 'object' && it !== null
+            ? { ...it, text: newText }
+            : newText;
+        })
+      : nextItems;
+
     const nextTokens = Array.isArray(activeBlock.parsedData?.tokens)
       ? activeBlock.parsedData.tokens.map((t: any, i: number) =>
           i === index ? (typeof t === 'object' ? { ...t, text: newText } : newText) : t
@@ -136,7 +145,7 @@ export const OcrPanel: React.FC = () => {
       rawText: newRawText,
       parsedData: {
         ...activeBlock.parsedData,
-        items: nextItems,
+        items: nextStructuredItems,
         ...(nextTokens ? { tokens: nextTokens } : {}),
       },
     });
@@ -146,6 +155,10 @@ export const OcrPanel: React.FC = () => {
     if (!activeBlock) return;
     const currentItems = getBlockItems(activeBlock);
     const nextItems = currentItems.filter((_, i) => i !== index);
+
+    const nextStructuredItems = Array.isArray(activeBlock.parsedData?.items)
+      ? activeBlock.parsedData.items.filter((_: any, i: number) => i !== index)
+      : nextItems;
 
     const nextTokens = Array.isArray(activeBlock.parsedData?.tokens)
       ? activeBlock.parsedData.tokens.filter((_: any, i: number) => i !== index)
@@ -163,7 +176,7 @@ export const OcrPanel: React.FC = () => {
       rawText: newRawText,
       parsedData: {
         ...activeBlock.parsedData,
-        items: nextItems,
+        items: nextStructuredItems,
         ...(nextTokens ? { tokens: nextTokens } : {}),
       },
     });
@@ -173,6 +186,18 @@ export const OcrPanel: React.FC = () => {
     if (!activeBlock) return;
     const currentItems = getBlockItems(activeBlock);
     const nextItems = [...currentItems, 'Nuevo elemento'];
+
+    const nextStructuredItems = Array.isArray(activeBlock.parsedData?.items)
+      ? [
+          ...activeBlock.parsedData.items,
+          {
+            text: 'Nuevo elemento _______',
+            expectedAnswer: 'Respuesta canónica',
+            acceptedAnswers: ['Respuesta canónica'],
+            hint: 'Pista pedagógica'
+          }
+        ]
+      : nextItems;
 
     const newRawText = [
       activeBlock.parsedData?.title || '',
@@ -186,7 +211,7 @@ export const OcrPanel: React.FC = () => {
       rawText: newRawText,
       parsedData: {
         ...activeBlock.parsedData,
-        items: nextItems,
+        items: nextStructuredItems,
       },
     });
   };
