@@ -122,8 +122,9 @@ export const InputFieldsRenderer: React.FC<Props> = ({
 
           // Canonical answer guaranteed never empty
           const canonicalAnswer =
-            item.expectedAnswer?.trim() ||
+            itemFeedback?.canonicalAnswer?.trim() ||
             itemFeedback?.expectedAnswer?.trim() ||
+            item.expectedAnswer?.trim() ||
             item.acceptedAnswers[0]?.trim() ||
             'Respuesta según texto';
 
@@ -132,8 +133,9 @@ export const InputFieldsRenderer: React.FC<Props> = ({
             .filter((a) => a && a.toLowerCase() !== canonicalAnswer.toLowerCase());
 
           const explanationOrHint =
-            item.explanation?.trim() ||
+            itemFeedback?.feedback?.trim() ||
             itemFeedback?.explanation?.trim() ||
+            item.explanation?.trim() ||
             item.hint?.trim();
 
           return (
@@ -285,10 +287,12 @@ export const InputFieldsRenderer: React.FC<Props> = ({
                     </div>
                   )}
 
-                  {isEvaluated && isCorrect && !isTypoWarning && explanationOrHint && (
+                  {isEvaluated && isCorrect && !isTypoWarning && (
                     <div className="text-xs text-emerald-800 pt-1 flex items-center justify-between font-medium">
                       <span className="text-[11px] text-emerald-700 font-semibold">✓ ¡Correcto!</span>
-                      <span className="text-slate-500 font-normal text-[11px]">💡 {explanationOrHint}</span>
+                      {explanationOrHint && (
+                        <span className="text-slate-500 font-normal text-[11px]">💡 {explanationOrHint}</span>
+                      )}
                     </div>
                   )}
 

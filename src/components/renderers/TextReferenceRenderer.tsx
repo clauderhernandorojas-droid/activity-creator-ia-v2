@@ -26,6 +26,18 @@ export const TextReferenceRenderer: React.FC<Props> = ({
     ? block.images
     : (block.imageUrl ? [block.imageUrl] : []);
 
+  const paragraphs = React.useMemo(() => {
+    if (!block.content) return [];
+    if (/\n\s*\n/.test(block.content)) {
+      return block.content.split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean);
+    }
+    const lines = block.content.split('\n').map((p) => p.trim()).filter(Boolean);
+    if (lines.length > 1) {
+      return lines;
+    }
+    return [block.content.trim()];
+  }, [block.content]);
+
   const addImages = (newImagesList: string[]) => {
     if (newImagesList.length === 0) return;
     const combined = [...activeImages, ...newImagesList].slice(0, MAX_IMAGES);
@@ -218,8 +230,8 @@ export const TextReferenceRenderer: React.FC<Props> = ({
       }}
       onDragLeave={() => setIsDraggingOver(false)}
       onDrop={handleDrop}
-      className={`bg-white border rounded-2xl p-5 h-full flex flex-col shadow-xs transition-colors relative ${
-        isDraggingOver ? 'border-indigo-500 bg-indigo-50/20 ring-2 ring-indigo-200' : 'border-slate-200/90'
+      className={`bg-white border border-slate-200/90 text-slate-800 rounded-2xl p-5 sm:p-6 flex flex-col shadow-xs transition-colors relative ${
+        isDraggingOver ? 'border-indigo-500 bg-indigo-50/20 ring-2 ring-indigo-200' : ''
       }`}
     >
       {/* Hidden File Input supporting multiple files */}
@@ -286,24 +298,24 @@ export const TextReferenceRenderer: React.FC<Props> = ({
           value={block.title || ''}
           placeholder="Título de la lectura o contexto..."
           onChange={(e) => onChange?.({ ...block, title: e.target.value })}
-          className="text-base font-bold text-slate-900 bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 mb-3 outline-none focus:border-indigo-500 focus:bg-white transition"
+          className="text-base font-bold text-slate-900 bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 mb-3 outline-none focus:border-indigo-500 focus:bg-white transition shrink-0"
         />
       ) : (
         block.title && (
-          <h3 className="text-base font-bold text-slate-900 mb-3 tracking-tight">
+          <h3 className="text-base sm:text-lg font-bold text-slate-900 mb-3 tracking-tight shrink-0">
             {block.title}
           </h3>
         )
       )}
 
       {/* Content Area */}
-      <div className="flex-1 overflow-y-auto pr-1">
+      <div className="space-y-4">
         {isEditMode ? (
           /* Edit Mode: Clean structured flow with preview card(s) and textarea */
-          <div className="flex flex-col gap-3 h-full">
+          <div className="flex flex-col gap-3">
             {activeImages.length === 1 && (
               <div className="w-fit max-w-full mx-auto sm:mx-0">
-                <div className="bg-slate-50 dark:bg-slate-900/50 p-2 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-md shadow-slate-200/50 dark:shadow-none relative group transition-all">
+                <div className="bg-slate-50 p-2 border border-slate-200 rounded-2xl shadow-md shadow-slate-200/50 relative group transition-all">
                   <img
                     src={activeImages[0]}
                     alt={block.title || 'Context reference illustration'}
@@ -339,7 +351,7 @@ export const TextReferenceRenderer: React.FC<Props> = ({
                   {activeImages.map((src, idx) => (
                     <div
                       key={idx}
-                      className="bg-slate-50 dark:bg-slate-900/50 p-2 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-sm relative group transition-all flex flex-col items-center justify-center min-h-[120px]"
+                      className="bg-slate-50 p-2 border border-slate-200 rounded-2xl shadow-sm relative group transition-all flex flex-col items-center justify-center min-h-[120px]"
                     >
                       <img
                         src={src}
@@ -386,14 +398,14 @@ export const TextReferenceRenderer: React.FC<Props> = ({
           </div>
         ) : (
           /* Student / Preview Mode: Editorial magazine/textbook layout with floating picture frame(s) */
-          <div className="text-sm leading-relaxed text-slate-700">
+          <div className="text-sm sm:text-base leading-relaxed text-slate-700">
             {activeImages.length === 1 ? (
-              <div className="sm:float-right sm:ml-4 sm:mb-3 mb-4 w-full sm:w-auto max-w-full sm:max-w-[48%] flex-shrink-0">
-                <div className="bg-slate-50 dark:bg-slate-900/50 p-2 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-md shadow-slate-200/50 dark:shadow-none relative group transition-all">
+              <div className="sm:float-right sm:ml-4 sm:mb-3 mb-4 w-full sm:w-auto max-w-full sm:max-w-[46%] flex-shrink-0">
+                <div className="bg-slate-50 p-2 border border-slate-200 rounded-2xl shadow-md shadow-slate-200/50 relative group transition-all">
                   <img
                     src={activeImages[0]}
                     alt={block.title || 'Context reference illustration'}
-                    className="object-contain max-h-60 w-auto mx-auto rounded-xl block"
+                    className="object-contain max-h-56 sm:max-h-60 w-auto mx-auto rounded-xl block"
                     loading="lazy"
                   />
                 </div>
@@ -404,13 +416,13 @@ export const TextReferenceRenderer: React.FC<Props> = ({
                   {activeImages.map((src, idx) => (
                     <div
                       key={idx}
-                      className="bg-slate-50 dark:bg-slate-900/50 p-2 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-sm transition-all"
+                      className="bg-slate-50 p-2 border border-slate-200 rounded-2xl shadow-sm transition-all"
                     >
                       <img
                         src={src}
                         alt={`${block.title || 'Context reference illustration'} (${idx + 1})`}
                         className={`object-contain ${
-                          activeImages.length === 2 ? 'max-h-44' : 'max-h-36'
+                          activeImages.length === 2 ? 'max-h-40' : 'max-h-32'
                         } w-auto mx-auto rounded-xl block`}
                         loading="lazy"
                       />
@@ -419,8 +431,16 @@ export const TextReferenceRenderer: React.FC<Props> = ({
                 </div>
               </div>
             ) : null}
-            <div className="space-y-3 whitespace-pre-line">
-              {block.content}
+            <div className="space-y-4 font-normal text-slate-800 leading-relaxed text-sm sm:text-[15px]">
+              {paragraphs.length > 0 ? (
+                paragraphs.map((paragraph, idx) => (
+                  <p key={idx} className="whitespace-pre-line">
+                    {paragraph}
+                  </p>
+                ))
+              ) : (
+                <p className="whitespace-pre-line">{block.content}</p>
+              )}
             </div>
             {/* Clearfix */}
             <div className="clear-both" />

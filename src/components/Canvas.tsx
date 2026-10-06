@@ -50,6 +50,7 @@ export const Canvas: React.FC = () => {
     mode,
     studentAnswers,
     studentEvaluation,
+    isAiEvaluating,
     setStudentAnswer,
     checkCurrentSlideAnswers,
     resetStudentAnswers,
@@ -109,18 +110,16 @@ export const Canvas: React.FC = () => {
   const hasReference = Boolean(currentSlide.referenceContent);
   const hasInteraction = Boolean(currentSlide.interaction);
 
-  const handleCheck = () => {
-    checkCurrentSlideAnswers();
-    setTimeout(() => {
-      const evaluation = useSessionStore.getState().studentEvaluation;
-      if (evaluation.score === evaluation.maxScore && evaluation.maxScore > 0) {
-        confetti({
-          particleCount: 110,
-          spread: 75,
-          origin: { y: 0.6 }
-        });
-      }
-    }, 100);
+  const handleCheck = async () => {
+    await checkCurrentSlideAnswers();
+    const evaluation = useSessionStore.getState().studentEvaluation;
+    if (evaluation.score === evaluation.maxScore && evaluation.maxScore > 0) {
+      confetti({
+        particleCount: 110,
+        spread: 75,
+        origin: { y: 0.6 }
+      });
+    }
   };
 
   const getReferenceButtonLabel = () => {
@@ -268,10 +267,10 @@ export const Canvas: React.FC = () => {
           <SlideErrorBoundary fallbackTitle="Error al procesar el contenido de la diapositiva">
             {hasInteraction && hasReference && InteractionComponent && ReferenceComponent ? (
               /* DUAL INTEGRATED LAYOUT: Both Reading/Reference and Interactive Activity on the Main Canvas Stage */
-              <div className="w-full grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+              <div className="w-full flex flex-col lg:flex-row gap-8 items-start">
                 {/* Left Column: Reading Passage / Reference Content */}
-                <div className="lg:col-span-5 2xl:col-span-5 bg-slate-50/80 border border-slate-200/90 rounded-2xl p-5 sm:p-6 shadow-2xs space-y-4 lg:sticky lg:top-4 max-h-[calc(100vh-14rem)] overflow-y-auto">
-                  <div className="flex items-center justify-between pb-2.5 border-b border-slate-200">
+                <div className="w-full lg:w-5/12 sm:sticky sm:top-4 self-start flex flex-col bg-slate-50/80 border border-slate-200/90 rounded-2xl p-5 sm:p-6 shadow-2xs space-y-4">
+                  <div className="flex items-center justify-between pb-2.5 border-b border-slate-200 shrink-0">
                     <div className="flex items-center gap-2 text-xs font-bold text-indigo-700 uppercase tracking-wider">
                       <BookOpen className="w-4 h-4 text-indigo-600" />
                       <span>Material de Lectura / Consulta</span>
@@ -289,7 +288,7 @@ export const Canvas: React.FC = () => {
                 </div>
 
                 {/* Right Column: Interactive Activity */}
-                <div className="lg:col-span-7 2xl:col-span-7 space-y-4">
+                <div className="w-full lg:w-7/12 space-y-4">
                   <InteractionComponent
                     block={currentSlide.interaction}
                     studentAnswers={studentAnswers}
@@ -451,6 +450,12 @@ export const Canvas: React.FC = () => {
                       ? '¡Excelente trabajo! 🎉'
                       : 'Revisa las correcciones en pantalla.'}
                   </span>
+                  {studentEvaluation.usedAi && (
+                    <span className="hidden sm:inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-200 shadow-2xs">
+                      <span>🧠</span>
+                      <span>Corrección Semántica IA</span>
+                    </span>
+                  )}
                 </div>
               ) : (
                 <span className="text-xs sm:text-sm text-slate-500 font-medium">
@@ -462,7 +467,8 @@ export const Canvas: React.FC = () => {
             <div className="flex items-center gap-3">
               <button
                 onClick={resetStudentAnswers}
-                className="flex items-center gap-1.5 px-4 py-2.5 rounded-xl text-xs sm:text-sm font-semibold bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200 transition"
+                disabled={isAiEvaluating}
+                className="flex items-center gap-1.5 px-4 py-2.5 rounded-xl text-xs sm:text-sm font-semibold bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200 transition disabled:opacity-50"
                 title="Reiniciar respuestas"
               >
                 <RotateCcw className="w-4 h-4" />
@@ -471,10 +477,24 @@ export const Canvas: React.FC = () => {
 
               <button
                 onClick={handleCheck}
-                className="flex items-center gap-2 px-6 py-2.5 rounded-xl text-xs sm:text-sm font-bold bg-indigo-600 hover:bg-indigo-700 text-white shadow-xs transition transform active:scale-95"
+                disabled={isAiEvaluating}
+                className={`flex items-center gap-2 px-6 py-2.5 rounded-xl text-xs sm:text-sm font-bold shadow-xs transition transform ${
+                  isAiEvaluating
+                    ? 'bg-indigo-500 text-white cursor-wait animate-pulse'
+                    : 'bg-indigo-600 hover:bg-indigo-700 text-white shadow-xs active:scale-95 cursor-pointer'
+                }`}
               >
-                <CheckCircle2 className="w-4 h-4" />
-                <span>Comprobar Respuestas</span>
+                {isAiEvaluating ? (
+                  <>
+                    <span className="text-base animate-bounce">🧠</span>
+                    <span>Evaluando con IA...</span>
+                  </>
+                ) : (
+                  <>
+                    <CheckCircle2 className="w-4 h-4" />
+                    <span>Comprobar Respuestas</span>
+                  </>
+                )}
               </button>
             </div>
           </div>

@@ -1,7 +1,8 @@
 import { validateFillInBlank, type FlexibleValidationResult } from './fillBlankValidator';
+import type { SemanticEvaluationItem } from '../ai/semanticEvaluator';
 import type { InputFieldsBlock } from '../../types/schema';
 
-export type EvaluationItemFeedback = FlexibleValidationResult;
+export type EvaluationItemFeedback = FlexibleValidationResult | SemanticEvaluationItem;
 
 export interface EvaluationResult {
   score: number;

@@ -7,6 +7,7 @@ export interface FlexibleValidationResult {
   isCorrect: boolean;
   status: 'correct' | 'correct_with_typo' | 'incorrect';
   expectedAnswer: string;
+  canonicalAnswer?: string;
   matchedAnswer?: string;
   typoWarning?: boolean;
   feedback: string;
