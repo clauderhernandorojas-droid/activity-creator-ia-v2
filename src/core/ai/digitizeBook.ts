@@ -236,7 +236,7 @@ const STRUCTURED_EXTRACTION_SCHEMA = {
         properties: {
           prompt: {
             type: 'string',
-            description: 'Visible definition, sentence with blank, or question read by the student'
+            description: 'Visible definition, sentence with blank, or informative premise read by the student. MUST contain the actual text/definition, NEVER just a sequential number.'
           },
           expectedAnswer: {
             type: 'string',
@@ -284,6 +284,7 @@ Under NO circumstances should any interactive item have an empty expectedAnswer 
 REGLAS UNIVERSALES DE BANCO DE OPCIONES Y ASIGNACIÓN BIUNÍVOCA:
 - Regla Universal de Banco de Opciones: Cuando la imagen contenga un contenedor o lista de opciones (wordBank), el valor de expectedAnswer de cada ítem interactivo DEBE ser exactamente uno de los elementos presentes en dicho conjunto (ya consistan en una sola palabra o en cadenas multitérmino). NUNCA utilices texto perteneciente a enunciados o definiciones como valor de respuesta esperada.
 - Regla Universal de Muestras Impresas: Si en el documento original un ítem ya presenta de forma visible uno de los elementos del wordBank asignado a su posición de respuesta, clasifícalo obligatoriamente como isExample: true con dicho elemento en expectedAnswer.
+- Regla Universal de Contenido de Ítem: En cada elemento interactivo, \`prompt\` DEBE contener el texto informativo, premisa o definición que el usuario necesita leer para deducir la respuesta. NUNCA asignes como \`prompt\` únicamente el número secuencial del ítem.
 
 UNIVERSAL TAXONOMY & STRICT CONTRACT:
 1. "title": Formal activity or reading title.
@@ -293,7 +294,7 @@ UNIVERSAL TAXONOMY & STRICT CONTRACT:
 4. "interactionType": Must be one of: 'fill_blanks', 'multiple_choice', 'matching', 'buckets'.
    - Matching/vocabulary tables (e.g. 'term | definition') are categorized as 'matching' or 'fill_blanks'.
 5. "items": Array of interactive items ONLY:
-   - "prompt": The visible text, sentence with blank, or clue/definition that the student reads.
+   - "prompt": The visible text, sentence with blank, or clue/definition that the student reads. Sigue la Regla Universal de Contenido de Ítem: DEBE contener el texto informativo, premisa o definición; NUNCA únicamente el número secuencial del ítem.
    - "expectedAnswer": The canonical resolved solution deduced by you as an expert teacher. MUST NEVER BE EMPTY. Must follow the Regla Universal de Banco de Opciones whenever a wordBank is present.
    - "acceptedAnswers": List of valid variations (contractions, spelling, or synonyms). Must include expectedAnswer.
    - "isExample": Booleano. Must follow the Regla Universal de Muestras Impresas: las filas o ítems que ya presentan una respuesta visible de muestra impresa en el material original deben clasificarse obligatoriamente como "isExample": true con dicho elemento en expectedAnswer, NUNCA omitirse ni dejarse en blanco.
@@ -470,7 +471,12 @@ function sanitizeExtractedPayload(payload: ExtractedStructuredPayload): Extracte
   const items = Array.isArray(payload.items) ? payload.items : [];
 
   const sanitizedItems = items.map((it, idx) => {
-    const prompt = String(it.prompt || `Item ${idx + 1}`).trim();
+    const rawPrompt = String(it.prompt || '').trim();
+    const explanation = String(it.explanation || '').trim();
+    const isPureNumber = /^(?:item\s*)?\d+[.)]?$/i.test(rawPrompt) || rawPrompt === '';
+    const prompt = isPureNumber && explanation
+      ? (rawPrompt ? `${rawPrompt} _______ : ${explanation}` : `${idx + 1}. _______ : ${explanation}`)
+      : (rawPrompt || `Item ${idx + 1}`);
     const expectedAnswer = String(it.expectedAnswer || '').trim() || `Respuesta ${idx + 1}`;
     let acceptedAnswers = Array.isArray(it.acceptedAnswers) && it.acceptedAnswers.length > 0
       ? it.acceptedAnswers.map((a) => String(a).trim()).filter(Boolean)

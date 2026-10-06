@@ -122,7 +122,7 @@ export const OcrPanel: React.FC = () => {
       ? activeBlock.parsedData.items.map((it: any, i: number) => {
           if (i !== index) return it;
           return typeof it === 'object' && it !== null
-            ? { ...it, text: newText }
+            ? { ...it, text: newText, prompt: newText }
             : newText;
         })
       : nextItems;

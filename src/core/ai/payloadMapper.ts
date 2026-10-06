@@ -64,9 +64,16 @@ export function mapBlockToInputFields(block: ExtractedBlock): InputFieldsBlock {
 
   // Pure 1:1 transformation of items
   const listItems: InputFieldListItem[] = rawItems.map((item: any, idx: number) => {
-    const prompt = typeof item === 'object' && item !== null
-      ? String(item.prompt || item.text || `Item ${idx + 1}`).trim()
+    const rawPrompt = typeof item === 'object' && item !== null
+      ? String(item.prompt || item.text || '').trim()
       : String(item).trim();
+    const explanationText = typeof item === 'object' && item !== null
+      ? String(item.explanation || item.hint || '').trim()
+      : '';
+    const isPureNumber = /^(?:item\s*)?\d+[.)]?$/i.test(rawPrompt) || rawPrompt === '';
+    const prompt = isPureNumber && explanationText
+      ? (rawPrompt ? `${rawPrompt} _______ : ${explanationText}` : `${idx + 1}. _______ : ${explanationText}`)
+      : (rawPrompt || `Item ${idx + 1}`);
 
     const expectedAnswer = typeof item === 'object' && item !== null
       ? String(item.expectedAnswer || item.answer || '').trim()

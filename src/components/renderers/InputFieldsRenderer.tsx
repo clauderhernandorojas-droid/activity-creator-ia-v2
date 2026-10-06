@@ -18,12 +18,17 @@ interface ParsedMatchingPrompt {
   clue: string;
 }
 
-const parseMatchingPrompt = (rawPrompt: string, fallbackIdx: number, hasWordBank = false): ParsedMatchingPrompt => {
-  const trimmed = rawPrompt.trim();
+const parseMatchingPrompt = (
+  rawPrompt: string,
+  fallbackIdx: number,
+  hasWordBank = false,
+  fallbackClue?: string
+): ParsedMatchingPrompt => {
+  const trimmed = (rawPrompt || '').trim();
 
   // Pattern 1: e.g. "2. _______ : a time", "2) _______ : a time", "2. : a time", "_______ : a time", ": a time"
   const colonMatch = trimmed.match(/^(?:(\d+)[.)]\s*)?(?:_+|\.{3,}|—+)?\s*:\s*(.+)$/);
-  if (colonMatch) {
+  if (colonMatch && colonMatch[2].trim()) {
     return {
       isMatching: true,
       itemNumber: colonMatch[1] || String(fallbackIdx + 1),
@@ -31,9 +36,19 @@ const parseMatchingPrompt = (rawPrompt: string, fallbackIdx: number, hasWordBank
     };
   }
 
-  // Pattern 2: e.g. "2. _______ a time" (missing colon but blank at start)
+  // Pattern 2: e.g. "2. _______ - a time", "2. — a time", "2. -> a time"
+  const dashMatch = trimmed.match(/^(?:(\d+)[.)]\s*)?(?:_+|\.{3,}|—+)?\s*(?:[-—–]|->|=>)\s*(.+)$/);
+  if (dashMatch && dashMatch[2].trim()) {
+    return {
+      isMatching: true,
+      itemNumber: dashMatch[1] || String(fallbackIdx + 1),
+      clue: dashMatch[2].trim(),
+    };
+  }
+
+  // Pattern 3: e.g. "2. _______ a time" (missing colon/dash but blank at start)
   const blankMatch = trimmed.match(/^(?:(\d+)[.)]\s*)?(?:_+|\.{3,}|—+)\s*(.+)$/);
-  if (blankMatch && (hasWordBank || blankMatch[2].length < 60)) {
+  if (blankMatch && blankMatch[2].trim() && (hasWordBank || blankMatch[2].length < 80)) {
     return {
       isMatching: true,
       itemNumber: blankMatch[1] || String(fallbackIdx + 1),
@@ -41,16 +56,36 @@ const parseMatchingPrompt = (rawPrompt: string, fallbackIdx: number, hasWordBank
     };
   }
 
-  // Pattern 3: If hasWordBank and format is "2. a time" or "2) a time" (short definition phrase)
-  if (hasWordBank) {
-    const numShortMatch = trimmed.match(/^(\d+)[.)]\s+([a-zA-Z\s()'-]{2,60})$/);
-    if (numShortMatch && !numShortMatch[2].includes('?')) {
+  // Pattern 4: Number followed by definition/clue phrase: "2. a time", "2) a time"
+  const numClueMatch = trimmed.match(/^(\d+)[.)]\s+(.+)$/);
+  if (numClueMatch && numClueMatch[2].trim()) {
+    const candidateClue = numClueMatch[2].trim();
+    if ((hasWordBank || candidateClue.length < 80) && !candidateClue.includes('?')) {
       return {
         isMatching: true,
-        itemNumber: numShortMatch[1],
-        clue: numShortMatch[2].trim(),
+        itemNumber: numClueMatch[1],
+        clue: candidateClue,
       };
     }
+  }
+
+  // Pattern 5: When hasWordBank is true and rawPrompt is just a definition phrase without number: "a time", "a person"
+  if (hasWordBank && trimmed && !trimmed.includes('?') && trimmed.length < 80 && !trimmed.includes('___')) {
+    return {
+      isMatching: true,
+      itemNumber: String(fallbackIdx + 1),
+      clue: trimmed,
+    };
+  }
+
+  // Pattern 6: If rawPrompt is just a number (e.g. "2" or "2.") but we have a fallback clue from hint/explanation
+  const isPureNumber = /^(?:item\s*)?(\d+)[.)]?$/i.exec(trimmed);
+  if (isPureNumber && fallbackClue && fallbackClue.trim()) {
+    return {
+      isMatching: true,
+      itemNumber: isPureNumber[1] || String(fallbackIdx + 1),
+      clue: fallbackClue.trim(),
+    };
   }
 
   return {
@@ -265,7 +300,7 @@ export const InputFieldsRenderer: React.FC<Props> = ({
             item.explanation?.trim() ||
             item.hint?.trim();
 
-          const parsedPrompt = parseMatchingPrompt(item.prompt, idx, hasWordBank);
+          const parsedPrompt = parseMatchingPrompt(item.prompt, idx, hasWordBank, explanationOrHint);
 
           return (
             <div
@@ -402,7 +437,9 @@ export const InputFieldsRenderer: React.FC<Props> = ({
 
                       <div className="flex items-center gap-2 flex-1 pl-8 sm:pl-0">
                         <span className="text-sm font-semibold text-slate-700">
-                          : {parsedPrompt.clue}
+                          {parsedPrompt.clue.startsWith(':') || parsedPrompt.clue.startsWith('-')
+                            ? parsedPrompt.clue
+                            : `: ${parsedPrompt.clue}`}
                         </span>
 
                         {item.isExample && (
@@ -426,7 +463,18 @@ export const InputFieldsRenderer: React.FC<Props> = ({
                     <>
                       <div className="flex items-center justify-between gap-2">
                         <p className="text-sm font-semibold text-slate-800 leading-relaxed">
-                          {item.prompt}
+                          {(() => {
+                            const p = (item.prompt || '').trim();
+                            const isPureNum = /^(?:item\s*)?\d+[.)]?$/i.test(p);
+                            const fallback = explanationOrHint?.trim();
+                            if (isPureNum && fallback) {
+                              return `${p} ${fallback}`;
+                            }
+                            if (!p && fallback) {
+                              return `${idx + 1}. ${fallback}`;
+                            }
+                            return p || `${idx + 1}.`;
+                          })()}
                         </p>
                         {item.isExample && (
                           <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-slate-200 text-slate-600 border border-slate-300 select-none shrink-0">
