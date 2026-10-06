@@ -47,6 +47,29 @@ export const defaultInitialLesson: Lesson = {
   slides: [defaultInitialSlide],
 };
 
+export function exportLessonToFile(lesson: Lesson): void {
+  const jsonContent = JSON.stringify(lesson, null, 2);
+  const blob = new Blob([jsonContent], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+
+  const safeTitle = (lesson.title || 'Nueva_Leccion')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-zA-Z0-9_-]/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_|_$/g, '') || 'Nueva_Leccion';
+
+  const fileName = `${safeTitle}.elt.json`;
+
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
+
 interface LessonState {
   lesson: Lesson;
   activeSlideId: string;
@@ -109,6 +132,11 @@ interface LessonState {
     blockId: string,
     role: 'reference_text' | 'reference_table' | 'interaction_inputs' | 'interaction_selection' | 'interaction_buckets' | 'interaction_sequence'
   ) => void;
+
+  // Actions - Lesson Metadata & File Portability
+  setLessonTitle: (title: string) => void;
+  loadLesson: (lesson: Lesson) => void;
+  exportLesson: () => void;
 }
 
 function recordHistory(state: LessonState): Partial<LessonState> {
@@ -271,6 +299,44 @@ export const useLessonStore = create<LessonState>()(
           },
         }));
         useSessionStore.getState().setCurrentSlideId('');
+      },
+
+      setLessonTitle: (title: string) => {
+        const cleaned = title.trim();
+        set((state) => ({
+          ...recordHistory(state),
+          lesson: {
+            ...state.lesson,
+            title: cleaned || 'Nueva Lección',
+          },
+        }));
+      },
+
+      loadLesson: (importedLesson: Lesson) => {
+        const slides = Array.isArray(importedLesson.slides) && importedLesson.slides.length > 0
+          ? importedLesson.slides
+          : [defaultInitialSlide];
+
+        const firstSlideId = slides[0].id;
+
+        set((state) => ({
+          ...recordHistory(state),
+          lesson: {
+            id: importedLesson.id || `lesson-${Date.now()}`,
+            title: importedLesson.title || 'Nueva Lección',
+            level: importedLesson.level || 'B1',
+            unit: importedLesson.unit || 'Unidad 1',
+            slides,
+          },
+          activeSlideId: firstSlideId,
+        }));
+
+        useSessionStore.getState().setCurrentSlideId(firstSlideId);
+      },
+
+      exportLesson: () => {
+        const { lesson } = get();
+        exportLessonToFile(lesson);
       },
 
       createSlideFromBlock: (blockId, role) => {
