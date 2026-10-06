@@ -1,6 +1,8 @@
 import React, { useState, useRef, useEffect } from 'react';
 import type { ReferenceTextBlock } from '../../types/schema';
-import { Camera, Image as ImageIcon, Upload, Link as LinkIcon, X } from 'lucide-react';
+import { Camera, Image as ImageIcon, Upload, Link as LinkIcon, X, Plus } from 'lucide-react';
+
+const MAX_IMAGES = 4;
 
 interface Props {
   block: ReferenceTextBlock;
@@ -19,17 +21,67 @@ export const TextReferenceRenderer: React.FC<Props> = ({
   const [isDraggingOver, setIsDraggingOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const processImageFile = (file: File) => {
-    if (!file.type.startsWith('image/')) return;
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      const result = e.target?.result as string;
-      if (result) {
-        onChange?.({ ...block, imageUrl: result });
-        setIsPickerOpen(false);
-      }
+  // Unified normalization
+  const activeImages = block.images && block.images.length > 0
+    ? block.images
+    : (block.imageUrl ? [block.imageUrl] : []);
+
+  const addImages = (newImagesList: string[]) => {
+    if (newImagesList.length === 0) return;
+    const combined = [...activeImages, ...newImagesList].slice(0, MAX_IMAGES);
+    onChange?.({
+      ...block,
+      images: combined,
+      imageUrl: combined[0] ?? undefined,
+    });
+  };
+
+  const handleRemoveImage = (indexToRemove: number) => {
+    const nextImages = activeImages.filter((_, idx) => idx !== indexToRemove);
+    const updated: ReferenceTextBlock = {
+      ...block,
+      images: nextImages.length > 0 ? nextImages : undefined,
+      imageUrl: nextImages.length > 0 ? nextImages[0] : undefined,
     };
-    reader.readAsDataURL(file);
+    if (nextImages.length === 0) {
+      delete updated.imageUrl;
+      delete updated.images;
+    }
+    onChange?.(updated);
+  };
+
+  const handleClearAllImages = () => {
+    const updated: ReferenceTextBlock = { ...block };
+    delete updated.imageUrl;
+    delete updated.images;
+    onChange?.(updated);
+  };
+
+  const processImageFiles = (files: FileList | File[]) => {
+    const validFiles = Array.from(files).filter((f) => f.type.startsWith('image/'));
+    if (validFiles.length === 0) return;
+
+    const remainingSlots = MAX_IMAGES - activeImages.length;
+    if (remainingSlots <= 0) return;
+
+    const filesToRead = validFiles.slice(0, remainingSlots);
+    const promises = filesToRead.map((file) => {
+      return new Promise<string>((resolve) => {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          const res = e.target?.result as string;
+          if (res) resolve(res);
+        };
+        reader.readAsDataURL(file);
+      });
+    });
+
+    Promise.all(promises).then((results) => {
+      const valid = results.filter(Boolean);
+      if (valid.length > 0) {
+        addImages(valid);
+      }
+    });
   };
 
   // Specific paste handler for the image upload modal to stop bubbling immediately
@@ -42,17 +94,26 @@ export const TextReferenceRenderer: React.FC<Props> = ({
     const items = e.clipboardData?.items;
     if (!items) return;
 
+    const files: File[] = [];
     for (let i = 0; i < items.length; i++) {
       if (items[i].type.startsWith('image/')) {
         const file = items[i].getAsFile();
         if (file) {
-          e.preventDefault();
-          processImageFile(file);
-          break;
+          files.push(file);
         }
       }
     }
+
+    if (files.length > 0) {
+      e.preventDefault();
+      processImageFiles(files);
+    }
   };
+
+  const processImageFilesRef = useRef(processImageFiles);
+  useEffect(() => {
+    processImageFilesRef.current = processImageFiles;
+  });
 
   // Capture-phase native listener when modal is open to isolate event before window/OCR sees it
   useEffect(() => {
@@ -62,25 +123,21 @@ export const TextReferenceRenderer: React.FC<Props> = ({
       const items = e.clipboardData?.items;
       if (!items) return;
 
+      const files: File[] = [];
       for (let i = 0; i < items.length; i++) {
         if (items[i].type.startsWith('image/')) {
           const file = items[i].getAsFile();
           if (file) {
-            e.stopPropagation();
-            e.stopImmediatePropagation();
-            e.preventDefault();
-            const reader = new FileReader();
-            reader.onload = (ev) => {
-              const result = ev.target?.result as string;
-              if (result) {
-                onChange?.({ ...block, imageUrl: result });
-                setIsPickerOpen(false);
-              }
-            };
-            reader.readAsDataURL(file);
-            break;
+            files.push(file);
           }
         }
+      }
+
+      if (files.length > 0) {
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+        e.preventDefault();
+        processImageFilesRef.current(files);
       }
     };
 
@@ -88,7 +145,7 @@ export const TextReferenceRenderer: React.FC<Props> = ({
     return () => {
       window.removeEventListener('paste', handleNativeCapturePaste, true);
     };
-  }, [isPickerOpen, block, onChange]);
+  }, [isPickerOpen]);
 
   const handleContainerPaste = (e: React.ClipboardEvent) => {
     if (!isEditMode) return;
@@ -101,23 +158,26 @@ export const TextReferenceRenderer: React.FC<Props> = ({
     const items = e.clipboardData?.items;
     if (!items) return;
 
+    const files: File[] = [];
     for (let i = 0; i < items.length; i++) {
       if (items[i].type.startsWith('image/')) {
         const file = items[i].getAsFile();
         if (file) {
-          e.stopPropagation();
-          e.preventDefault();
-          processImageFile(file);
-          break;
+          files.push(file);
         }
       }
+    }
+
+    if (files.length > 0) {
+      e.stopPropagation();
+      e.preventDefault();
+      processImageFiles(files);
     }
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      processImageFile(file);
+    if (e.target.files && e.target.files.length > 0) {
+      processImageFiles(e.target.files);
     }
     e.target.value = '';
   };
@@ -130,25 +190,21 @@ export const TextReferenceRenderer: React.FC<Props> = ({
       setUrlError('Introduce una URL válida que empiece por http:// o https://');
       return;
     }
+    if (activeImages.length >= MAX_IMAGES) {
+      setUrlError(`Límite de ${MAX_IMAGES} imágenes alcanzado`);
+      return;
+    }
     setUrlError('');
-    onChange?.({ ...block, imageUrl: trimmed });
+    addImages([trimmed]);
     setUrlInput('');
-    setIsPickerOpen(false);
-  };
-
-  const handleRemoveImage = () => {
-    const updated = { ...block };
-    delete updated.imageUrl;
-    onChange?.(updated);
   };
 
   const handleDrop = (e: React.DragEvent) => {
     if (!isEditMode) return;
     e.preventDefault();
     setIsDraggingOver(false);
-    const file = e.dataTransfer.files?.[0];
-    if (file && file.type.startsWith('image/')) {
-      processImageFile(file);
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      processImageFiles(e.dataTransfer.files);
     }
   };
 
@@ -166,11 +222,12 @@ export const TextReferenceRenderer: React.FC<Props> = ({
         isDraggingOver ? 'border-indigo-500 bg-indigo-50/20 ring-2 ring-indigo-200' : 'border-slate-200/90'
       }`}
     >
-      {/* Hidden File Input */}
+      {/* Hidden File Input supporting multiple files */}
       <input
         type="file"
         ref={fileInputRef}
         accept="image/*"
+        multiple
         onChange={handleFileChange}
         className="hidden"
       />
@@ -182,22 +239,26 @@ export const TextReferenceRenderer: React.FC<Props> = ({
             Lectura / Contexto
           </span>
           <div className="flex items-center gap-1.5">
-            {block.imageUrl ? (
+            {activeImages.length > 0 ? (
               <>
                 <button
                   type="button"
                   onClick={() => setIsPickerOpen(true)}
-                  className="flex items-center gap-1 px-2 py-1 text-xs font-medium text-slate-600 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg border border-slate-200/80 transition cursor-pointer"
-                  title="Cambiar imagen de referencia"
+                  className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-slate-700 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg border border-slate-200/80 transition cursor-pointer"
+                  title="Gestionar o añadir más imágenes de referencia"
                 >
                   <Camera className="w-3.5 h-3.5 text-indigo-500" />
-                  <span>Cambiar Imagen</span>
+                  <span>
+                    {activeImages.length < MAX_IMAGES
+                      ? `Añadir Imagen (${activeImages.length}/${MAX_IMAGES})`
+                      : `Imágenes (${activeImages.length}/${MAX_IMAGES})`}
+                  </span>
                 </button>
                 <button
                   type="button"
-                  onClick={handleRemoveImage}
+                  onClick={handleClearAllImages}
                   className="flex items-center gap-1 px-2 py-1 text-xs font-medium text-rose-600 hover:text-rose-700 hover:bg-rose-50 rounded-lg border border-rose-200 transition cursor-pointer"
-                  title="Eliminar imagen"
+                  title="Eliminar todas las imágenes"
                 >
                   <X className="w-3.5 h-3.5" />
                   <span>Quitar</span>
@@ -238,15 +299,15 @@ export const TextReferenceRenderer: React.FC<Props> = ({
       {/* Content Area */}
       <div className="flex-1 overflow-y-auto pr-1">
         {isEditMode ? (
-          /* Edit Mode: Clean structured flow with preview card and textarea */
+          /* Edit Mode: Clean structured flow with preview card(s) and textarea */
           <div className="flex flex-col gap-3 h-full">
-            {block.imageUrl && (
+            {activeImages.length === 1 && (
               <div className="w-fit max-w-full mx-auto sm:mx-0">
                 <div className="bg-slate-50 dark:bg-slate-900/50 p-2 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-md shadow-slate-200/50 dark:shadow-none relative group transition-all">
                   <img
-                    src={block.imageUrl}
+                    src={activeImages[0]}
                     alt={block.title || 'Context reference illustration'}
-                    className="object-contain max-h-60 w-auto mx-auto rounded-xl block"
+                    className="object-contain max-h-56 w-auto mx-auto rounded-xl block"
                     loading="lazy"
                   />
                   <div className="absolute top-3 right-3 flex items-center gap-1.5 opacity-90 group-hover:opacity-100 transition z-10">
@@ -254,14 +315,14 @@ export const TextReferenceRenderer: React.FC<Props> = ({
                       type="button"
                       onClick={() => setIsPickerOpen(true)}
                       className="px-2.5 py-1 bg-white/95 hover:bg-white text-slate-700 text-xs font-semibold rounded-lg shadow-sm border border-slate-200 backdrop-blur-xs flex items-center gap-1 cursor-pointer transition"
-                      title="Cambiar imagen"
+                      title="Gestionar imágenes"
                     >
                       <Camera className="w-3.5 h-3.5 text-indigo-600" />
-                      <span>Cambiar</span>
+                      <span>Gestionar</span>
                     </button>
                     <button
                       type="button"
-                      onClick={handleRemoveImage}
+                      onClick={() => handleRemoveImage(0)}
                       className="p-1 bg-white/95 hover:bg-rose-50 text-slate-500 hover:text-rose-600 rounded-lg shadow-sm border border-slate-200 backdrop-blur-xs cursor-pointer transition"
                       title="Quitar imagen"
                     >
@@ -271,6 +332,50 @@ export const TextReferenceRenderer: React.FC<Props> = ({
                 </div>
               </div>
             )}
+
+            {activeImages.length > 1 && (
+              <div className="w-full">
+                <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2.5">
+                  {activeImages.map((src, idx) => (
+                    <div
+                      key={idx}
+                      className="bg-slate-50 dark:bg-slate-900/50 p-2 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-sm relative group transition-all flex flex-col items-center justify-center min-h-[120px]"
+                    >
+                      <img
+                        src={src}
+                        alt={`Imagen ${idx + 1}`}
+                        className="object-contain max-h-36 w-auto mx-auto rounded-xl block"
+                        loading="lazy"
+                      />
+                      <span className="absolute bottom-2 left-2 px-1.5 py-0.5 bg-slate-900/60 text-white text-[10px] font-semibold rounded-md backdrop-blur-xs">
+                        #{idx + 1}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveImage(idx)}
+                        className="absolute top-2 right-2 p-1 bg-white/95 hover:bg-rose-50 text-slate-500 hover:text-rose-600 rounded-lg shadow-sm border border-slate-200 opacity-90 group-hover:opacity-100 backdrop-blur-xs cursor-pointer transition"
+                        title="Quitar esta imagen"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  ))}
+                  {activeImages.length < MAX_IMAGES && (
+                    <button
+                      type="button"
+                      onClick={() => setIsPickerOpen(true)}
+                      className="border-2 border-dashed border-slate-200 hover:border-indigo-400 hover:bg-indigo-50/30 rounded-2xl p-4 flex flex-col items-center justify-center text-slate-400 hover:text-indigo-600 transition cursor-pointer min-h-[120px]"
+                      title="Añadir otra imagen"
+                    >
+                      <Plus className="w-5 h-5 mb-1" />
+                      <span className="text-xs font-medium">Añadir otra</span>
+                      <span className="text-[10px] text-slate-400">({activeImages.length}/{MAX_IMAGES})</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+
             <textarea
               value={block.content}
               onChange={(e) => onChange?.({ ...block, content: e.target.value })}
@@ -280,20 +385,40 @@ export const TextReferenceRenderer: React.FC<Props> = ({
             />
           </div>
         ) : (
-          /* Student / Preview Mode: Editorial magazine/textbook layout with floating picture frame */
+          /* Student / Preview Mode: Editorial magazine/textbook layout with floating picture frame(s) */
           <div className="text-sm leading-relaxed text-slate-700">
-            {block.imageUrl && (
+            {activeImages.length === 1 ? (
               <div className="sm:float-right sm:ml-4 sm:mb-3 mb-4 w-full sm:w-auto max-w-full sm:max-w-[48%] flex-shrink-0">
                 <div className="bg-slate-50 dark:bg-slate-900/50 p-2 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-md shadow-slate-200/50 dark:shadow-none relative group transition-all">
                   <img
-                    src={block.imageUrl}
+                    src={activeImages[0]}
                     alt={block.title || 'Context reference illustration'}
                     className="object-contain max-h-60 w-auto mx-auto rounded-xl block"
                     loading="lazy"
                   />
                 </div>
               </div>
-            )}
+            ) : activeImages.length > 1 ? (
+              <div className="sm:float-right sm:ml-4 sm:mb-3 mb-4 w-full sm:w-auto max-w-full sm:max-w-[44%] flex-shrink-0">
+                <div className="flex flex-col gap-3">
+                  {activeImages.map((src, idx) => (
+                    <div
+                      key={idx}
+                      className="bg-slate-50 dark:bg-slate-900/50 p-2 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-sm transition-all"
+                    >
+                      <img
+                        src={src}
+                        alt={`${block.title || 'Context reference illustration'} (${idx + 1})`}
+                        className={`object-contain ${
+                          activeImages.length === 2 ? 'max-h-44' : 'max-h-36'
+                        } w-auto mx-auto rounded-xl block`}
+                        loading="lazy"
+                      />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
             <div className="space-y-3 whitespace-pre-line">
               {block.content}
             </div>
@@ -313,7 +438,7 @@ export const TextReferenceRenderer: React.FC<Props> = ({
           <div
             onClick={(e) => e.stopPropagation()}
             onPaste={handleModalPaste}
-            className="w-full max-w-md bg-white rounded-2xl shadow-xl border border-slate-200 p-5 space-y-4 animate-in zoom-in-95 duration-150"
+            className="w-full max-w-lg bg-white rounded-2xl shadow-xl border border-slate-200 p-5 space-y-4 animate-in zoom-in-95 duration-150"
           >
             {/* Modal Header */}
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
@@ -323,10 +448,12 @@ export const TextReferenceRenderer: React.FC<Props> = ({
                 </div>
                 <div>
                   <h4 className="text-sm font-bold text-slate-900">
-                    Imagen de Apoyo / Portada
+                    Imágenes de Apoyo / Portada
                   </h4>
                   <p className="text-[11px] text-slate-500">
-                    Ilustra la lectura o material de contexto
+                    {activeImages.length > 0
+                      ? `${activeImages.length} de ${MAX_IMAGES} cargadas • Sube, pega con Ctrl+V o añade URL`
+                      : `Hasta ${MAX_IMAGES} imágenes • Sube, pega con Ctrl+V o añade URL`}
                   </p>
                 </div>
               </div>
@@ -342,61 +469,120 @@ export const TextReferenceRenderer: React.FC<Props> = ({
               </button>
             </div>
 
-            {/* Option 1: File Upload / Clipboard drop */}
-            <div
-              onClick={() => fileInputRef.current?.click()}
-              onPaste={handleModalPaste}
-              className="border-2 border-dashed border-slate-200 hover:border-indigo-400 hover:bg-indigo-50/30 rounded-xl p-4 text-center cursor-pointer transition group"
-            >
-              <Upload className="w-6 h-6 text-slate-400 group-hover:text-indigo-600 mx-auto mb-2 transition" />
-              <p className="text-xs font-semibold text-slate-700 group-hover:text-indigo-700">
-                Subir archivo desde el equipo
-              </p>
-              <p className="text-[11px] text-slate-400 mt-0.5">
-                O pega con <kbd className="px-1 py-0.5 bg-slate-100 rounded text-slate-600 font-mono text-[10px]">Ctrl + V</kbd> directamente
-              </p>
-            </div>
-
-            {/* Option 2: Direct URL */}
-            <form onSubmit={handleApplyUrl} className="space-y-2">
-              <label className="text-xs font-semibold text-slate-700 flex items-center gap-1.5">
-                <LinkIcon className="w-3.5 h-3.5 text-slate-400" />
-                <span>O introduce una URL de imagen:</span>
-              </label>
-              <div className="flex items-center gap-2">
-                <input
-                  type="url"
-                  value={urlInput}
-                  onChange={(e) => {
-                    setUrlInput(e.target.value);
-                    if (urlError) setUrlError('');
-                  }}
-                  placeholder="https://ejemplo.com/imagen.jpg"
-                  className="flex-1 text-xs bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 outline-none focus:border-indigo-500 focus:bg-white transition"
-                />
-                <button
-                  type="submit"
-                  className="px-3 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-lg shadow-xs transition cursor-pointer whitespace-nowrap"
-                >
-                  Aplicar
-                </button>
+            {/* Gallery of loaded images */}
+            {activeImages.length > 0 && (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold text-slate-700">
+                    Imágenes actuales ({activeImages.length}/{MAX_IMAGES}):
+                  </span>
+                  {activeImages.length > 1 && (
+                    <button
+                      type="button"
+                      onClick={handleClearAllImages}
+                      className="text-[11px] text-rose-600 hover:text-rose-700 hover:underline cursor-pointer"
+                    >
+                      Quitar todas
+                    </button>
+                  )}
+                </div>
+                <div className="grid grid-cols-2 gap-2.5 max-h-56 overflow-y-auto p-1.5 border border-slate-100 rounded-xl bg-slate-50/60">
+                  {activeImages.map((src, idx) => (
+                    <div
+                      key={idx}
+                      className="relative group rounded-xl overflow-hidden border border-slate-200 bg-white shadow-xs aspect-video flex items-center justify-center"
+                    >
+                      <img
+                        src={src}
+                        alt={`Imagen ${idx + 1}`}
+                        className="w-full h-full object-cover"
+                      />
+                      <span className="absolute bottom-1.5 left-1.5 px-1.5 py-0.5 bg-slate-900/75 text-white text-[10px] font-medium rounded-md backdrop-blur-xs">
+                        #{idx + 1} {idx === 0 ? '(Principal)' : ''}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveImage(idx)}
+                        className="absolute top-1.5 right-1.5 p-1 bg-white/95 hover:bg-rose-50 text-slate-600 hover:text-rose-600 rounded-lg shadow-sm border border-slate-200 transition cursor-pointer"
+                        title="Eliminar esta imagen"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
               </div>
-              {urlError && (
-                <p className="text-[11px] text-rose-600 font-medium">{urlError}</p>
-              )}
-            </form>
+            )}
 
-            {/* Cancel Button */}
-            <div className="flex justify-end pt-2">
+            {/* Add New Image Controls (if under max) */}
+            {activeImages.length < MAX_IMAGES ? (
+              <>
+                {/* Option 1: File Upload / Clipboard drop */}
+                <div
+                  onClick={() => fileInputRef.current?.click()}
+                  onPaste={handleModalPaste}
+                  className="border-2 border-dashed border-slate-200 hover:border-indigo-400 hover:bg-indigo-50/30 rounded-xl p-3.5 text-center cursor-pointer transition group"
+                >
+                  <Upload className="w-5 h-5 text-slate-400 group-hover:text-indigo-600 mx-auto mb-1.5 transition" />
+                  <p className="text-xs font-semibold text-slate-700 group-hover:text-indigo-700">
+                    Subir archivo(s) desde el equipo
+                  </p>
+                  <p className="text-[11px] text-slate-400 mt-0.5">
+                    O pega con <kbd className="px-1 py-0.5 bg-slate-100 rounded text-slate-600 font-mono text-[10px]">Ctrl + V</kbd> directamente
+                  </p>
+                </div>
+
+                {/* Option 2: Direct URL */}
+                <form onSubmit={handleApplyUrl} className="space-y-1.5">
+                  <label className="text-xs font-semibold text-slate-700 flex items-center gap-1.5">
+                    <LinkIcon className="w-3.5 h-3.5 text-slate-400" />
+                    <span>O introduce una URL de imagen:</span>
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="url"
+                      value={urlInput}
+                      onChange={(e) => {
+                        setUrlInput(e.target.value);
+                        if (urlError) setUrlError('');
+                      }}
+                      placeholder="https://ejemplo.com/imagen.jpg"
+                      className="flex-1 text-xs bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 outline-none focus:border-indigo-500 focus:bg-white transition"
+                    />
+                    <button
+                      type="submit"
+                      className="px-3 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-lg shadow-xs transition cursor-pointer whitespace-nowrap"
+                    >
+                      Añadir
+                    </button>
+                  </div>
+                  {urlError && (
+                    <p className="text-[11px] text-rose-600 font-medium">{urlError}</p>
+                  )}
+                </form>
+              </>
+            ) : (
+              <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-center">
+                <p className="text-xs font-medium text-amber-800">
+                  Límite de {MAX_IMAGES} imágenes alcanzado para esta lectura.
+                </p>
+                <p className="text-[11px] text-amber-600 mt-0.5">
+                  Elimina una imagen de la galería superior para poder añadir otra.
+                </p>
+              </div>
+            )}
+
+            {/* Done / Close Button */}
+            <div className="flex justify-end pt-1">
               <button
                 type="button"
                 onClick={() => {
                   setIsPickerOpen(false);
                   setUrlError('');
                 }}
-                className="px-3 py-1.5 text-xs font-medium text-slate-600 hover:text-slate-800 hover:bg-slate-100 rounded-lg transition cursor-pointer"
+                className="px-3.5 py-1.5 text-xs font-medium text-white bg-slate-800 hover:bg-slate-900 rounded-lg transition cursor-pointer shadow-xs"
               >
-                Cerrar
+                Listo
               </button>
             </div>
           </div>

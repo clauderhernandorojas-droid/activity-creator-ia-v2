@@ -11,6 +11,7 @@ export const ReferenceTextBlockSchema = z.object({
   content: z.string(),
   category: z.enum(['reading', 'grammar_note', 'instructions', 'dialogue']).default('grammar_note'),
   imageUrl: z.string().optional(),
+  images: z.array(z.string()).optional(),
 });
 
 export const ReferenceTableBlockSchema = z.object({

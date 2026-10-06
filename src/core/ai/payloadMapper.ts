@@ -551,13 +551,17 @@ export function mapBlockToReferenceText(block: ExtractedBlock): ReferenceTextBlo
     textContent = block.rawText || '';
   }
 
+  const activeImages: string[] = Array.isArray(parsed.images) && parsed.images.length > 0
+    ? parsed.images
+    : (parsed.imageUrl ? [parsed.imageUrl] : []);
+
   return {
     type: 'text',
     id: generateId('ref-txt'),
     title: parsed.title || 'Lectura de Referencia',
     content: textContent,
     category: parsed.category || 'reading',
-    ...(parsed.imageUrl ? { imageUrl: parsed.imageUrl } : {})
+    ...(activeImages.length > 0 ? { imageUrl: activeImages[0], images: activeImages } : {})
   };
 }
 
@@ -682,7 +686,12 @@ export function slideToExtractedBlock(slide: Slide): ExtractedBlock {
       headers: tableHeaders.length > 0 ? tableHeaders : undefined,
       rows: tableRows.length > 0 ? tableRows : undefined,
       content: ref && ref.type === 'text' ? ref.content : items.join('\n'),
-      imageUrl: (ref && ref.type === 'text' && ref.imageUrl) ? ref.imageUrl : undefined
+      imageUrl: (ref && ref.type === 'text')
+        ? (ref.imageUrl || (ref.images && ref.images.length > 0 ? ref.images[0] : undefined))
+        : undefined,
+      images: (ref && ref.type === 'text')
+        ? (ref.images && ref.images.length > 0 ? ref.images : (ref.imageUrl ? [ref.imageUrl] : undefined))
+        : undefined
     }
   };
 }
