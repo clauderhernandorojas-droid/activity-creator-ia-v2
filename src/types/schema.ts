@@ -244,6 +244,28 @@ export type Lesson = z.infer<typeof LessonSchema>;
 // E. FLUJO OCR Y EXTRACCIÓN LIMPIA (PASO 1 -> PASO 2)
 // ==========================================
 
+export const ExtractedItemSchema = z.object({
+  prompt: z.string(),
+  expectedAnswer: z.string(),
+  acceptedAnswers: z.array(z.string()).default([]),
+  isExample: z.boolean().default(false),
+  explanation: z.string().optional().default(''),
+  options: z.array(z.string()).optional(),
+  prefix: z.string().optional(),
+});
+
+export const ExtractedStructuredPayloadSchema = z.object({
+  title: z.string(),
+  referenceContent: z.string().nullable().optional(),
+  wordBank: z.array(z.string()).default([]),
+  interactionType: z.enum(['fill_blanks', 'multiple_choice', 'matching', 'buckets']).default('fill_blanks'),
+  buckets: z.array(z.string()).optional(),
+  items: z.array(ExtractedItemSchema).default([]),
+});
+
+export type ExtractedItem = z.infer<typeof ExtractedItemSchema>;
+export type ExtractedStructuredPayload = z.infer<typeof ExtractedStructuredPayloadSchema>;
+
 export const ExtractedBlockSchema = z.object({
   id: z.string(),
   rawText: z.string(),
@@ -254,3 +276,4 @@ export const ExtractedBlockSchema = z.object({
 });
 
 export type ExtractedBlock = z.infer<typeof ExtractedBlockSchema>;
+

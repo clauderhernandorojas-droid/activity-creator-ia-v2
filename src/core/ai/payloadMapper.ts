@@ -12,7 +12,8 @@ import type {
   BucketToken,
   TargetSlot,
   SourceItem,
-  Slide
+  Slide,
+  InputFieldListItem
 } from '../../types/schema';
 import { generateGrammarVariants } from '../evaluators/fillBlankValidator';
 
@@ -49,275 +50,134 @@ export function slugify(text: string): string {
 }
 
 /**
- * Extracts categories from instruction or text when not explicitly parsed.
- * Handles patterns like "about family (F), work (W), free time (FT), or study (S)"
- * or "FOR, IN, TO, WITH".
+ * Pure 1:1 Universal Mapper for Input Fields (Fill in Blanks / Matching Tables)
  */
-export function extractCategoriesFromText(text: string): string[] {
-  if (!text) return [];
+export function mapBlockToInputFields(block: ExtractedBlock): InputFieldsBlock {
+  const parsed = block.parsedData || {};
 
-  // 1. Look for phrases with code parentheses: "family (F), work (W), free time (FT)..."
-  const parenMatches = Array.from(text.matchAll(/([A-Za-z\s]+)\(([A-Za-z0-9]+)\)/g));
-  if (parenMatches.length >= 2) {
-    const categories = parenMatches
-      .map((m) => `${m[1].trim()} (${m[2].trim()})`)
-      .filter((c) => c.length > 2 && c.length < 35);
-    if (categories.length >= 2) return categories;
-  }
+  // Pure 1:1 extraction of Word Bank
+  const wordBank: string[] | undefined = Array.isArray(parsed.wordBank) && parsed.wordBank.length > 0
+    ? parsed.wordBank.map((w: any) => String(w).trim()).filter(Boolean)
+    : undefined;
 
-  // 2. Look for phrases introduced by "about", "into", "under", "categories:", etc.
-  const introMatch = text.match(/(?:about|under|into|with|for|categories:?)\s+([^.?!]+)/i);
-  if (introMatch) {
-    const listPart = introMatch[1];
-    const parts = listPart
-      .split(/,|\bor\b|\band\b/i)
-      .map((s) => s.trim().replace(/[.?!]$/, ''))
-      .filter((s) => s.length > 1 && s.length < 35);
-    if (parts.length >= 2 && parts.length <= 8) {
-      return parts;
+  const rawItems: any[] = Array.isArray(parsed.items) ? parsed.items : [];
+
+  // Pure 1:1 transformation of items
+  const listItems: InputFieldListItem[] = rawItems.map((item: any, idx: number) => {
+    const prompt = typeof item === 'object' && item !== null
+      ? String(item.prompt || item.text || `Item ${idx + 1}`).trim()
+      : String(item).trim();
+
+    const expectedAnswer = typeof item === 'object' && item !== null
+      ? String(item.expectedAnswer || item.answer || '').trim()
+      : '';
+
+    let acceptedAnswers: string[] = [];
+    if (typeof item === 'object' && item !== null && Array.isArray(item.acceptedAnswers) && item.acceptedAnswers.length > 0) {
+      acceptedAnswers = item.acceptedAnswers.map((a: any) => String(a).trim()).filter(Boolean);
+    } else if (expectedAnswer) {
+      acceptedAnswers = [expectedAnswer];
     }
-  }
 
-  // 3. Look for uppercase comma-separated tokens like "FOR, IN, TO, WITH"
-  const upperMatch = text.match(/\b([A-Z]{2,10}(?:,\s*[A-Z]{2,10})*(?:\s*(?:or|and)\s*[A-Z]{2,10}))\b/);
-  if (upperMatch) {
-    const parts = upperMatch[1]
-      .split(/,|\bor\b|\band\b/i)
-      .map((s) => s.trim())
-      .filter(Boolean);
-    if (parts.length >= 2) return parts;
-  }
+    if (expectedAnswer && !acceptedAnswers.includes(expectedAnswer)) {
+      acceptedAnswers.unshift(expectedAnswer);
+    }
 
-  return [];
+    // Expand standard grammar variants (contractions, spelling)
+    const variantSet = new Set<string>(acceptedAnswers);
+    acceptedAnswers.forEach((a) => {
+      generateGrammarVariants(a).forEach((v) => variantSet.add(v));
+    });
+
+    const isExample = typeof item === 'object' && item !== null
+      ? Boolean(item.isExample)
+      : false;
+
+    const explanation = typeof item === 'object' && item !== null
+      ? (item.explanation || item.hint || undefined)
+      : undefined;
+
+    return {
+      id: generateId('item'),
+      prompt,
+      expectedAnswer: expectedAnswer || (acceptedAnswers[0] ?? ''),
+      acceptedAnswers: Array.from(variantSet),
+      isExample,
+      hint: explanation,
+      explanation,
+      prefix: typeof item === 'object' && item !== null ? item.prefix : undefined,
+    };
+  });
+
+  return {
+    type: 'input_fields',
+    id: generateId('inter-inp'),
+    instruction: parsed.instruction || parsed.title || 'Escribe la respuesta correcta en cada espacio:',
+    layoutMode: 'list',
+    wordBank,
+    listItems,
+    tableHeaders: [],
+    tableRows: [],
+    paragraphTemplate: '',
+    paragraphInputs: {}
+  };
 }
 
 /**
- * Universal Zero-Hardcoding Mapper for Buckets Matching
- */
-/**
- * Universal Zero-Hardcoding Mapper for Buckets & Universal Matching
+ * Pure 1:1 Universal Mapper for Buckets / Universal Matching
  */
 export function mapBlockToBuckets(block: ExtractedBlock): BucketsMatchingBlock {
   const parsed = block.parsedData || {};
 
-  // 1. EXTRACT TARGET SLOTS / BUCKETS DYNAMICALLY (1:1 STRICT TRANSFORMER)
+  // Extract target slots from buckets or wordBank
   let targetSlots: TargetSlot[] = [];
 
-  // A. If already structured targetSlots:
-  if (Array.isArray(parsed.targetSlots) && parsed.targetSlots.length > 0) {
-    targetSlots = parsed.targetSlots
-      .map((ts: any, idx: number) => {
-        const label = typeof ts === 'string' ? ts.trim() : String(ts.label || ts.name || ts.title || '').trim();
-        return {
-          id: typeof ts === 'object' && ts.id ? String(ts.id) : `slot-${slugify(label)}-${idx}`,
-          label,
-          description: typeof ts === 'object' && ts.description ? String(ts.description) : undefined,
-          color: typeof ts === 'object' && ts.color ? ts.color : BUCKET_COLORS[idx % BUCKET_COLORS.length]
-        };
-      })
-      .filter((ts: TargetSlot) => ts.label.length > 0);
-  }
+  const rawBuckets = Array.isArray(parsed.buckets) && parsed.buckets.length > 0
+    ? parsed.buckets
+    : (Array.isArray(parsed.wordBank) && parsed.wordBank.length > 0 ? parsed.wordBank : []);
 
-  // B. Explicit buckets / categories:
-  if (targetSlots.length === 0) {
-    let rawCategories: string[] = [];
-    if (Array.isArray(parsed.buckets) && parsed.buckets.length > 0) {
-      rawCategories = parsed.buckets
-        .map((b: any) => (typeof b === 'string' ? b.trim() : String(b.label || b.name || '').trim()))
-        .filter(Boolean);
-    } else if (Array.isArray(parsed.categories) && parsed.categories.length > 0) {
-      rawCategories = parsed.categories.map((c: any) => String(c).trim()).filter(Boolean);
-    } else if (Array.isArray(parsed.suggestedBuckets) && parsed.suggestedBuckets.length > 0) {
-      rawCategories = parsed.suggestedBuckets.map((c: any) => String(c).trim()).filter(Boolean);
-    }
-
-    if (rawCategories.length > 0) {
-      targetSlots = rawCategories.map((cat, idx) => ({
-        id: `slot-${slugify(cat)}-${idx}`,
-        label: cat,
-        description: cat,
-        color: BUCKET_COLORS[idx % BUCKET_COLORS.length]
-      }));
-    }
-  }
-
-  // C. If exercise associates elements with paragraphs of a linked reading text:
-  // Dynamically map slots to match the paragraph identifiers (1, 2, 3, 4...)
-  if (targetSlots.length === 0 && Array.isArray(parsed.paragraphs) && parsed.paragraphs.length > 0) {
-    targetSlots = parsed.paragraphs.map((p: any, idx: number) => {
-      const pId = typeof p === 'object' && p.id ? String(p.id) : String(idx + 1);
-      const label = typeof p === 'string'
-        ? `Párrafo ${idx + 1}`
-        : (p.label || `Párrafo ${pId}`);
+  if (rawBuckets.length > 0) {
+    targetSlots = rawBuckets.map((cat: any, idx: number) => {
+      const label = typeof cat === 'string' ? cat.trim() : String(cat.label || cat.name || '').trim();
       return {
-        id: `slot-p-${pId}`,
+        id: `slot-${slugify(label)}-${idx}`,
         label,
-        description: typeof p === 'object' && p.text ? p.text.substring(0, 50) + '...' : undefined,
+        description: label,
         color: BUCKET_COLORS[idx % BUCKET_COLORS.length]
       };
     });
+  } else if (Array.isArray(parsed.targetSlots) && parsed.targetSlots.length > 0) {
+    targetSlots = parsed.targetSlots.map((ts: any, idx: number) => ({
+      id: ts.id || `slot-${idx}`,
+      label: ts.label || `Categoría ${idx + 1}`,
+      description: ts.description,
+      color: ts.color || BUCKET_COLORS[idx % BUCKET_COLORS.length]
+    }));
   }
 
-  // D. Extract categories mentioned in instruction or raw text if still empty:
-  if (targetSlots.length === 0) {
-    let extractedTextCats: string[] = [];
-    if (parsed.instruction) {
-      extractedTextCats = extractCategoriesFromText(parsed.instruction);
-    }
-    if (extractedTextCats.length === 0 && block.rawText) {
-      extractedTextCats = extractCategoriesFromText(block.rawText);
-    }
-    if (extractedTextCats.length === 0 && block.rawText) {
-      const lines = block.rawText.split('\n').map((l) => l.trim()).filter(Boolean);
-      const catHeaderLine = lines.find((l) => /^(categories|prepositions|buckets|groups):\s*/i.test(l));
-      if (catHeaderLine) {
-        const rest = catHeaderLine.replace(/^(categories|prepositions|buckets|groups):\s*/i, '');
-        extractedTextCats = rest.split(/[,;/|]+/).map((s) => s.trim()).filter(Boolean);
-      }
-    }
-    if (extractedTextCats.length > 0) {
-      targetSlots = extractedTextCats.map((cat, idx) => ({
-        id: `slot-${slugify(cat)}-${idx}`,
-        label: cat,
-        description: cat,
-        color: BUCKET_COLORS[idx % BUCKET_COLORS.length]
-      }));
-    }
-  }
+  const rawItems: any[] = Array.isArray(parsed.items)
+    ? parsed.items
+    : (Array.isArray(parsed.tokens) ? parsed.tokens : []);
 
-  // 2. EXTRACT SOURCE ITEMS / TOKENS DYNAMICALLY (ZERO HARDCODING)
-  let rawItems: Array<{ text: string; target?: string }> = [];
+  // Map tokens directly 1:1
+  const tokens: BucketToken[] = rawItems.map((item: any, idx: number) => {
+    const text = typeof item === 'object' && item !== null
+      ? String(item.prompt || item.text || `Elemento ${idx + 1}`).trim()
+      : String(item).trim();
 
-  // Helper to extract lines from rawText as candidate tokens
-  const extractTokensFromRawTextLines = (): Array<{ text: string; target?: string }> => {
-    if (!block.rawText) return [];
-    const rawCategoryLabels = targetSlots.map((ts) => ts.label.toLowerCase());
-    const lines = block.rawText
-      .split('\n')
-      .map((l) => l.trim())
-      .filter((line) => {
-        if (!line) return false;
-        // Ignore lines that are the title
-        if (parsed.title && line.toLowerCase().includes(parsed.title.toLowerCase())) return false;
-        // Ignore lines that are exercise instruction statements
-        if (/^(vocabulary:|exercise|\d+\s*[a-z]?\s*are these|write the letters|complete the|classify each|match the)/i.test(line)) return false;
-        // Ignore lines that merely define category lists
-        if (rawCategoryLabels.some((c) => c === line.toLowerCase())) return false;
-        return true;
-      });
+    const targetLabel = typeof item === 'object' && item !== null
+      ? String(item.expectedAnswer || item.target || '').trim().toLowerCase()
+      : '';
 
-    return lines
-      .map((line) => {
-        // Strip leading numbering or bullet (e.g. "1. ", "1 ", "• ", "- ")
-        const clean = line.replace(/^(\d+[\s.)-]+|[a-z][\s.)-]+|[-*•]\s*)/i, '').trim();
-
-        // Check for parenthesized category or paragraph target: "spend time with someone (F)" or "(1)"
-        const matchParen = clean.match(/^(.*?)\s*\(([A-Za-z0-9\s]+)\)$/);
-        if (matchParen) {
-          return {
-            text: matchParen[1].trim(),
-            target: matchParen[2].trim()
-          };
-        }
-
-        // Check for delimiter: "apply - FOR" or "Heading A - Paragraph 1"
-        const matchDelimiter = clean.match(/^(.*?)\s*[:\-–—]\s*([A-Za-z0-9\s]+)$/);
-        if (matchDelimiter) {
-          return {
-            text: matchDelimiter[1].trim(),
-            target: matchDelimiter[2].trim()
-          };
-        }
-
-        return { text: clean };
-      })
-      .filter((t) => t.text.length > 0);
-  };
-
-  if (Array.isArray(parsed.sourceItems) && parsed.sourceItems.length > 0) {
-    rawItems = parsed.sourceItems
-      .map((it: any) => ({
-        text: typeof it === 'string' ? it.trim() : String(it.text || it.name || '').trim(),
-        target: typeof it === 'object' ? String(it.target || it.correctTargetId || it.answer || '').trim() : undefined
-      }))
-      .filter((t) => t.text.length > 0);
-  } else if (Array.isArray(parsed.tokens) && parsed.tokens.length > 0) {
-    rawItems = parsed.tokens
-      .map((t: any) => ({
-        text: typeof t === 'string' ? t.trim() : String(t.text || t.word || t.token || '').trim(),
-        target: typeof t === 'object' ? String(t.target || t.category || t.bucket || t.answer || '').trim() : undefined
-      }))
-      .filter((t) => t.text.length > 0);
-  } else if (Array.isArray(parsed.items) && parsed.items.length > 0) {
-    rawItems = parsed.items
-      .map((item: any) => ({
-        text: typeof item === 'string' ? item.trim() : String(item.text || item.prompt || item.phrase || '').trim(),
-        target: typeof item === 'object' ? String(item.target || item.category || item.bucket || item.answer || '').trim() : undefined
-      }))
-      .filter((t) => t.text.length > 0);
-  }
-
-  // Extract from rawText if tokens were empty
-  const textLineTokens = extractTokensFromRawTextLines();
-  if ((rawItems.length <= 1 && textLineTokens.length > 1) || rawItems.length === 0) {
-    rawItems = textLineTokens;
-  }
-
-  // If targetSlots were empty but tokens specified targets, derive target slots strictly from targets
-  if (targetSlots.length === 0 && rawItems.some((t) => t.target)) {
-    const uniqueTargets = Array.from(new Set(rawItems.map((t) => t.target).filter(Boolean))) as string[];
-    uniqueTargets.forEach((ut, idx) => {
-      targetSlots.push({
-        id: `slot-${slugify(ut)}-${idx}`,
-        label: ut,
-        description: ut,
-        color: BUCKET_COLORS[idx % BUCKET_COLORS.length]
-      });
-    });
-  }
-
-  // STRICT PURGE: If still no targetSlots exist, DO NOT inject fake ['Categoría A', 'Categoría B']!
-  // The transformer remains 1:1 strict.
-
-  // 3. MAP ITEMS TO TARGET SLOTS WITHOUT FICTITIOUS ASSIGNMENTS
-  const tokens: BucketToken[] = rawItems.map((t) => {
-    let matchedSlot: TargetSlot | undefined;
-
-    if (t.target && targetSlots.length > 0) {
-      const targetLower = t.target.toLowerCase();
-      // Match exact label, parenthesized code, paragraph number, or substring
-      matchedSlot = targetSlots.find((slot) => {
-        const sLabelLower = slot.label.toLowerCase();
-        const parenCode = slot.label.match(/\(([^)]+)\)/)?.[1]?.toLowerCase();
-        const numMatch = slot.label.match(/\d+/)?.[0];
-        return (
-          sLabelLower === targetLower ||
-          parenCode === targetLower ||
-          (numMatch && numMatch === targetLower) ||
-          slot.id.toLowerCase() === targetLower ||
-          sLabelLower.startsWith(targetLower) ||
-          targetLower.startsWith(sLabelLower) ||
-          sLabelLower.includes(targetLower) ||
-          targetLower.includes(sLabelLower)
-        );
-      });
-    }
-
-    // Pedagogical autonomous resolution: guarantee every token has an assigned matching target
-    if (!matchedSlot && targetSlots.length > 0) {
-      const textLower = t.text.toLowerCase();
-      const prepositionMatch = targetSlots.find((slot) => {
-        const sLower = slot.label.toLowerCase();
-        return textLower.includes(sLower) || sLower.includes(textLower);
-      });
-      matchedSlot = prepositionMatch || targetSlots[0];
-    }
+    const matchedSlot = targetSlots.find(
+      (s) => s.label.toLowerCase() === targetLabel || s.id.toLowerCase() === targetLabel
+    ) || targetSlots[0];
 
     return {
       id: generateId('tok'),
-      text: t.text,
+      text,
       correctBucketId: matchedSlot ? matchedSlot.id : '',
-      hint: matchedSlot ? matchedSlot.label : undefined
+      hint: item.explanation || (matchedSlot ? matchedSlot.label : undefined)
     };
   });
 
@@ -338,7 +198,7 @@ export function mapBlockToBuckets(block: ExtractedBlock): BucketsMatchingBlock {
   return {
     type: 'buckets_matching',
     id: generateId('inter-buc'),
-    instruction: parsed.instruction || 'Relaciona cada elemento con su destino correspondiente:',
+    instruction: parsed.instruction || parsed.title || 'Relaciona cada elemento con su destino correspondiente:',
     buckets: targetSlots,
     tokens,
     targetSlots,
@@ -348,401 +208,161 @@ export function mapBlockToBuckets(block: ExtractedBlock): BucketsMatchingBlock {
 }
 
 /**
- * Universal Zero-Hardcoding Mapper for Input Fields (Fill in Blanks)
- */
-export function mapBlockToInputFields(block: ExtractedBlock): InputFieldsBlock {
-  const parsed = block.parsedData || {};
-
-  const wordBank: string[] | undefined = Array.isArray(parsed.wordBank) && parsed.wordBank.length > 0
-    ? parsed.wordBank.map((w: any) => String(w).trim()).filter(Boolean)
-    : undefined;
-
-  let listItems: Array<{
-    id: string;
-    prompt: string;
-    expectedAnswer: string;
-    acceptedAnswers: string[];
-    prefix?: string;
-    hint?: string;
-    explanation?: string;
-    isExample?: boolean;
-  }> = [];
-
-  const isEditorialNoise = (text: string): boolean => {
-    const s = text.trim();
-    if (!s) return true;
-    if (/^(?:\d+[A-Z]?\s*\d*\s*p\.?\s*\d+|p\.?\s*\d+|page\s*\d+|unit\s*\d+[a-z]?|v\d+\.\d+)$/i.test(s)) return true;
-    if (/^(?:question\s*words?|meanings?|question\s*word\s*\|\s*meaning|word\s*bank|vocabulary)$/i.test(s)) return true;
-    return false;
-  };
-
-  const extractItemCanonicalAndVariants = (rawItem: any, fallbackPrompt = '') => {
-    let canonical = '';
-    if (typeof rawItem === 'object' && rawItem !== null) {
-      if (typeof rawItem.expectedAnswer === 'string' && rawItem.expectedAnswer.trim()) {
-        canonical = rawItem.expectedAnswer.trim();
-      } else if (typeof rawItem.answer === 'string' && rawItem.answer.trim()) {
-        canonical = rawItem.answer.trim();
-      } else if (typeof rawItem.correctAnswer === 'string' && rawItem.correctAnswer.trim()) {
-        canonical = rawItem.correctAnswer.trim();
-      } else if (Array.isArray(rawItem.acceptedAnswers) && rawItem.acceptedAnswers.length > 0) {
-        const first = String(rawItem.acceptedAnswers[0]).trim();
-        if (first) canonical = first;
-      }
-    }
-
-    const promptText = typeof rawItem === 'object' && rawItem !== null
-      ? String(rawItem.text || rawItem.prompt || fallbackPrompt).trim()
-      : String(rawItem || fallbackPrompt).trim();
-
-    // Derive answer from prompt markers like [XYZ] or => XYZ
-    if (!canonical) {
-      const bracketMatch = promptText.match(/\[(?:correct|answer|key)?\s*:?\s*([^\]]+)\]/i);
-      if (bracketMatch) {
-        canonical = bracketMatch[1].trim();
-      } else {
-        const arrowMatch = promptText.match(/(?:=>|->|=)\s*([a-zA-Z0-9\s'-]+)$/);
-        if (arrowMatch) {
-          canonical = arrowMatch[1].trim();
-        }
-      }
-    }
-
-    // Verb hint in parentheses: e.g. "She _______ (live) in London"
-    if (!canonical) {
-      const parenMatch = promptText.match(/\(([^)]+)\)/);
-      if (parenMatch && parenMatch[1].trim().length < 30 && !parenMatch[1].toLowerCase().includes('párrafo')) {
-        canonical = parenMatch[1].trim();
-      }
-    }
-
-    // Fallback: Never leave canonical empty
-    if (!canonical) {
-      if (typeof rawItem === 'object' && rawItem?.hint && typeof rawItem.hint === 'string' && rawItem.hint.trim()) {
-        canonical = rawItem.hint.trim();
-      } else {
-        canonical = 'Respuesta según texto';
-      }
-    }
-
-    // Extract variants
-    let variants: string[] = [];
-    if (typeof rawItem === 'object' && rawItem !== null && Array.isArray(rawItem.acceptedAnswers) && rawItem.acceptedAnswers.length > 0) {
-      variants = rawItem.acceptedAnswers.map((a: any) => String(a).trim()).filter(Boolean);
-    } else if (typeof rawItem === 'object' && rawItem !== null && rawItem.answer) {
-      variants = [String(rawItem.answer).trim()];
-    }
-
-    // Enrich with contraction and US/UK spelling variants
-    const variantSet = new Set<string>();
-    variants.forEach((v) => {
-      variantSet.add(v);
-      generateGrammarVariants(v).forEach((gv) => variantSet.add(gv));
-    });
-    variants = Array.from(variantSet);
-
-    const hint = typeof rawItem === 'object' && rawItem !== null
-      ? (rawItem.hint || rawItem.explanation || 'Regla gramatical aplicada según el contexto')
-      : 'Regla gramatical aplicada según el contexto';
-
-    return {
-      prompt: promptText,
-      expectedAnswer: canonical,
-      acceptedAnswers: variants,
-      hint,
-      prefix: typeof rawItem === 'object' && rawItem !== null ? rawItem.prefix : undefined
-    };
-  };
-
-  if (Array.isArray(parsed.items) && parsed.items.length > 0) {
-    listItems = parsed.items
-      .filter((item: any) => {
-        const text = typeof item === 'object' && item !== null
-          ? String(item.text || item.prompt || '')
-          : String(item || '');
-        return !isEditorialNoise(text);
-      })
-      .map((item: any) => {
-        const extracted = extractItemCanonicalAndVariants(item);
-        const isExample = typeof item === 'object' && item !== null
-          ? Boolean(item.isExample || item.example || /\[example\]|\(example\)/i.test(String(item.text || '')))
-          : false;
-
-        return {
-          id: generateId('item'),
-          prompt: extracted.prompt,
-          expectedAnswer: extracted.expectedAnswer,
-          acceptedAnswers: extracted.acceptedAnswers,
-          prefix: extracted.prefix,
-          hint: extracted.hint,
-          isExample,
-        };
-      })
-      .filter((item) => item.prompt.length > 0);
-  } else if (Array.isArray(parsed.rows) && parsed.rows.length > 0) {
-    // If two-column matching table (e.g. question word | meaning) was parsed as rows
-    listItems = parsed.rows
-      .filter((row: any) => Array.isArray(row) && row.length >= 2 && !row.every((c: any) => isEditorialNoise(String(c))))
-      .map((row: any, rIdx: number) => {
-        const col1 = String(row[0] || '').trim();
-        const col2 = String(row[1] || '').trim();
-        const isCol1Word = /^[A-Za-z]+$/.test(col1) || /^\d+\s+[A-Za-z]+$/.test(col1);
-        const word = isCol1Word ? col1.replace(/^\d+\s*/, '').trim() : col2.replace(/^\d+\s*/, '').trim();
-        const definition = isCol1Word ? col2 : col1;
-        const isExample = /^\d+\s+[A-Za-z]+/.test(col1) && Boolean(word) && !col1.includes('___');
-        const prompt = definition.startsWith(':') ? definition : `: ${definition}`;
-
-        return {
-          id: generateId('item'),
-          prompt: `${rIdx + 1}. _______ ${prompt}`,
-          expectedAnswer: word,
-          acceptedAnswers: [word],
-          hint: `Definición: ${definition}`,
-          isExample,
-        };
-      });
-  } else if (block.rawText) {
-    const lines = block.rawText
-      .split('\n')
-      .map((l) => l.trim())
-      .filter((l) => {
-        if (!l) return false;
-        if (isEditorialNoise(l)) return false;
-        if (parsed.title && l.toLowerCase().includes(parsed.title.toLowerCase())) return false;
-        if (parsed.instruction && l.toLowerCase().includes(parsed.instruction.toLowerCase())) return false;
-        return true;
-      });
-
-    listItems = lines.map((line) => {
-      const extracted = extractItemCanonicalAndVariants(null, line);
-      return {
-        id: generateId('item'),
-        prompt: line,
-        expectedAnswer: extracted.expectedAnswer,
-        acceptedAnswers: extracted.acceptedAnswers,
-        hint: extracted.hint,
-        isExample: false,
-      };
-    });
-  }
-
-  return {
-    type: 'input_fields',
-    id: generateId('inter-inp'),
-    instruction: parsed.instruction || 'Escribe la respuesta correcta en cada espacio:',
-    layoutMode: 'list',
-    wordBank,
-    listItems,
-    tableHeaders: [],
-    tableRows: [],
-    paragraphTemplate: '',
-    paragraphInputs: {}
-  };
-}
-
-/**
- * Universal Zero-Hardcoding Mapper for Selection (Quiz Mode or Flat Selection List)
+ * Pure 1:1 Universal Mapper for Selection / Multiple Choice
  */
 export function mapBlockToSelection(block: ExtractedBlock): SelectionBlock {
   const parsed = block.parsedData || {};
 
-  // Case 1: Payload explicitly contains closed question/options pairs
-  const hasExplicitQuestions =
-    Array.isArray(parsed.questions) &&
-    parsed.questions.length > 0 &&
-    parsed.questions.some((q: any) => Array.isArray(q.options) && q.options.length > 0);
-
-  if (hasExplicitQuestions) {
-    const questions = parsed.questions
-      .map((q: any) => {
-        const options = (q.options || []).map((opt: any) => {
-          const rawText = String(opt.text || opt.label || '').trim();
-          const isExplicit = typeof opt.isCorrect === 'boolean'
-            ? opt.isCorrect
-            : /\[correct\]|\(correct\)/i.test(rawText);
-          const cleanText = rawText.replace(/\[correct\]|\(correct\)/i, '').trim();
-          return {
-            id: generateId('opt'),
-            text: cleanText,
-            isCorrect: isExplicit ? true : false,
-            feedback: opt.feedback || (isExplicit ? 'Opción gramaticalmente correcta.' : undefined)
-          };
-        });
-
-        // Autonomous resolution guarantee: ensure at least one option is solved as isCorrect
-        if (!options.some((o: any) => o.isCorrect === true) && options.length > 0) {
-          options[0].isCorrect = true;
-          options[0].feedback = 'Opción gramaticalmente correcta.';
-        }
-
+  // Case 1: Structured questions already present
+  if (Array.isArray(parsed.questions) && parsed.questions.length > 0) {
+    const questions = parsed.questions.map((q: any) => {
+      const options: SelectionOption[] = (q.options || []).map((opt: any) => {
+        const text = typeof opt === 'string' ? opt.trim() : String(opt.text || opt.label || '').trim();
+        const isCorrect = typeof opt === 'object' && opt !== null ? Boolean(opt.isCorrect) : false;
         return {
-          id: generateId('q'),
-          prompt: String(q.prompt || q.question || '').trim(),
-          mode: q.mode || (options.filter((o: any) => o.isCorrect).length > 1 ? 'multiple_choice' : 'single_choice'),
-          options
+          id: generateId('opt'),
+          text,
+          isCorrect,
+          feedback: typeof opt === 'object' ? opt.feedback : undefined
         };
-      })
-      .filter((q: any) => q.prompt.length > 0);
+      });
+
+      return {
+        id: generateId('q'),
+        prompt: String(q.prompt || q.question || '').trim(),
+        mode: (q.mode || 'single_choice') as 'single_choice' | 'multiple_choice' | 'dropdown',
+        options
+      };
+    });
 
     return {
       type: 'selection',
       id: generateId('inter-sel'),
-      instruction: parsed.instruction || 'Elige la opción correcta para cada enunciado:',
+      instruction: parsed.instruction || parsed.title || 'Elige la opción correcta para cada enunciado:',
       questions
     };
   }
 
-  // Case 2: Flat list of items, phrases, tokens, or text lines (ZERO MOCKS, ZERO HARDCODING)
-  let flatItems: string[] = [];
+  // Case 2: Structured items with candidate options
+  const rawItems: any[] = Array.isArray(parsed.items) ? parsed.items : [];
 
-  if (Array.isArray(parsed.options) && parsed.options.length > 0) {
-    flatItems = parsed.options
-      .map((opt: any) => (typeof opt === 'string' ? opt.trim() : String(opt.text || opt.label || '').trim()))
-      .filter(Boolean);
-  } else if (Array.isArray(parsed.items) && parsed.items.length > 0) {
-    flatItems = parsed.items
-      .map((it: any) => (typeof it === 'string' ? it.trim() : String(it.text || it.prompt || it.phrase || it.word || '').trim()))
-      .filter(Boolean);
-  } else if (Array.isArray(parsed.tokens) && parsed.tokens.length > 0) {
-    flatItems = parsed.tokens
-      .map((t: any) => (typeof t === 'string' ? t.trim() : String(t.text || t.word || '').trim()))
-      .filter(Boolean);
-  } else if (block.rawText) {
-    const lines = block.rawText
-      .split('\n')
-      .map((l) => l.trim())
-      .filter((line) => {
-        if (!line) return false;
-        if (parsed.title && line.toLowerCase().includes(parsed.title.toLowerCase())) return false;
-        if (/^(vocabulary:|exercise|\d+\s*[a-z]?\s*choose|select all|read and mark)/i.test(line)) return false;
-        return true;
+  if (rawItems.length > 0) {
+    const questions = rawItems.map((item: any, idx: number) => {
+      const prompt = String(item.prompt || item.text || `Pregunta ${idx + 1}`).trim();
+      const expected = String(item.expectedAnswer || '').trim().toLowerCase();
+
+      const candidateOptions: string[] = Array.isArray(item.options) && item.options.length > 0
+        ? item.options.map((o: any) => String(o).trim())
+        : (Array.isArray(item.acceptedAnswers) && item.acceptedAnswers.length > 1
+          ? item.acceptedAnswers.map((a: any) => String(a).trim())
+          : [String(item.expectedAnswer || '').trim()]);
+
+      const options: SelectionOption[] = candidateOptions.map((optText) => {
+        const isCorrect = optText.trim().toLowerCase() === expected;
+        return {
+          id: generateId('opt'),
+          text: optText,
+          isCorrect,
+          feedback: isCorrect ? (item.explanation || 'Opción correcta.') : undefined
+        };
       });
 
-    flatItems = lines
-      .map((l) => l.replace(/^(\d+[\s.)-]+|[a-z][\s.)-]+|[-*•]\s*)/i, '').trim())
-      .filter(Boolean);
+      // Ensure at least one is resolved as correct
+      if (!options.some((o) => o.isCorrect) && options.length > 0) {
+        options[0].isCorrect = true;
+      }
+
+      return {
+        id: generateId('q'),
+        prompt,
+        mode: 'single_choice' as const,
+        options
+      };
+    });
+
+    return {
+      type: 'selection',
+      id: generateId('inter-sel'),
+      instruction: parsed.instruction || parsed.title || 'Elige la opción correcta para cada enunciado:',
+      questions
+    };
   }
 
-  const options: SelectionOption[] = flatItems.map((text) => ({
-    id: generateId('opt'),
-    text
-    // Note: isCorrect is left undefined because no artificial correct answers are forced!
-  }));
-
+  // Fallback: Empty selection block
   return {
     type: 'selection',
     id: generateId('inter-sel'),
-    instruction: parsed.instruction || parsed.title || 'Selecciona los elementos correspondientes:',
-    allowMultiple: true,
-    options,
+    instruction: parsed.instruction || 'Selecciona las opciones correctas:',
     questions: []
   };
 }
 
 /**
- * Universal Zero-Hardcoding Mapper for Sequence Dialogue Reordering
+ * Pure 1:1 Universal Mapper for Sequence
  */
 export function mapBlockToSequence(block: ExtractedBlock): SequenceBlock {
   const parsed = block.parsedData || {};
+  const rawItems: any[] = Array.isArray(parsed.items) ? parsed.items : [];
 
-  let items: any[] = [];
-
-  if (Array.isArray(parsed.items) && parsed.items.length > 0) {
-    items = parsed.items.map((it: any, i: number) => ({
-      id: generateId('seq'),
-      text: String(it.text || it.line || '').trim(),
-      correctOrder: typeof it.order === 'number' ? it.order : i + 1,
-      speaker: it.speaker
-    }));
-  } else if (block.rawText) {
-    const lines = block.rawText
-      .split('\n')
-      .map((l) => l.trim())
-      .filter((l) => l.length > 0);
-
-    items = lines.map((line, i) => {
-      const matchSpeaker = line.match(/^([A-Za-z\s]+):\s*(.*)$/);
-      return {
-        id: generateId('seq'),
-        text: matchSpeaker ? matchSpeaker[2].trim() : line.replace(/^[\w\d][).]\s*/, '').trim(),
-        correctOrder: i + 1,
-        speaker: matchSpeaker ? matchSpeaker[1].trim() : undefined
-      };
-    });
-  }
+  const items = rawItems.map((it: any, i: number) => ({
+    id: generateId('seq'),
+    text: String(it.prompt || it.text || it.line || '').trim(),
+    correctOrder: typeof it.order === 'number' ? it.order : i + 1,
+    speaker: it.speaker
+  }));
 
   return {
     type: 'sequence',
     id: generateId('inter-seq'),
-    instruction: parsed.instruction || 'Drag and reorder the lines to assemble a natural conversation flow:',
+    instruction: parsed.instruction || 'Ordena los elementos en la secuencia lógica correcta:',
     items
   };
 }
 
 /**
- * Universal Zero-Hardcoding Mapper for Reference Table
+ * Pure 1:1 Universal Mapper for Reference Table
  */
 export function mapBlockToReferenceTable(block: ExtractedBlock): ReferenceTableBlock {
   const parsed = block.parsedData || {};
 
-  let headers: string[] = Array.isArray(parsed.headers) ? parsed.headers : [];
-  let rows: string[][] = Array.isArray(parsed.rows) ? parsed.rows : [];
-
-  // If table wasn't pre-parsed into headers/rows but rawText has pipe separators:
-  if (headers.length === 0 && rows.length === 0 && block.rawText && block.rawText.includes('|')) {
-    const lines = block.rawText.split('\n').map((l) => l.trim()).filter(Boolean);
-    const tableLines = lines.filter((l) => l.includes('|'));
-    if (tableLines.length > 0) {
-      headers = tableLines[0].split('|').map((c) => c.trim()).filter(Boolean);
-      rows = tableLines.slice(1)
-        .filter((l) => !/^[|\s:-]+$/.test(l)) // skip markdown divider row
-        .map((l) => l.split('|').map((c) => c.trim()).filter((_, idx, arr) => !(idx === 0 && arr[idx] === '') && !(idx === arr.length - 1 && arr[idx] === '')));
-    }
-  }
+  const headers: string[] = Array.isArray(parsed.headers) ? parsed.headers : [];
+  const rows: string[][] = Array.isArray(parsed.rows) ? parsed.rows : [];
 
   return {
     type: 'table_reference',
     id: generateId('ref-tbl'),
-    title: parsed.title || 'Cuadro Gramatical',
+    title: parsed.title || 'Cuadro Gramatical / Referencia',
     headers,
     rows,
-    caption: parsed.caption || 'Source: Digitized Coursebook'
+    caption: parsed.caption || parsed.referenceContent || undefined
   };
 }
 
 /**
- * Universal Zero-Hardcoding Mapper for Reference Text
+ * Pure 1:1 Universal Mapper for Reference Text
  */
 export function mapBlockToReferenceText(block: ExtractedBlock): ReferenceTextBlock {
   const parsed = block.parsedData || {};
 
-  let textContent = parsed.content || '';
-  if (!textContent && Array.isArray(parsed.paragraphs) && parsed.paragraphs.length > 0) {
-    textContent = parsed.paragraphs
-      .map((p: any) => (typeof p === 'string' ? p : `${p.label ? `${p.label}\n` : ''}${p.text}`))
-      .join('\n\n');
-  }
-  if (!textContent) {
-    textContent = block.rawText || '';
-  }
-
-  const activeImages: string[] = Array.isArray(parsed.images) && parsed.images.length > 0
-    ? parsed.images
-    : (parsed.imageUrl ? [parsed.imageUrl] : []);
+  const content = String(
+    parsed.referenceContent ||
+    parsed.content ||
+    block.rawText ||
+    ''
+  ).trim();
 
   return {
     type: 'text',
     id: generateId('ref-txt'),
-    title: parsed.title || 'Lectura de Referencia',
-    content: textContent,
-    category: parsed.category || 'reading',
-    ...(activeImages.length > 0 ? { imageUrl: activeImages[0], images: activeImages } : {})
+    title: parsed.title || 'Lectura / Notas de Referencia',
+    content,
+    category: 'reading'
   };
 }
 
 /**
- * Universal Dispatcher: Transforms any ExtractedBlock into the chosen role with ZERO hardcoding.
- * When the block contains reading or table context alongside an activity, it seamlessly preserves BOTH.
+ * Universal Dispatcher: Transforms any ExtractedBlock into the chosen role with pure 1:1 mappings.
+ * When the block contains reading or guidance context alongside an exercise, it seamlessly preserves BOTH.
  */
 export function mapBlockToRole(
   block: ExtractedBlock,
@@ -750,9 +370,8 @@ export function mapBlockToRole(
 ): { reference?: ReferenceBlock; interaction?: InteractionBlock } {
   const parsed = block.parsedData || {};
   const hasReadingContent = Boolean(
-    parsed.content ||
-    parsed.readingPassage ||
-    (Array.isArray(parsed.paragraphs) && parsed.paragraphs.length > 0)
+    (parsed.referenceContent && String(parsed.referenceContent).trim().length > 0) ||
+    (parsed.content && String(parsed.content).trim().length > 0)
   );
 
   const hasTableContent = Boolean(
@@ -761,7 +380,7 @@ export function mapBlockToRole(
     parsed.rows.length > 0
   );
 
-  const defaultReference = hasReadingContent
+  const defaultReference: ReferenceBlock | undefined = hasReadingContent
     ? mapBlockToReferenceText(block)
     : hasTableContent
     ? mapBlockToReferenceTable(block)
@@ -784,8 +403,7 @@ export function mapBlockToRole(
 }
 
 /**
- * Synthesizes a unified ExtractedBlock from any existing Slide's active interaction or reference.
- * Preserves all prompts, text lines, instructions, and titles without data loss.
+ * Serializes any active Slide's interaction and reference back into a typed ExtractedBlock.
  */
 export function slideToExtractedBlock(slide: Slide): ExtractedBlock {
   const inter = slide.interaction;
@@ -794,87 +412,97 @@ export function slideToExtractedBlock(slide: Slide): ExtractedBlock {
   const title = slide.title || (ref && 'title' in ref ? ref.title : '') || 'Actividad Didáctica';
   const instruction = inter?.instruction || slide.subtitle || 'Instrucciones de la actividad';
 
-  let items: string[] = [];
-  let structuredItems: any[] = [];
-  let buckets: string[] = [];
-  let tableHeaders: string[] = [];
-  let tableRows: string[][] = [];
+  let items: any[] = [];
+  let wordBank: string[] | undefined;
+  let buckets: string[] | undefined;
+  let headers: string[] | undefined;
+  let rows: string[][] | undefined;
+  let referenceContent: string | undefined;
+
+  if (ref && ref.type === 'text') {
+    referenceContent = ref.content;
+  } else if (ref && ref.type === 'table_reference') {
+    headers = ref.headers;
+    rows = ref.rows;
+  }
 
   if (inter) {
     switch (inter.type) {
       case 'input_fields':
-        if (inter.listItems && inter.listItems.length > 0) {
-          items = inter.listItems.map((i) => i.prompt);
-          structuredItems = inter.listItems.map((i) => ({
-            text: i.prompt,
-            expectedAnswer: i.expectedAnswer || i.acceptedAnswers[0] || 'Respuesta canónica',
-            acceptedAnswers: i.acceptedAnswers && i.acceptedAnswers.length > 0 ? i.acceptedAnswers : [i.expectedAnswer || 'Respuesta canónica'],
-            hint: i.hint,
-            explanation: i.explanation
-          }));
-        } else if (inter.tableRows && inter.tableRows.length > 0) {
-          tableHeaders = inter.tableHeaders || [];
-          tableRows = inter.tableRows.map((r) => r.map((c) => c.text));
-          items = tableRows.map((r) => r.join(' | '));
-        } else if (inter.paragraphTemplate) {
-          items = inter.paragraphTemplate.split('\n').filter(Boolean);
-        }
+        wordBank = inter.wordBank;
+        items = inter.listItems.map((i) => ({
+          prompt: i.prompt,
+          expectedAnswer: i.expectedAnswer || i.acceptedAnswers[0] || '',
+          acceptedAnswers: i.acceptedAnswers,
+          isExample: Boolean(i.isExample),
+          explanation: i.explanation || i.hint
+        }));
         break;
 
       case 'selection':
-        if (inter.options && inter.options.length > 0) {
-          items = inter.options.map((o) => o.text);
-        } else if (inter.questions && inter.questions.length > 0) {
-          items = inter.questions.map((q) => q.prompt);
-        }
+        items = (inter.questions || []).map((q) => {
+          const correctOpt = q.options.find((o) => o.isCorrect);
+          return {
+            prompt: q.prompt,
+            expectedAnswer: correctOpt?.text || q.options[0]?.text || '',
+            acceptedAnswers: correctOpt ? [correctOpt.text] : [],
+            options: q.options.map((o) => o.text),
+            isExample: false,
+            explanation: correctOpt?.feedback
+          };
+        });
         break;
 
       case 'buckets_matching':
         buckets = (inter.targetSlots || inter.buckets || []).map((b) => b.label);
-        items = (inter.sourceItems || inter.tokens || []).map((t) => t.text);
+        items = (inter.sourceItems || inter.tokens || []).map((t) => {
+          const targetId = (t as any).correctTargetId || (t as any).correctBucketId;
+          const targetSlot = (inter.targetSlots || inter.buckets || []).find((s) => s.id === targetId);
+          return {
+            prompt: t.text,
+            expectedAnswer: targetSlot?.label || '',
+            acceptedAnswers: targetSlot ? [targetSlot.label] : [],
+            isExample: false,
+            explanation: t.hint
+          };
+        });
         break;
 
       case 'sequence':
-        items = inter.items.map((it) => (it.speaker ? `${it.speaker}: ${it.text}` : it.text));
+        items = inter.items.map((it) => ({
+          prompt: it.speaker ? `${it.speaker}: ${it.text}` : it.text,
+          expectedAnswer: String(it.correctOrder),
+          acceptedAnswers: [String(it.correctOrder)],
+          order: it.correctOrder,
+          speaker: it.speaker,
+          isExample: false
+        }));
         break;
-    }
-  } else if (ref) {
-    if (ref.type === 'text') {
-      items = ref.content.split('\n').map((l) => l.trim()).filter(Boolean);
-    } else if (ref.type === 'table_reference') {
-      tableHeaders = ref.headers || [];
-      tableRows = ref.rows || [];
-      items = ref.rows.map((r) => r.join(' | '));
     }
   }
 
-  const rawText = [
+  const rawTextParts = [
     title,
     instruction,
-    ...items
-  ].filter(Boolean).join('\n');
+    referenceContent,
+    ...items.map((i) => i.prompt || i.text || '')
+  ].filter(Boolean);
 
   return {
     id: `converted-block-${Date.now()}`,
-    detectedType: 'vocabulary',
+    detectedType: inter?.type === 'buckets_matching' ? 'vocabulary' : 'numbered_list',
     confidence: 1.0,
-    rawText,
+    rawText: rawTextParts.join('\n\n'),
     parsedData: {
       title,
       instruction,
-      items: structuredItems.length > 0 ? structuredItems : items,
-      buckets: buckets.length > 0 ? buckets : undefined,
-      targetSlots: (inter?.type === 'buckets_matching' && inter.targetSlots) ? inter.targetSlots : undefined,
-      sourceItems: (inter?.type === 'buckets_matching' && inter.sourceItems) ? inter.sourceItems : undefined,
-      headers: tableHeaders.length > 0 ? tableHeaders : undefined,
-      rows: tableRows.length > 0 ? tableRows : undefined,
-      content: ref && ref.type === 'text' ? ref.content : items.join('\n'),
-      imageUrl: (ref && ref.type === 'text')
-        ? (ref.imageUrl || (ref.images && ref.images.length > 0 ? ref.images[0] : undefined))
-        : undefined,
-      images: (ref && ref.type === 'text')
-        ? (ref.images && ref.images.length > 0 ? ref.images : (ref.imageUrl ? [ref.imageUrl] : undefined))
-        : undefined
+      referenceContent,
+      wordBank,
+      buckets,
+      items,
+      headers,
+      rows,
+      content: referenceContent
     }
   };
 }
@@ -892,10 +520,9 @@ export function convertSlideToRole(slide: Slide, targetRole: PedagogicalRole): S
     ...slide,
     referenceContent: isTargetReference
       ? mapped.reference || null
-      : slide.referenceContent,
+      : (slide.referenceContent || mapped.reference || null),
     interaction: isTargetReference
       ? null
-      : mapped.interaction || null
+      : (mapped.interaction || null)
   };
 }
-

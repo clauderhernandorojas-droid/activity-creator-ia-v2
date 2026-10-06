@@ -1,4 +1,5 @@
-import type { ExtractedBlock } from '../../types/schema';
+import type { ExtractedBlock, ExtractedStructuredPayload } from '../../types/schema';
+import { GoogleGenAI } from '@google/genai';
 
 export type ManualTemplateType = 'input_fields' | 'buckets' | 'selection' | 'reference_table';
 
@@ -18,24 +19,29 @@ export const MANUAL_TEMPLATES: Record<ManualTemplateType, {
     parsedData: {
       title: 'Manual: Fill in the Blanks',
       instruction: 'Complete the sentences with the correct verb form:',
+      wordBank: [],
+      interactionType: 'fill_blanks',
       items: [
         {
-          text: '1. She _______ (live) in London for three years.',
+          prompt: '1. She _______ (live) in London for three years.',
           expectedAnswer: 'has lived',
           acceptedAnswers: ['has lived', 'has been living', 'lived'],
-          hint: 'Present perfect (affirmative)'
+          isExample: false,
+          explanation: 'Present perfect (affirmative)'
         },
         {
-          text: '2. We _______ (already / see) that documentary.',
+          prompt: '2. We _______ (already / see) that documentary.',
           expectedAnswer: 'have already seen',
           acceptedAnswers: ['have already seen', 'already saw', 'have seen'],
-          hint: 'Present perfect with already'
+          isExample: false,
+          explanation: 'Present perfect with already'
         },
         {
-          text: '3. They _______ (not finish) their homework yet.',
+          prompt: '3. They _______ (not finish) their homework yet.',
           expectedAnswer: "haven't finished",
           acceptedAnswers: ["haven't finished", 'have not finished', 'did not finish'],
-          hint: 'Present perfect (negative)'
+          isExample: false,
+          explanation: 'Present perfect (negative)'
         }
       ]
     }
@@ -55,16 +61,19 @@ Categorize each verb under its matching preposition:
 - deal (WITH)`,
     parsedData: {
       title: 'Manual: Prepositions Classification',
-      suggestedBuckets: ['FOR', 'IN', 'TO', 'WITH'],
-      tokens: [
-        { text: 'apply', target: 'FOR' },
-        { text: 'apologize', target: 'FOR' },
-        { text: 'succeed', target: 'IN' },
-        { text: 'participate', target: 'IN' },
-        { text: 'belong', target: 'TO' },
-        { text: 'listen', target: 'TO' },
-        { text: 'agree', target: 'WITH' },
-        { text: 'deal', target: 'WITH' }
+      instruction: 'Categorize each verb under its matching preposition:',
+      wordBank: [],
+      interactionType: 'buckets',
+      buckets: ['FOR', 'IN', 'TO', 'WITH'],
+      items: [
+        { prompt: 'apply', expectedAnswer: 'FOR', acceptedAnswers: ['FOR'], isExample: false, explanation: 'Dependent preposition: apply for' },
+        { prompt: 'apologize', expectedAnswer: 'FOR', acceptedAnswers: ['FOR'], isExample: false, explanation: 'Dependent preposition: apologize for' },
+        { prompt: 'succeed', expectedAnswer: 'IN', acceptedAnswers: ['IN'], isExample: false, explanation: 'Dependent preposition: succeed in' },
+        { prompt: 'participate', expectedAnswer: 'IN', acceptedAnswers: ['IN'], isExample: false, explanation: 'Dependent preposition: participate in' },
+        { prompt: 'belong', expectedAnswer: 'TO', acceptedAnswers: ['TO'], isExample: false, explanation: 'Dependent preposition: belong to' },
+        { prompt: 'listen', expectedAnswer: 'TO', acceptedAnswers: ['TO'], isExample: false, explanation: 'Dependent preposition: listen to' },
+        { prompt: 'agree', expectedAnswer: 'WITH', acceptedAnswers: ['WITH'], isExample: false, explanation: 'Dependent preposition: agree with' },
+        { prompt: 'deal', expectedAnswer: 'WITH', acceptedAnswers: ['WITH'], isExample: false, explanation: 'Dependent preposition: deal with' }
       ]
     }
   },
@@ -78,16 +87,21 @@ B) She has lived here since 2018. [Correct]
 C) She lives here since 2018.`,
     parsedData: {
       title: 'Manual: Grammar Accuracy Selection',
-      questions: [
+      instruction: 'Choose the grammatically accurate statement:',
+      wordBank: [],
+      interactionType: 'multiple_choice',
+      items: [
         {
-          id: 'q-manual-1',
           prompt: 'Which sentence correctly expresses an action started in the past and continuing now?',
-          mode: 'single_choice',
+          expectedAnswer: 'She has lived here since 2018.',
+          acceptedAnswers: ['She has lived here since 2018.'],
           options: [
-            { id: 'opt-1', text: 'She has lived here since 2018.', isCorrect: true, feedback: 'Correct! Present perfect with "since".' },
-            { id: 'opt-2', text: 'She is living here since 2018.', isCorrect: false, feedback: 'Incorrect: Present continuous cannot express duration with since.' },
-            { id: 'opt-3', text: 'She lives here since 2018.', isCorrect: false, feedback: 'Incorrect: Present simple is for general habits.' }
-          ]
+            'She has lived here since 2018.',
+            'She is living here since 2018.',
+            'She lives here since 2018.'
+          ],
+          isExample: false,
+          explanation: 'Present perfect with "since" conveys continuing duration.'
         }
       ]
     }
@@ -101,12 +115,12 @@ Past Simple | yesterday, in 2020, 2 days ago | I visited Rome last year.
 Present Perfect | already, yet, ever, never, so far | I have visited Rome twice.`,
     parsedData: {
       title: 'Manual: Tense Contrast Reference Table',
+      referenceContent: 'Rule: Use Past Simple for completed past time and Present Perfect for unfinished or unspecified time.',
       headers: ['Tense', 'Time Marker', 'Example'],
       rows: [
         ['Past Simple', 'yesterday, in 2020, 2 days ago', 'I visited Rome last year.'],
         ['Present Perfect', 'already, yet, ever, never, so far', 'I have visited Rome twice.']
-      ],
-      caption: 'Rule: Use Past Simple for completed past time and Present Perfect for unfinished or unspecified time.'
+      ]
     }
   }
 };
@@ -126,8 +140,7 @@ export function createManualBlock(templateType: ManualTemplateType): ExtractedBl
 }
 
 /**
- * Consolidates multiple extracted blocks or fragments into ONE single holistic pedagogical block.
- * A single pasted clipping represents ONE pedagogical activity.
+ * Consolidates multiple extracted blocks into ONE single holistic pedagogical block.
  */
 export function consolidateBlocks(blocks: ExtractedBlock[], sourceUrl?: string): ExtractedBlock {
   if (blocks.length === 0) {
@@ -148,64 +161,37 @@ export function consolidateBlocks(blocks: ExtractedBlock[], sourceUrl?: string):
     };
   }
 
-  // Combine multiple blocks into a single cohesive activity block
   const rawText = blocks
     .map((b) => b.rawText.trim())
     .filter(Boolean)
     .join('\n\n');
 
-  // Determine primary detectedType: vocabulary > numbered_list > table > dialogue > paragraph
-  let detectedType: ExtractedBlock['detectedType'] = 'paragraph';
+  let detectedType: ExtractedBlock['detectedType'] = 'numbered_list';
   if (blocks.some((b) => b.detectedType === 'vocabulary')) {
     detectedType = 'vocabulary';
-  } else if (blocks.some((b) => b.detectedType === 'numbered_list')) {
-    detectedType = 'numbered_list';
   } else if (blocks.some((b) => b.detectedType === 'table')) {
     detectedType = 'table';
-  } else if (blocks.some((b) => b.detectedType === 'dialogue')) {
-    detectedType = 'dialogue';
   }
 
-  const titles = blocks.map((b) => b.parsedData?.title).filter(Boolean);
-  const instructions = blocks.map((b) => b.parsedData?.instruction).filter(Boolean);
-
-  const mergedParsed: Record<string, any> = {
-    title: titles[0] || 'Actividad Didáctica Digitalizada',
-    instruction: instructions.join(' ') || ''
-  };
-
-  const bucketsSet = new Set<string>();
-  const tokens: any[] = [];
-  const items: any[] = [];
-  let tableHeaders: string[] = [];
-  const tableRows: any[] = [];
+  const primary = blocks[0].parsedData || {};
+  const mergedItems: any[] = [];
+  const mergedWordBank: string[] = [];
 
   for (const b of blocks) {
     const pd = b.parsedData || {};
-    const bList = pd.buckets || pd.suggestedBuckets || pd.categories;
-    if (Array.isArray(bList)) {
-      bList.forEach((c) => {
-        if (typeof c === 'string') bucketsSet.add(c.trim());
-        else if (c && typeof c === 'object' && c.label) bucketsSet.add(String(c.label).trim());
+    if (Array.isArray(pd.items)) mergedItems.push(...pd.items);
+    if (Array.isArray(pd.wordBank)) {
+      pd.wordBank.forEach((w: string) => {
+        if (!mergedWordBank.includes(w)) mergedWordBank.push(w);
       });
-    }
-    if (Array.isArray(pd.tokens)) tokens.push(...pd.tokens);
-    if (Array.isArray(pd.items)) items.push(...pd.items);
-    if (Array.isArray(pd.headers) && tableHeaders.length === 0) tableHeaders = pd.headers;
-    if (Array.isArray(pd.rows)) tableRows.push(...pd.rows);
-    if (Array.isArray(pd.wordBank) && pd.wordBank.length > 0 && !mergedParsed.wordBank) {
-      mergedParsed.wordBank = pd.wordBank;
     }
   }
 
-  if (bucketsSet.size > 0) {
-    mergedParsed.buckets = Array.from(bucketsSet);
-    mergedParsed.suggestedBuckets = Array.from(bucketsSet);
-  }
-  if (tokens.length > 0) mergedParsed.tokens = tokens;
-  if (items.length > 0) mergedParsed.items = items;
-  if (tableHeaders.length > 0) mergedParsed.headers = tableHeaders;
-  if (tableRows.length > 0) mergedParsed.rows = tableRows;
+  const mergedParsed: Record<string, any> = {
+    ...primary,
+    items: mergedItems.length > 0 ? mergedItems : primary.items,
+    wordBank: mergedWordBank.length > 0 ? mergedWordBank : primary.wordBank
+  };
 
   return {
     id: `consolidated-${Date.now()}`,
@@ -218,352 +204,305 @@ export function consolidateBlocks(blocks: ExtractedBlock[], sourceUrl?: string):
 }
 
 /**
- * Calls OpenRouter AI Vision API or returns structured extracted blocks.
- * Supports simultaneous multi-clipping processing in a single unified multimodal array.
+ * Structured Output schema for Google Gemini SDK and OpenRouter.
  */
-export async function digitizeBook(images: string | string[]): Promise<ExtractedBlock[]> {
-  const apiKey = import.meta.env.VITE_OPENROUTER_API_KEY;
-  const model = import.meta.env.VITE_OPENROUTER_MODEL || 'google/gemini-2.5-flash';
+const STRUCTURED_EXTRACTION_SCHEMA = {
+  type: 'object',
+  properties: {
+    title: { type: 'string', description: 'Formal activity title' },
+    referenceContent: {
+      type: 'string',
+      description: 'Passive reading passage, article, dialogue, or guidance notes (TIPS) that do NOT require interactive answers. Empty string or null if none.'
+    },
+    wordBank: {
+      type: 'array',
+      items: { type: 'string' },
+      description: 'List of vocabulary words if an explicit word box / bank is present in the image, otherwise empty array []'
+    },
+    interactionType: {
+      type: 'string',
+      enum: ['fill_blanks', 'multiple_choice', 'matching', 'buckets'],
+      description: 'The strict pedagogical archetype of the interactive exercise'
+    },
+    buckets: {
+      type: 'array',
+      items: { type: 'string' },
+      description: 'Target categories or preposition names if interactionType is buckets, otherwise omit or empty array'
+    },
+    items: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          prompt: {
+            type: 'string',
+            description: 'Visible definition, sentence with blank, or question read by the student'
+          },
+          expectedAnswer: {
+            type: 'string',
+            description: 'Canonical resolved solution deduced by you as teacher. NEVER EMPTY.'
+          },
+          acceptedAnswers: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'List of all valid variations (contractions, spelling). Must contain expectedAnswer.'
+          },
+          isExample: {
+            type: 'boolean',
+            description: 'True if this row is already filled as a sample in the book (e.g. item 1 or 5), otherwise false'
+          },
+          explanation: {
+            type: 'string',
+            description: 'Concise 1-line pedagogical justification for the grammar rule or clue'
+          },
+          options: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Candidate answer options if interactionType is multiple_choice'
+          }
+        },
+        required: ['prompt', 'expectedAnswer', 'acceptedAnswers', 'isExample', 'explanation']
+      },
+      description: 'Interactive exercise items ONLY. Never include word banks, page codes, or TIPS in items.'
+    }
+  },
+  required: ['title', 'wordBank', 'interactionType', 'items']
+};
 
-  const imageList = Array.isArray(images) ? images.filter(Boolean) : [images];
-  const primaryImage = imageList[0] || '';
+/**
+ * Builds the strict, unambiguous pedagogical System Prompt.
+ */
+function buildExtractionPrompt(imageCount: number): string {
+  return `You are an expert ELT (English Language Teaching) author, textbook editor, and master teacher.
 
-  if (!apiKey || apiKey.trim() === '' || imageList.length === 0) {
-    console.warn('[digitizeBook] No VITE_OPENROUTER_API_KEY found, returning standard parsed sample blocks.');
-    return cloneSampleBlocks(primaryImage);
-  }
-
-  const prompt = `You are an expert ELT (English Language Teaching) author, textbook editor, and master teacher.
 CRITICAL PEDAGOGICAL DIRECTIVE (AUTONOMOUS RESOLUTION):
 "Actúa como un profesor experto y autor editorial de ELT. Si el ejercicio recortado no contiene una clave de respuestas explícita o visible (por ejemplo: ejercicios de gramática para conjugar verbos entre paréntesis, transformar oraciones, completar con preposiciones o deducir vocabulario por contexto), DEBES RESOLVER TÚ MISMO el ejercicio aplicando las reglas formales de la gramática inglesa según el nivel pedagógico detectado."
 
-The exercise provided across ${imageList.length} clipping(s) MUST ARRIVE 100% COMPLETELY SOLVED AND READY BY DEFAULT.
+The exercise provided across ${imageCount} clipping(s) MUST ARRIVE 100% COMPLETELY SOLVED AND READY BY DEFAULT.
 Under NO circumstances should any interactive item have an empty expectedAnswer (""), unassigned target, or unresolved question.
 
-Analyze the image(s) carefully:
-1. "title": The main section, grammar focus, or reading title (e.g. "Grammar: Past Simple vs Present Perfect", "Reading: Secrets of Longevity").
-2. "instruction": The complete exercise instruction (e.g. "Complete the sentences with the correct form of the verbs in brackets", "Complete with the correct preposition").
-3. "content": If any clipping contains a reading passage, article, dialogue, or grammar reference text, provide the FULL complete verbatim transcription of the text here (preserving paragraphs and line breaks).
-4. "paragraphs": If the reading text has numbered or lettered paragraphs (e.g. 1, 2, 3, 4), extract them as:
-   [{"id": "1", "label": "Paragraph 1", "text": "paragraph text..."}].
-5. "detectedType": Choose the best matching type for the primary interactive activity:
-   - "numbered_list": for fill-in-blanks, cloze sentences, verb conjugations, sentence transformations, or comprehension questions.
-   - "vocabulary": for categorization / buckets / prepositions / sorting phrases.
-   - "dialogue": for sequential conversational turns or ordering dialogue steps.
-   - "table": for grammar charts or tabular data.
-   - "paragraph": for pure reading text without exercises.
+UNIVERSAL TAXONOMY & STRICT CONTRACT:
+1. "title": Formal activity or reading title (e.g. "Question Words and Meanings", "Past Simple vs Present Perfect", "Reading: Jamie Oliver").
+2. "referenceContent": Passive consultation material. Put reading passages, articles, dialogues, or instructional guidance ('TIPS!') here that provide reference context and DO NOT require an interactive answer. (null if none).
+3. "wordBank": If the clipping contains a vocabulary box, word box, or pool of words to choose from (e.g. ["Who", "What", "Where", "When", "Why", "Which", "How"]), extract ONLY the words into "wordBank". (Empty array [] if none).
+   * REGLA DE PARTICIÓN 1: NUNCA incluyas cajas de palabras (Word Banks), notas de apoyo ('TIPS!'), números de página o códigos de lección dentro de 'items'.
+4. "interactionType": Must be one of: 'fill_blanks', 'multiple_choice', 'matching', 'buckets'.
+   - Matching/vocabulary tables (e.g. 'question word | meaning', 'term | definition') are categorized as 'matching' or 'fill_blanks'.
+5. "items": Array of interactive items ONLY:
+   - "prompt": The visible text, sentence with blank, or clue/definition that the student reads (e.g. "2. _______ : a time" for matching, or "1. She _______ (live) in London." for cloze).
+   - "expectedAnswer": The canonical resolved solution deduced by you as an expert ELT teacher (e.g. "When" for "a time", "has lived" for "(live)"). MUST NEVER BE EMPTY.
+   - "acceptedAnswers": List of valid variations (contractions, spelling, or synonyms). Must include expectedAnswer.
+   - "isExample": Booleano.
+     * REGLA DE PARTICIÓN 2: Las filas que ya tienen una respuesta visible de muestra (ej. '1 Who -> a person' o '5 Which -> a thing...') deben clasificarse como "isExample": true con su respuesta respectiva, NUNCA omitirse ni dejarse en blanco.
+   - "explanation": Brief 1-line pedagogical justification of the grammar rule or clue.
+   - "options": (If multiple choice) array of choices to select from.
 
-SPECIAL RULE FOR READING TEXTS WITH EXERCISES:
-If both a reading text and an exercise are provided across the clippings:
-- Transcribe the entire reading passage into "content".
-- Put the exercise items (e.g. headings to match, cloze sentences, questions) into "items".
+CRITICAL NEGATIVE CONSTRAINTS:
+- NUNCA conviertas encabezados de tabla (ej. 'question word | meaning', 'preposition | example') ni códigos editoriales (ej. '1A 5 p5', 'Unit 1A', 'p. 5') en ítems interactivos.
+- Cada ítem interactivo debe ser un ítem real que el alumno debe completar o resolver.
+- Devuelve estrictamente el objeto JSON conforme al esquema estructurado.`;
+}
 
-AUTONOMOUS RESOLUTION DIRECTIVES BY ACTIVITY FORMAT:
+/**
+ * Universal Digitize Book: Calls Gemini via GoogleGenAI SDK or OpenRouter enforcing strict JSON Schema.
+ */
+export async function digitizeBook(images: string | string[]): Promise<ExtractedBlock[]> {
+  const imageList = Array.isArray(images) ? images.filter(Boolean) : [images];
+  const primaryImage = imageList[0] || '';
 
-A. NUMBERED LISTS / FILL IN BLANKS / GRAMMAR DRILLS / COMPREHENSION:
-For EVERY single sentence or prompt in "items", you MUST provide:
-- "text": The complete prompt sentence containing the blank (e.g. "1. She _______ (not / go) to the meeting yesterday.", "2. I _______ (already / see) that film.", "3. We arrived _______ Paris on Monday.").
-- "expectedAnswer": The canonical correct grammatical solution deduced and resolved by you according to the rules of English grammar (e.g. "didn't go", "have already seen", "in"). NEVER LEAVE EMPTY ("").
-- "acceptedAnswers": Exhaustive array of all legitimate variations:
-  * Contracted vs full forms: e.g. ["didn't go", "did not go"], ["haven't finished", "have not finished"], ["I've seen", "I have seen"], ["she's lived", "she has lived"].
-  * US vs UK spelling: e.g. ["colour", "color"], ["travelled", "traveled"], ["realise", "realize"].
-  * Optional prepositions/articles if appropriate: e.g. ["20 years old", "twenty years old", "20", "twenty"], ["in London", "London"].
-  * MUST NEVER BE EMPTY. Must always include expectedAnswer.
-- "hint": Concise 1-line pedagogical explanation justifying the applied grammar rule or text excerpt (e.g. "Past Simple for a completed action at a specific time in the past", "Present Perfect with 'already' for an action completed before now", "Preposition 'in' is used for cities and countries").
+  if (imageList.length === 0) {
+    return cloneSampleBlocks(primaryImage);
+  }
 
-B. SELECTION / MULTIPLE CHOICE QUESTIONS:
-- "questions": If multiple choice, extract questions where EXACTLY ONE option is marked "isCorrect": true with "feedback" explaining why, and other options have corrective feedback.
+  const promptText = buildExtractionPrompt(imageList.length);
 
-C. BUCKETS / PREPOSITIONS / CATEGORIZATION:
-- "buckets": Target category or preposition names (e.g. ["FOR", "IN", "TO", "WITH"]).
-- "tokens": EVERY single phrase or item found MUST have its "target" SOLVED and assigned (e.g. {"text": "apologize", "target": "FOR"}, {"text": "succeed", "target": "IN"}). NO TOKEN MAY HAVE AN EMPTY TARGET.
+  // Strategy 1: Google Gemini SDK (@google/genai) if VITE_GEMINI_API_KEY is available
+  const geminiApiKey = import.meta.env.VITE_GEMINI_API_KEY;
+  if (geminiApiKey && geminiApiKey.trim() !== '') {
+    try {
+      const ai = new GoogleGenAI({ apiKey: geminiApiKey });
+      const inlineParts: Array<{ inlineData: { mimeType: string; data: string } }> = [];
 
-D. SEQUENCE / ORDERING:
-- "items": Steps or dialogue turns with "order": 1, 2, 3... in solved chronological sequence.
-
-E. WORD BANKS & DIDACTIC MATCHING TABLES (Column A vs Column B, e.g. 'question word | meaning'):
-- "wordBank": If the clipping contains a box, frame, or pool of key words to choose from (e.g. ["Who", "Where", "When", "Why", "What", "Which", "How"]):
-  * Extract them strictly into "wordBank": ["Who", "Where", "When", "Why", "What", "Which", "How"].
-  * CRITICAL: NEVER convert the Word Bank or its listed words into question items or blank inputs!
-- Matching / Didactic Tables (e.g. 'question word | meaning', 'term | definition'):
-  * NEVER convert table headers ('question word', 'meaning', 'term', 'definition') into question items!
-  * Each row is ONE exercise item in "items":
-    - "text": The visible definition or clue formatted clearly: e.g. "1. _______ : a person", "2. _______ : a time", "3. _______ : a place".
-    - "expectedAnswer": The correct word from the Word Bank (e.g. "Who", "When", "Where").
-    - "isExample": If the textbook already has that row filled as a model/example (e.g. "1 Who -> a person"), set "isExample": true, "expectedAnswer": "Who".
-- EDITORIAL ARTIFACT FILTERING:
-  * Strictly IGNORE and PURGE any textbook layout metadata, page numbers, lesson stamps, unit codes (e.g. '1A 5 p5', 'Unit 1A', 'p. 5', 'V1.1', 'English File'). DO NOT create exercise items from page codes or lesson headers!
-
-Return ONLY a valid JSON array containing exactly ONE consolidated block object:
-[
-  {
-    "id": "block-consolidated",
-    "rawText": "complete exact combined transcription of all clippings",
-    "detectedType": "vocabulary" | "numbered_list" | "table" | "dialogue" | "paragraph",
-    "confidence": 0.98,
-    "parsedData": {
-      "title": "Exercise or Reading Title",
-      "instruction": "Exercise Instruction",
-      "content": "Full reading passage text if present...",
-      "paragraphs": [{"id": "1", "text": "..."}],
-      "wordBank": ["Who", "What", "Where", "When", "Why", "Which", "How"],
-      "buckets": ["FOR", "IN", "TO", "WITH"],
-      "tokens": [
-        {"text": "apologize", "target": "FOR"},
-        {"text": "succeed", "target": "IN"}
-      ],
-      "items": [
-        {
-          "text": "1. _______ : a person",
-          "expectedAnswer": "Who",
-          "acceptedAnswers": ["Who"],
-          "hint": "Refers to a person",
-          "isExample": true
-        },
-        {
-          "text": "2. _______ : a time",
-          "expectedAnswer": "When",
-          "acceptedAnswers": ["When"],
-          "hint": "Refers to a time or moment",
-          "isExample": false
+      for (const imgUrl of imageList) {
+        const match = imgUrl.match(/^data:([^;]+);base64,(.+)$/);
+        if (match) {
+          inlineParts.push({
+            inlineData: {
+              mimeType: match[1],
+              data: match[2],
+            },
+          });
         }
-      ],
-      "questions": [
-        {
-          "prompt": "Which sentence is grammatically correct?",
-          "mode": "single_choice",
-          "options": [
-            {"text": "She has lived here since 2018.", "isCorrect": true, "feedback": "Correct: Present Perfect with 'since'."},
-            {"text": "She lives here since 2018.", "isCorrect": false, "feedback": "Incorrect: Present Simple cannot take 'since'."}
-          ]
+      }
+
+      const contents = [promptText, ...inlineParts];
+      const candidateModels = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash'];
+
+      for (const model of candidateModels) {
+        try {
+          const response = await ai.models.generateContent({
+            model,
+            contents,
+            config: {
+              responseMimeType: 'application/json',
+              temperature: 0.1,
+            },
+          });
+
+          const rawText = response.text?.trim();
+          if (rawText) {
+            const cleanJson = rawText.replace(/```(?:json)?/gi, '').replace(/```/g, '').trim();
+            const parsed = JSON.parse(cleanJson) as ExtractedStructuredPayload;
+            return [buildExtractedBlockFromPayload(parsed, primaryImage)];
+          }
+        } catch (modelErr) {
+          console.warn(`[digitizeBook] Gemini SDK model ${model} failed, trying next candidate:`, modelErr);
         }
-      ],
-      "headers": ["Col 1", "Col 2"],
-      "rows": [["Val 1", "Val 2"]]
+      }
+    } catch (geminiErr) {
+      console.warn('[digitizeBook] Gemini SDK execution failed, falling back to OpenRouter:', geminiErr);
     }
   }
-]`;
 
-  try {
-    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`,
-        'HTTP-Referer': typeof window !== 'undefined' ? window.location.origin : 'http://localhost:5173',
-        'X-Title': 'Activity Creator IA V2'
-      },
-      body: JSON.stringify({
-        model,
-        messages: [
-          {
-            role: 'user',
-            content: [
-              {
-                type: 'text',
-                text: prompt
-              },
-              ...imageList.map((url) => ({
-                type: 'image_url',
-                image_url: {
-                  url
-                }
-              }))
-            ]
-          }
-        ],
-        temperature: 0.1
-      })
-    });
+  // Strategy 2: OpenRouter Vision API with Structured Outputs (JSON Schema)
+  const openRouterApiKey = import.meta.env.VITE_OPENROUTER_API_KEY;
+  const openRouterModel = import.meta.env.VITE_OPENROUTER_MODEL || 'google/gemini-2.5-flash';
 
-    if (!response.ok) {
-      const errText = await response.text();
-      console.warn(`[digitizeBook] OpenRouter responded with ${response.status}: ${errText}. Using fallback extraction.`);
-      return cloneSampleBlocks(primaryImage);
-    }
-
-    const data = await response.json();
-    const rawContent = data.choices?.[0]?.message?.content;
-
-    if (!rawContent) {
-      console.warn('[digitizeBook] Empty response content from OpenRouter. Using fallback extraction.');
-      return cloneSampleBlocks(primaryImage);
-    }
-
-    // Clean JSON response (strip markdown fences if present)
-    const jsonStr = rawContent.replace(/```(?:json)?/gi, '').replace(/```/g, '').trim();
-    const parsed = JSON.parse(jsonStr);
-
-    const rawArray = Array.isArray(parsed) 
-      ? parsed 
-      : (parsed && typeof parsed === 'object' ? [parsed] : []);
-
-    if (rawArray.length > 0) {
-      const parsedBlocks: ExtractedBlock[] = rawArray.map((item, idx) => {
-        const block: ExtractedBlock = {
-          id: item.id || `ocr-gen-${Date.now()}-${idx}`,
-          rawText: item.rawText || '',
-          detectedType: item.detectedType || 'paragraph',
-          confidence: typeof item.confidence === 'number' ? item.confidence : 0.95,
-          sourceImageSnippetUrl: primaryImage,
-          parsedData: item.parsedData || {}
-        };
-        return sanitizeExtractedBlock(block);
+  if (openRouterApiKey && openRouterApiKey.trim() !== '') {
+    try {
+      const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${openRouterApiKey}`,
+          'HTTP-Referer': typeof window !== 'undefined' ? window.location.origin : 'http://localhost:5173',
+          'X-Title': 'Activity Creator IA V2',
+        },
+        body: JSON.stringify({
+          model: openRouterModel,
+          messages: [
+            {
+              role: 'user',
+              content: [
+                { type: 'text', text: promptText },
+                ...imageList.map((url) => ({
+                  type: 'image_url',
+                  image_url: { url },
+                })),
+              ],
+            },
+          ],
+          response_format: {
+            type: 'json_schema',
+            json_schema: {
+              name: 'activity_extraction',
+              strict: true,
+              schema: STRUCTURED_EXTRACTION_SCHEMA,
+            },
+          },
+          temperature: 0.1,
+        }),
       });
 
-      // Consolidate into 1 unified holistic activity block
-      return [consolidateBlocks(parsedBlocks, primaryImage)];
+      if (response.ok) {
+        const data = await response.json();
+        const rawContent = data.choices?.[0]?.message?.content;
+        if (rawContent) {
+          const cleanJson = rawContent.replace(/```(?:json)?/gi, '').replace(/```/g, '').trim();
+          const parsed = JSON.parse(cleanJson) as ExtractedStructuredPayload;
+          return [buildExtractedBlockFromPayload(parsed, primaryImage)];
+        }
+      }
+    } catch (orErr) {
+      console.warn('[digitizeBook] OpenRouter vision call failed:', orErr);
+    }
+  }
+
+  // Fallback to manual template if all Vision APIs are unavailable
+  return cloneSampleBlocks(primaryImage);
+}
+
+/**
+ * Transforms the strict structured payload into a standardized ExtractedBlock.
+ */
+function buildExtractedBlockFromPayload(
+  payload: ExtractedStructuredPayload,
+  sourceUrl: string
+): ExtractedBlock {
+  const sanitized = sanitizeExtractedPayload(payload);
+
+  const rawTextParts = [
+    sanitized.title,
+    sanitized.referenceContent,
+    ...sanitized.items.map((i) => i.prompt),
+  ].filter(Boolean);
+
+  const detectedType: ExtractedBlock['detectedType'] =
+    sanitized.interactionType === 'buckets' ? 'vocabulary' : 'numbered_list';
+
+  return {
+    id: `ocr-gen-${Date.now()}`,
+    rawText: rawTextParts.join('\n\n'),
+    detectedType,
+    confidence: 0.98,
+    sourceImageSnippetUrl: sourceUrl,
+    parsedData: {
+      title: sanitized.title,
+      referenceContent: sanitized.referenceContent || undefined,
+      content: sanitized.referenceContent || undefined,
+      wordBank: sanitized.wordBank.length > 0 ? sanitized.wordBank : undefined,
+      interactionType: sanitized.interactionType,
+      buckets: sanitized.buckets,
+      items: sanitized.items,
+    },
+  };
+}
+
+/**
+ * Pure, defensive normalization of structured payload:
+ * Guarantees that every item has expectedAnswer, acceptedAnswers, and isExample boolean.
+ * ZERO ad-hoc heuristics, zero arbitrary word counts, zero string patching.
+ */
+function sanitizeExtractedPayload(payload: ExtractedStructuredPayload): ExtractedStructuredPayload {
+  const items = Array.isArray(payload.items) ? payload.items : [];
+
+  const sanitizedItems = items.map((it, idx) => {
+    const prompt = String(it.prompt || `Item ${idx + 1}`).trim();
+    const expectedAnswer = String(it.expectedAnswer || '').trim() || `Respuesta ${idx + 1}`;
+    let acceptedAnswers = Array.isArray(it.acceptedAnswers) && it.acceptedAnswers.length > 0
+      ? it.acceptedAnswers.map((a) => String(a).trim()).filter(Boolean)
+      : [expectedAnswer];
+
+    if (!acceptedAnswers.includes(expectedAnswer)) {
+      acceptedAnswers.unshift(expectedAnswer);
     }
 
-    console.warn('[digitizeBook] Parsed JSON is empty. Using fallback extraction.');
-    return cloneSampleBlocks(primaryImage);
-  } catch (error) {
-    console.error('[digitizeBook] Error during vision API call:', error);
-    return cloneSampleBlocks(primaryImage);
-  }
+    return {
+      prompt,
+      expectedAnswer,
+      acceptedAnswers,
+      isExample: Boolean(it.isExample),
+      explanation: String(it.explanation || '').trim(),
+      options: Array.isArray(it.options) ? it.options : undefined,
+    };
+  });
+
+  return {
+    title: String(payload.title || 'Actividad Digitalizada').trim(),
+    referenceContent: payload.referenceContent ? String(payload.referenceContent).trim() : null,
+    wordBank: Array.isArray(payload.wordBank)
+      ? payload.wordBank.map((w) => String(w).trim()).filter(Boolean)
+      : [],
+    interactionType: payload.interactionType || 'fill_blanks',
+    buckets: Array.isArray(payload.buckets)
+      ? payload.buckets.map((b) => String(b).trim()).filter(Boolean)
+      : undefined,
+    items: sanitizedItems,
+  };
 }
 
 function cloneSampleBlocks(sourceImageSnippetUrl?: string): ExtractedBlock[] {
   const fallback = createManualBlock('input_fields');
   fallback.sourceImageSnippetUrl = sourceImageSnippetUrl;
   return [fallback];
-}
-
-/**
- * Guarantees that all extracted blocks arrive 100% resolved and ready:
- * - Fill in blanks / numbered items: expectedAnswer is never empty, acceptedAnswers has variants, hint is set.
- * - Selection questions: at least one option is resolved as isCorrect: true with pedagogical feedback.
- * - Buckets / vocabulary: every token has a non-empty target assigned.
- */
-function sanitizeExtractedBlock(block: ExtractedBlock): ExtractedBlock {
-  const pd = block.parsedData || {};
-
-  // 0. Clean wordBank if present
-  if (Array.isArray(pd.wordBank)) {
-    pd.wordBank = pd.wordBank.map((w: any) => String(w).trim()).filter(Boolean);
-  }
-
-  // Helper to detect editorial artifacts (page codes, table headers, etc.)
-  const isEditorialArtifact = (rawStr: string): boolean => {
-    const s = rawStr.trim();
-    if (!s) return true;
-    // Page codes like "1A 5 p5", "1A p5", "p. 5", "page 5", "Unit 1A"
-    if (/^(?:\d+[A-Z]?\s*\d*\s*p\.?\s*\d+|p\.?\s*\d+|page\s*\d+|unit\s*\d+[a-z]?|v\d+\.\d+)$/i.test(s)) {
-      return true;
-    }
-    // Table headers mistakenly captured as items: "question word | meaning", "question words", "meaning"
-    if (/^(?:question\s*words?|meanings?|question\s*word\s*\|\s*meaning|word\s*bank|vocabulary)$/i.test(s)) {
-      return true;
-    }
-    return false;
-  };
-
-  // 1. Sanitize items (numbered_list / fill-in-blanks)
-  if (Array.isArray(pd.items)) {
-    // Filter out editorial artifacts and standalone wordBank duplicates
-    pd.items = pd.items.filter((it: any) => {
-      const text = typeof it === 'string' ? it : String(it.text || it.prompt || '');
-      return !isEditorialArtifact(text);
-    });
-
-    pd.items = pd.items.map((it: any, idx: number) => {
-      const isExample = typeof it === 'object' && it !== null
-        ? Boolean(it.isExample || it.example || /\[example\]|\(example\)/i.test(String(it.text || '')))
-        : false;
-
-      if (typeof it === 'string') {
-        const text = it.trim();
-        const parenMatch = text.match(/\(([^)]+)\)/);
-        const derived = parenMatch && parenMatch[1].trim().length < 30 ? parenMatch[1].trim() : `Respuesta ${idx + 1}`;
-        return {
-          text,
-          expectedAnswer: derived,
-          acceptedAnswers: [derived],
-          hint: 'Solución gramatical canónica',
-          isExample
-        };
-      }
-      if (typeof it === 'object' && it !== null) {
-        let expected = String(it.expectedAnswer || it.answer || it.correctAnswer || '').trim();
-        const prompt = String(it.text || it.prompt || `Pregunta ${idx + 1}`).trim();
-
-        if (!expected) {
-          const bracketMatch = prompt.match(/\[(?:correct|answer|key)?\s*:?\s*([^\]]+)\]/i);
-          if (bracketMatch) {
-            expected = bracketMatch[1].trim();
-          } else {
-            const parenMatch = prompt.match(/\(([^)]+)\)/);
-            if (parenMatch && parenMatch[1].trim().length < 30 && !parenMatch[1].toLowerCase().includes('párrafo')) {
-              expected = parenMatch[1].trim();
-            } else {
-              expected = `Respuesta ${idx + 1}`;
-            }
-          }
-        }
-
-        let accepted: string[] = [];
-        if (Array.isArray(it.acceptedAnswers) && it.acceptedAnswers.length > 0) {
-          accepted = it.acceptedAnswers.map((a: any) => String(a).trim()).filter(Boolean);
-        } else if (it.answer) {
-          accepted = [String(it.answer).trim()];
-        }
-        if (!accepted.includes(expected)) {
-          accepted.unshift(expected);
-        }
-
-        return {
-          ...it,
-          text: prompt,
-          expectedAnswer: expected,
-          acceptedAnswers: accepted,
-          hint: it.hint || it.explanation || 'Regla gramatical aplicada según el contexto',
-          isExample
-        };
-      }
-      return it;
-    });
-  }
-
-  // 2. Sanitize selection questions
-  if (Array.isArray(pd.questions)) {
-    pd.questions = pd.questions.map((q: any) => {
-      if (typeof q === 'object' && q !== null && Array.isArray(q.options) && q.options.length > 0) {
-        const hasCorrect = q.options.some((o: any) => o && o.isCorrect === true);
-        if (!hasCorrect) {
-          const marked = q.options.find((o: any) => /\[correct\]|\(correct\)/i.test(String(o?.text || ''))) || q.options[0];
-          if (marked) {
-            marked.isCorrect = true;
-            if (!marked.feedback) {
-              marked.feedback = 'Opción correcta según las reglas gramaticales.';
-            }
-          }
-        }
-      }
-      return q;
-    });
-  }
-
-  // 3. Sanitize bucket tokens
-  if (Array.isArray(pd.tokens)) {
-    const bucketsList = (pd.buckets || pd.suggestedBuckets || []) as string[];
-    pd.tokens = pd.tokens.map((tok: any, idx: number) => {
-      if (typeof tok === 'object' && tok !== null) {
-        let target = String(tok.target || tok.category || tok.bucket || '').trim();
-        if (!target && bucketsList.length > 0) {
-          target = bucketsList[idx % bucketsList.length];
-        }
-        return {
-          ...tok,
-          text: String(tok.text || ''),
-          target
-        };
-      }
-      return tok;
-    });
-  }
-
-  return {
-    ...block,
-    parsedData: pd
-  };
 }
