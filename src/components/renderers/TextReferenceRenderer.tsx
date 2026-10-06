@@ -218,39 +218,6 @@ export const TextReferenceRenderer: React.FC<Props> = ({
         </div>
       )}
 
-      {/* Contextual/Cover Image (if present) */}
-      {block.imageUrl && (
-        <div className="relative mb-3.5 group rounded-xl overflow-hidden border border-slate-200/90 shadow-2xs max-h-48 sm:max-h-56 bg-slate-100">
-          <img
-            src={block.imageUrl}
-            alt={block.title || 'Context reference illustration'}
-            className="w-full h-44 sm:h-52 object-cover transition-transform duration-300 group-hover:scale-[1.01]"
-            loading="lazy"
-          />
-          {isEditMode && (
-            <div className="absolute top-2 right-2 flex items-center gap-1.5 opacity-90 group-hover:opacity-100 transition">
-              <button
-                type="button"
-                onClick={() => setIsPickerOpen(true)}
-                className="px-2.5 py-1 bg-white/95 hover:bg-white text-slate-700 text-xs font-semibold rounded-lg shadow-sm border border-slate-200/80 backdrop-blur-xs flex items-center gap-1 cursor-pointer transition"
-                title="Cambiar imagen"
-              >
-                <Camera className="w-3.5 h-3.5 text-indigo-600" />
-                <span>Cambiar</span>
-              </button>
-              <button
-                type="button"
-                onClick={handleRemoveImage}
-                className="p-1 bg-white/95 hover:bg-rose-50 text-slate-500 hover:text-rose-600 rounded-lg shadow-sm border border-slate-200/80 backdrop-blur-xs cursor-pointer transition"
-                title="Quitar imagen"
-              >
-                <X className="w-3.5 h-3.5" />
-              </button>
-            </div>
-          )}
-        </div>
-      )}
-
       {/* Title */}
       {isEditMode ? (
         <input
@@ -262,25 +229,76 @@ export const TextReferenceRenderer: React.FC<Props> = ({
         />
       ) : (
         block.title && (
-          <h3 className="text-base font-bold text-slate-900 mb-2.5">
+          <h3 className="text-base font-bold text-slate-900 mb-3 tracking-tight">
             {block.title}
           </h3>
         )
       )}
 
-      {/* Text Body */}
-      <div className="flex-1 overflow-y-auto">
+      {/* Content Area */}
+      <div className="flex-1 overflow-y-auto pr-1">
         {isEditMode ? (
-          <textarea
-            value={block.content}
-            onChange={(e) => onChange?.({ ...block, content: e.target.value })}
-            placeholder="Escribe el pasaje de lectura, diálogo o explicación..."
-            rows={7}
-            className="w-full h-full text-sm leading-relaxed text-slate-700 bg-slate-50/70 border border-slate-200 rounded-xl p-3.5 outline-none focus:border-indigo-500 focus:bg-white resize-none"
-          />
+          /* Edit Mode: Clean structured flow with preview card and textarea */
+          <div className="flex flex-col gap-3 h-full">
+            {block.imageUrl && (
+              <div className="w-fit max-w-full mx-auto sm:mx-0">
+                <div className="bg-slate-50 dark:bg-slate-900/50 p-2 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-md shadow-slate-200/50 dark:shadow-none relative group transition-all">
+                  <img
+                    src={block.imageUrl}
+                    alt={block.title || 'Context reference illustration'}
+                    className="object-contain max-h-60 w-auto mx-auto rounded-xl block"
+                    loading="lazy"
+                  />
+                  <div className="absolute top-3 right-3 flex items-center gap-1.5 opacity-90 group-hover:opacity-100 transition z-10">
+                    <button
+                      type="button"
+                      onClick={() => setIsPickerOpen(true)}
+                      className="px-2.5 py-1 bg-white/95 hover:bg-white text-slate-700 text-xs font-semibold rounded-lg shadow-sm border border-slate-200 backdrop-blur-xs flex items-center gap-1 cursor-pointer transition"
+                      title="Cambiar imagen"
+                    >
+                      <Camera className="w-3.5 h-3.5 text-indigo-600" />
+                      <span>Cambiar</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleRemoveImage}
+                      className="p-1 bg-white/95 hover:bg-rose-50 text-slate-500 hover:text-rose-600 rounded-lg shadow-sm border border-slate-200 backdrop-blur-xs cursor-pointer transition"
+                      title="Quitar imagen"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+            <textarea
+              value={block.content}
+              onChange={(e) => onChange?.({ ...block, content: e.target.value })}
+              placeholder="Escribe el pasaje de lectura, diálogo o explicación..."
+              rows={7}
+              className="w-full flex-1 min-h-[140px] text-sm leading-relaxed text-slate-700 bg-slate-50/70 border border-slate-200 rounded-xl p-3.5 outline-none focus:border-indigo-500 focus:bg-white resize-none"
+            />
+          </div>
         ) : (
-          <div className="text-sm leading-relaxed text-slate-700 space-y-3 whitespace-pre-line">
-            {block.content}
+          /* Student / Preview Mode: Editorial magazine/textbook layout with floating picture frame */
+          <div className="text-sm leading-relaxed text-slate-700">
+            {block.imageUrl && (
+              <div className="sm:float-right sm:ml-4 sm:mb-3 mb-4 w-full sm:w-auto max-w-full sm:max-w-[48%] flex-shrink-0">
+                <div className="bg-slate-50 dark:bg-slate-900/50 p-2 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-md shadow-slate-200/50 dark:shadow-none relative group transition-all">
+                  <img
+                    src={block.imageUrl}
+                    alt={block.title || 'Context reference illustration'}
+                    className="object-contain max-h-60 w-auto mx-auto rounded-xl block"
+                    loading="lazy"
+                  />
+                </div>
+              </div>
+            )}
+            <div className="space-y-3 whitespace-pre-line">
+              {block.content}
+            </div>
+            {/* Clearfix */}
+            <div className="clear-both" />
           </div>
         )}
       </div>
