@@ -511,12 +511,16 @@ export function mapBlockToReferenceTable(block: ExtractedBlock): ReferenceTableB
 export function mapBlockToReferenceText(block: ExtractedBlock): ReferenceTextBlock {
   const parsed = block.parsedData || {};
 
-  const content = String(
-    parsed.referenceContent ||
-    parsed.content ||
-    block.rawText ||
-    ''
-  ).trim();
+  let rawContent = parsed.referenceContent || parsed.content;
+  if (Array.isArray(rawContent)) {
+    rawContent = rawContent.map((s) => String(s).trim()).filter(Boolean).join('\n\n');
+  } else if (!rawContent && Array.isArray(parsed.paragraphs) && parsed.paragraphs.length > 0) {
+    rawContent = parsed.paragraphs.map((s: any) => String(s).trim()).filter(Boolean).join('\n\n');
+  } else if (!rawContent) {
+    rawContent = block.rawText || '';
+  }
+
+  const content = String(rawContent).trim();
 
   return {
     type: 'text',

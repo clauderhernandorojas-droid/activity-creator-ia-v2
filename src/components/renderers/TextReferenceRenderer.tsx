@@ -28,14 +28,16 @@ export const TextReferenceRenderer: React.FC<Props> = ({
 
   const paragraphs = React.useMemo(() => {
     if (!block.content) return [];
-    if (/\n\s*\n/.test(block.content)) {
-      return block.content.split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean);
+    const normalized = block.content.replace(/\r\n/g, '\n');
+    // Split by 2 or more consecutive newlines into distinct paragraphs / sections
+    const blocks = normalized
+      .split(/\n{2,}/)
+      .map((p) => p.trim())
+      .filter(Boolean);
+    if (blocks.length > 0) {
+      return blocks;
     }
-    const lines = block.content.split('\n').map((p) => p.trim()).filter(Boolean);
-    if (lines.length > 1) {
-      return lines;
-    }
-    return [block.content.trim()];
+    return [normalized.trim()];
   }, [block.content]);
 
   const addImages = (newImagesList: string[]) => {
@@ -393,7 +395,7 @@ export const TextReferenceRenderer: React.FC<Props> = ({
               onChange={(e) => onChange?.({ ...block, content: e.target.value })}
               placeholder="Escribe el pasaje de lectura, diálogo o explicación..."
               rows={7}
-              className="w-full flex-1 min-h-[140px] text-sm leading-relaxed text-slate-700 bg-slate-50/70 border border-slate-200 rounded-xl p-3.5 outline-none focus:border-indigo-500 focus:bg-white resize-none"
+              className="w-full flex-1 min-h-[140px] text-sm leading-relaxed text-slate-700 bg-slate-50/70 border border-slate-200 rounded-xl p-3.5 outline-none focus:border-indigo-500 focus:bg-white resize-y whitespace-pre-line font-sans"
             />
           </div>
         ) : (
@@ -431,15 +433,15 @@ export const TextReferenceRenderer: React.FC<Props> = ({
                 </div>
               </div>
             ) : null}
-            <div className="space-y-4 font-normal text-slate-800 leading-relaxed text-sm sm:text-[15px]">
+            <div className="space-y-4 font-normal text-slate-800 leading-relaxed text-sm sm:text-[15px] whitespace-pre-line break-words">
               {paragraphs.length > 0 ? (
                 paragraphs.map((paragraph, idx) => (
-                  <p key={idx} className="whitespace-pre-line">
+                  <p key={idx} className="whitespace-pre-line break-words leading-relaxed">
                     {paragraph}
                   </p>
                 ))
               ) : (
-                <p className="whitespace-pre-line">{block.content}</p>
+                <p className="whitespace-pre-line break-words leading-relaxed">{block.content}</p>
               )}
             </div>
             {/* Clearfix */}

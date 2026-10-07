@@ -366,10 +366,14 @@ REGLAS UNIVERSALES DE BANCO DE OPCIONES Y ASIGNACIÓN BIUNÍVOCA:
   * El material o bloque al que se remite DEBE serializarse íntegramente dentro de \`referenceContent\` (como texto pasivo de consulta).
   * Únicamente las preguntas, oraciones o reactivos derivados de la instrucción activa deben serializarse en \`items\` interactivos.
   * NUNCA fusiones las preguntas del material de referencia con las preguntas de la tarea activa en una sola lista de items interactivos.
+- Regla Universal de Formato y Estructura en Referencias: Al capturar contenido para \`referenceContent\` (pasajes de lectura, diálogos, explicaciones o listas de consulta):
+  * DEBES preservar fielmente la estructura visual y los saltos de línea del documento original.
+  * Separa párrafos o secciones temáticas utilizando saltos de línea explícitos dobles (\`\\n\\n\`).
+  * En líneas de diálogo (ej. 'Speaker A: ...\\nSpeaker B: ...'), listas numeradas, viñetas o reglas paso a paso, preserva cada elemento en su línea respectiva mediante saltos de línea (\`\\n\`), evitando que el texto se colapse en un único bloque apelmazado.
 
 UNIVERSAL TAXONOMY & STRICT CONTRACT:
 1. "title": Formal activity or reading title.
-2. "referenceContent": Passive consultation material. Put reading passages, articles, dialogues, or instructional guidance ('TIPS!') here that provide reference context and DO NOT require an interactive answer. (null if none).
+2. "referenceContent": Passive consultation material. Put reading passages, articles, dialogues, or instructional guidance ('TIPS!') here that provide reference context and DO NOT require an interactive answer. (null if none). Preserva fielmente la estructura visual y saltos de línea del documento original ('\\n\\n' entre párrafos y '\\n' entre turnos de diálogo o listas).
 3. "wordBank": If the clipping contains a vocabulary box, word box, container, or pool of options to choose from, extract ONLY the available options into "wordBank" as string[] (sean cadenas simples o compuestas por varios términos). (Empty array [] if none).
    * REGLA DE PARTICIÓN 1: NUNCA incluyas cajas de palabras (Word Banks), notas de apoyo ('TIPS!'), números de página o códigos de lección dentro de 'items'.
 4. "interactionType": Must be one of: 'fill_blanks', 'multiple_choice', 'matching', 'buckets'.
@@ -620,7 +624,9 @@ function sanitizeExtractedPayload(payload: ExtractedStructuredPayload): Extracte
 
   return {
     title: String(payload.title || 'Actividad Digitalizada').trim(),
-    referenceContent: payload.referenceContent ? String(payload.referenceContent).trim() : null,
+    referenceContent: Array.isArray(payload.referenceContent)
+      ? payload.referenceContent.map((s) => String(s).trim()).filter(Boolean).join('\n\n')
+      : (payload.referenceContent ? String(payload.referenceContent).trim() : null),
     wordBank: Array.isArray(payload.wordBank)
       ? payload.wordBank.map((w) => String(w).trim()).filter(Boolean)
       : [],
