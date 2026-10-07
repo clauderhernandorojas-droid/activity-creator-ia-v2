@@ -224,6 +224,7 @@ export const SlideSchema = z.object({
   layout: SlideLayoutSchema.default('split_50_50'),
   referenceContent: ReferenceBlockSchema.nullable().optional(),
   interaction: InteractionBlockSchema.nullable().optional(),
+  cachedInteraction: InteractionBlockSchema.nullable().optional(),
   notes: z.string().optional(),
 });
 

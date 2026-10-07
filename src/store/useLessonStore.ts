@@ -355,6 +355,7 @@ export const useLessonStore = create<LessonState>()(
           layout: 'split_50_50',
           referenceContent: mapped.reference || null,
           interaction: mapped.interaction || null,
+          cachedInteraction: mapped.interaction || null,
           notes: '',
         };
 
@@ -467,7 +468,7 @@ export const useLessonStore = create<LessonState>()(
           lesson: {
             ...state.lesson,
             slides: state.lesson.slides.map((s) =>
-              s.id === slideId ? { ...s, interaction: block } : s
+              s.id === slideId ? { ...s, interaction: block, cachedInteraction: block } : s
             ),
           },
         }));
@@ -677,7 +678,7 @@ export const useLessonStore = create<LessonState>()(
               return {
                 ...slide,
                 ...(mapped.reference ? { referenceContent: mapped.reference } : {}),
-                ...(mapped.interaction ? { interaction: mapped.interaction } : {}),
+                ...(mapped.interaction ? { interaction: mapped.interaction, cachedInteraction: mapped.interaction } : {}),
               };
             }),
           },

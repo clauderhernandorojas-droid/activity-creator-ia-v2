@@ -516,11 +516,12 @@ export function mapBlockToReferenceText(block: ExtractedBlock): ReferenceTextBlo
     rawContent = rawContent.map((s) => String(s).trim()).filter(Boolean).join('\n\n');
   } else if (!rawContent && Array.isArray(parsed.paragraphs) && parsed.paragraphs.length > 0) {
     rawContent = parsed.paragraphs.map((s: any) => String(s).trim()).filter(Boolean).join('\n\n');
-  } else if (!rawContent) {
+  } else if (!rawContent && (!parsed.items || parsed.items.length === 0)) {
+    // Only use rawText if this block has NO interactive items (i.e. it's truly a pure reading block)
     rawContent = block.rawText || '';
   }
 
-  const content = String(rawContent).trim();
+  const content = String(rawContent || '').trim();
 
   return {
     type: 'text',
@@ -574,10 +575,78 @@ export function mapBlockToRole(
 }
 
 /**
+ * Reverse mapping: Parses plain reference text into interactive items for input_fields
+ * to guarantee that converting from reference_text never produces listItems: [].
+ */
+export function parseTextToInteractiveItems(text: string): InputFieldListItem[] {
+  if (!text || !text.trim()) return [];
+
+  const lines = text
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean);
+
+  if (lines.length === 0) return [];
+
+  const items: InputFieldListItem[] = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+
+    // Detect bullet or number: "1. ", "1) ", "A. ", "- ", etc.
+    const numberedMatch = line.match(/^(?:(?:\(?\d+[.)]?|[a-zA-Z][.)])\s+)(.*)$/);
+    const content = numberedMatch ? numberedMatch[1].trim() : line;
+
+    // Check if line contains a blank
+    const hasBlank = /_{2,}|\[\s*\]|\(\s*\)/.test(content);
+
+    // Check for definition or answer indicator: "Prompt - Answer" or "Prompt : Answer"
+    const dashMatch = content.match(/^([^:\-–—]+)\s*[:\-–—]\s*(.+)$/);
+    // Check for answer hint in parentheses at end: "She went (go)"
+    const parenMatch = content.match(/(.*?)\s*\(([^)]+)\)\s*$/);
+
+    let prompt = line;
+    let expectedAnswer = '';
+
+    if (hasBlank) {
+      prompt = line;
+      const wordInParen = line.match(/\(([^)]+)\)/);
+      if (wordInParen) {
+        expectedAnswer = wordInParen[1].trim();
+      }
+    } else if (parenMatch) {
+      prompt = `${numberedMatch ? `${line.split(/\s+/)[0]} ` : ''}${parenMatch[1].trim()} _______`;
+      expectedAnswer = parenMatch[2].trim();
+    } else if (dashMatch && !numberedMatch) {
+      prompt = `${dashMatch[1].trim()} _______`;
+      expectedAnswer = dashMatch[2].trim();
+    } else if (numberedMatch) {
+      prompt = content.includes('___') ? line : `${line} _______`;
+    } else {
+      prompt = `${line} _______`;
+    }
+
+    const acceptedAnswers = expectedAnswer
+      ? Array.from(new Set([expectedAnswer, ...generateGrammarVariants(expectedAnswer)]))
+      : [];
+
+    items.push({
+      id: generateId('item'),
+      prompt,
+      expectedAnswer,
+      acceptedAnswers,
+      isExample: i === 0 && Boolean(expectedAnswer),
+    });
+  }
+
+  return items;
+}
+
+/**
  * Serializes any active Slide's interaction and reference back into a typed ExtractedBlock.
  */
 export function slideToExtractedBlock(slide: Slide): ExtractedBlock {
-  const inter = slide.interaction;
+  const inter = slide.interaction || slide.cachedInteraction;
   const ref = slide.referenceContent;
 
   const title = slide.title || (ref && 'title' in ref ? ref.title : '') || 'Actividad Didáctica';
@@ -624,17 +693,28 @@ export function slideToExtractedBlock(slide: Slide): ExtractedBlock {
         break;
 
       case 'selection':
-        items = (inter.questions || []).map((q) => {
-          const correctOpt = q.options.find((o) => o.isCorrect);
-          return {
-            prompt: q.prompt,
-            expectedAnswer: correctOpt?.text || q.options[0]?.text || '',
-            acceptedAnswers: correctOpt ? [correctOpt.text] : [],
-            options: q.options.map((o) => o.text),
+        if (Array.isArray(inter.questions) && inter.questions.length > 0) {
+          items = inter.questions.map((q) => {
+            const correctOpt = q.options.find((o) => o.isCorrect);
+            return {
+              prompt: q.prompt,
+              expectedAnswer: correctOpt?.text || q.options[0]?.text || '',
+              acceptedAnswers: correctOpt ? [correctOpt.text] : [],
+              options: q.options.map((o) => o.text),
+              isExample: false,
+              explanation: correctOpt?.feedback
+            };
+          });
+        } else if (Array.isArray(inter.options) && inter.options.length > 0) {
+          items = inter.options.map((opt) => ({
+            prompt: opt.text,
+            expectedAnswer: opt.isCorrect ? opt.text : '',
+            acceptedAnswers: opt.isCorrect ? [opt.text] : [],
+            options: [opt.text],
             isExample: false,
-            explanation: correctOpt?.feedback
-          };
-        });
+            explanation: opt.feedback
+          }));
+        }
         break;
 
       case 'buckets_matching':
@@ -665,13 +745,6 @@ export function slideToExtractedBlock(slide: Slide): ExtractedBlock {
     }
   }
 
-  const rawTextParts = [
-    title,
-    instruction,
-    referenceContent,
-    ...items.map((i) => i.prompt || i.text || '')
-  ].filter(Boolean);
-
   const detectedType = inter?.type === 'buckets_matching'
     ? 'vocabulary'
     : inter?.type === 'input_fields' && inter.layoutMode === 'table'
@@ -682,7 +755,9 @@ export function slideToExtractedBlock(slide: Slide): ExtractedBlock {
     id: `converted-block-${Date.now()}`,
     detectedType,
     confidence: 1.0,
-    rawText: rawTextParts.join('\n\n'),
+    rawText: items.length > 0
+      ? items.map((i) => i.prompt || '').join('\n\n')
+      : (referenceContent || ''),
     parsedData: {
       title,
       instruction,
@@ -701,20 +776,145 @@ export function slideToExtractedBlock(slide: Slide): ExtractedBlock {
 
 /**
  * Dynamically converts a Slide's archetype on-the-fly without losing extracted data.
+ * Orthogonality Rule: Reference content and Interaction content are independent channels.
+ * Converting the interaction never pollutes or erases referenceContent, and switching
+ * to reference preserves active interaction in cachedInteraction.
  */
 export function convertSlideToRole(slide: Slide, targetRole: PedagogicalRole): Slide {
-  const block = slideToExtractedBlock(slide);
-  const mapped = mapBlockToRole(block, targetRole);
-
   const isTargetReference = targetRole === 'reference_text' || targetRole === 'reference_table';
+  const currentInteraction = slide.interaction || slide.cachedInteraction || null;
+
+  // =========================================================================
+  // CASE 1: TARGET IS REFERENCE (reference_text or reference_table)
+  // =========================================================================
+  if (isTargetReference) {
+    // Preserve current interaction in cachedInteraction so it can be restored completely
+    const nextCached = slide.interaction || slide.cachedInteraction || null;
+
+    let nextReference = slide.referenceContent;
+
+    // If slide does NOT have referenceContent yet, create a clean one
+    if (!nextReference) {
+      if (targetRole === 'reference_table') {
+        if (currentInteraction && currentInteraction.type === 'input_fields' && currentInteraction.layoutMode === 'table') {
+          nextReference = {
+            type: 'table_reference',
+            id: generateId('ref-tbl'),
+            title: slide.title || 'Cuadro de Referencia',
+            headers: currentInteraction.tableHeaders || ['Columna 1', 'Columna 2'],
+            rows: currentInteraction.tableRows.map((r) => r.map((c) => c.text || c.expectedAnswer || ''))
+          };
+        } else {
+          nextReference = {
+            type: 'table_reference',
+            id: generateId('ref-tbl'),
+            title: slide.title || 'Cuadro de Referencia',
+            headers: ['Columna 1', 'Columna 2'],
+            rows: [['', '']]
+          };
+        }
+      } else {
+        // Clean reference text without polluting questions
+        nextReference = {
+          type: 'text',
+          id: generateId('ref-txt'),
+          title: slide.title || 'Lectura / Notas de Referencia',
+          content: '',
+          category: 'reading'
+        };
+      }
+    }
+
+    return {
+      ...slide,
+      referenceContent: nextReference,
+      interaction: null,
+      cachedInteraction: nextCached
+    };
+  }
+
+  // =========================================================================
+  // CASE 2: TARGET IS INTERACTIVE (inputs, selection, buckets, sequence)
+  // =========================================================================
+  
+  // Rule: referenceContent is ORTHOGONAL to interaction.
+  // We NEVER touch or overwrite slide.referenceContent!
+  const nextReference = slide.referenceContent || null;
+
+  let nextInteraction: InteractionBlock | null = null;
+
+  // Subcase 2A: We already have an active or cached interaction
+  if (currentInteraction) {
+    const isSameType = (
+      (targetRole === 'interaction_inputs' && currentInteraction.type === 'input_fields') ||
+      (targetRole === 'interaction_selection' && currentInteraction.type === 'selection') ||
+      (targetRole === 'interaction_buckets' && currentInteraction.type === 'buckets_matching') ||
+      (targetRole === 'interaction_sequence' && currentInteraction.type === 'sequence')
+    );
+
+    if (isSameType) {
+      nextInteraction = currentInteraction;
+    } else {
+      // Convert currentInteraction to targetRole without touching referenceContent
+      const block = slideToExtractedBlock({
+        ...slide,
+        interaction: currentInteraction,
+        referenceContent: null
+      });
+      const mapped = mapBlockToRole(block, targetRole);
+      nextInteraction = mapped.interaction || null;
+    }
+  } else {
+    // Subcase 2B: No interaction existed yet (slide was purely reference)
+    // Run recovery parsing on slide.referenceContent so listItems is NEVER empty!
+    if (slide.referenceContent && slide.referenceContent.type === 'text') {
+      const items = parseTextToInteractiveItems(slide.referenceContent.content);
+      const block: ExtractedBlock = {
+        id: `recovered-${Date.now()}`,
+        detectedType: 'numbered_list',
+        confidence: 1.0,
+        rawText: slide.referenceContent.content,
+        parsedData: {
+          title: slide.title || 'Actividad Didáctica',
+          instruction: slide.subtitle || 'Completa la actividad:',
+          items
+        }
+      };
+      const mapped = mapBlockToRole(block, targetRole);
+      nextInteraction = mapped.interaction || null;
+    } else if (slide.referenceContent && slide.referenceContent.type === 'table_reference') {
+      const block: ExtractedBlock = {
+        id: `recovered-${Date.now()}`,
+        detectedType: 'table',
+        confidence: 1.0,
+        rawText: '',
+        parsedData: {
+          title: slide.title || 'Actividad Didáctica',
+          instruction: slide.subtitle || 'Completa la tabla:',
+          headers: slide.referenceContent.headers,
+          rows: slide.referenceContent.rows,
+          tableHeaders: slide.referenceContent.headers,
+          tableRows: slide.referenceContent.rows.map((row, rIdx) =>
+            row.map((cell, cIdx) => ({
+              text: cell,
+              isInput: cIdx > 0,
+              expectedAnswer: cIdx > 0 ? cell : undefined,
+              acceptedAnswers: cIdx > 0 ? [cell] : [],
+              isExample: rIdx === 0 && cIdx > 0,
+              inputId: cIdx > 0 ? `cell-${rIdx}-${cIdx}` : undefined
+            }))
+          )
+        }
+      };
+      const mapped = mapBlockToRole(block, targetRole);
+      nextInteraction = mapped.interaction || null;
+    }
+  }
 
   return {
     ...slide,
-    referenceContent: isTargetReference
-      ? mapped.reference || null
-      : (slide.referenceContent || mapped.reference || null),
-    interaction: isTargetReference
-      ? null
-      : (mapped.interaction || null)
+    referenceContent: nextReference,
+    interaction: nextInteraction,
+    cachedInteraction: nextInteraction || slide.cachedInteraction || null
   };
 }
