@@ -216,10 +216,10 @@ export const Canvas: React.FC = () => {
           </div>
 
           {/* Floating Scaffolding Button / Screen Indicator */}
-          {hasReference && !hasInteraction && (
+          {hasReference && !hasInteraction && isEditMode && (
             <button
               onClick={toggleReferenceDrawer}
-              className="flex items-center gap-2 px-4 py-2.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-semibold text-xs sm:text-sm rounded-xl border border-indigo-200 shadow-2xs transition transform active:scale-95"
+              className="flex items-center gap-2 px-4 py-2.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-semibold text-xs sm:text-sm rounded-xl border border-indigo-200 shadow-2xs transition transform active:scale-95 cursor-pointer"
               title="Abrir cajón flotante de consulta sin salir del ejercicio"
             >
               <BookOpen className="w-4 h-4 text-indigo-600" />
@@ -331,6 +331,7 @@ export const Canvas: React.FC = () => {
                   <ReferenceComponent
                     block={currentSlide.referenceContent}
                     isEditMode={isEditMode}
+                    slideTitle={currentSlide.title}
                     onChange={(updated: any) => updateReferenceBlock(currentSlide.id, updated)}
                   />
                 </div>
@@ -364,6 +365,7 @@ export const Canvas: React.FC = () => {
               <ReferenceComponent
                 block={currentSlide.referenceContent}
                 isEditMode={isEditMode}
+                slideTitle={currentSlide.title}
                 onChange={(updated: any) => updateReferenceBlock(currentSlide.id, updated)}
               />
             ) : isEditMode ? (

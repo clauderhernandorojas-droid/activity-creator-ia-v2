@@ -18,6 +18,7 @@ import type {
 } from '../../types/schema';
 import { generateGrammarVariants } from '../evaluators/fillBlankValidator';
 import { isDuplicateReferenceContent } from '../text/textDeduplication';
+import { stripMetaComments, stripLeadingDuplicateTitle } from './digitizeBook';
 
 export type PedagogicalRole = 
   | 'interaction_inputs' 
@@ -551,12 +552,17 @@ export function mapBlockToReferenceText(block: ExtractedBlock): ReferenceTextBlo
     }
   }
 
-  const content = String(rawContent || '').trim();
+  const slideTitle = String(parsed.title || '').trim();
+  const content = stripLeadingDuplicateTitle(stripMetaComments(String(rawContent || '').trim()), slideTitle);
+
+  // For speaking/reference activities or pure reference slides, avoid repeating the main slide title inside the card
+  const isPureReference = parsed.interactionType === 'reference' || block.detectedType === 'paragraph';
+  const title = isPureReference ? '' : (parsed.title || 'Lectura / Notas de Referencia');
 
   return {
     type: 'text',
     id: generateId('ref-txt'),
-    title: parsed.title || 'Lectura / Notas de Referencia',
+    title,
     content,
     category: 'reading'
   };

@@ -387,6 +387,15 @@ REGLAS UNIVERSALES DE BANCO DE OPCIONES Y ASIGNACIÓN BIUNÍVOCA:
 - Regla Universal de Extracción Estricta de instruction y title:
   * Si en la imagen existe una directiva pedagógica, orden o consigna de trabajo (p. ej. "Work in groups. Tell other students about yourself. Use the phrases from 1 or your own ideas"), DEBE poblar obligatoriamente el campo 'instruction'. NUNCA dejes 'instruction' vacío si existe una consigna.
   * 'title' debe ser un título conciso y representativo (ej. "Speaking: Tell other students about yourself"), reservando la directiva completa para 'instruction'.
+- Regla Universal de Prohibición de Meta-Comentarios Pedagógicos:
+  * NUNCA generes explicaciones pedagógicas, metatexto editorial ni justificaciones dirigidas al profesor (ej. "This is an open-ended activity designed to...", "In this activity students will...", "Students can discuss...").
+  * El contenido de 'referenceContent' y de toda la diapositiva DEBE ser exclusivamente material didáctico directo para el estudiante (lecturas, modelos conversacionales, tablas, listas de frases).
+- Regla de Sin Repetición de Encabezado en 'referenceContent':
+  * Si 'title' ya contiene el título o la sección del ejercicio (ej. "Speaking: Tell other students about yourself"), NUNCA repitas ese mismo título como primera línea o encabezado (# o ##) dentro de 'referenceContent'. Ve directamente al contenido didáctico, vocabulario o modelo conversacional.
+- Regla de Estructura Limpia para Preguntas y Tareas Abiertas:
+  * Si la consigna instruye nombrar, listar, reflexionar o describir elementos abiertos (ej. "Write the names of five famous people and why you like them", "List three things you did..."):
+  * NUNCA redactes párrafos descriptivos abstractos ni explicaciones discursivas.
+  * Provee una plantilla limpia y estructurada con viñetas o líneas modelo directamente para el estudiante (ej. "1. [Name] — Why: ...\n2. [Name] — Why: ..."), facilitando la producción guiada.
 - Regla Universal de Consolidación Multirrecorte en Formato 'reference':
   * Si se proporcionan múltiples recortes donde uno contiene una tarea comunicativa/speaking y el otro contiene vocabulario, listas de frases de apoyo o contexto previo referenciado en la instrucción (ej. "Use the phrases from 1"):
     1. 'instruction': La directiva completa de la tarea comunicativa.
@@ -406,7 +415,7 @@ REGLAS UNIVERSALES DE BANCO DE OPCIONES Y ASIGNACIÓN BIUNÍVOCA:
 UNIVERSAL TAXONOMY & STRICT CONTRACT:
 1. "title": Concise formal activity or section title.
 2. "instruction": The explicit pedagogical directive, task instruction, or rubric prompt present in the clipping (e.g. "Work in groups. Tell other students about yourself. Use the phrases from 1 or your own ideas"). MUST NEVER BE EMPTY if the clipping contains an instructional directive.
-3. "referenceContent": Passive consultation material. Put reading passages, articles, dialogues, speech bubbles, instructional guidance ('TIPS!'), or consolidated support phrases/vocabulary here that provide reference context and DO NOT require an interactive answer. (null if none). Preserva fielmente la estructura visual y saltos de línea del documento original ('\n\n' entre párrafos y '\n' entre turnos de diálogo o listas).
+3. "referenceContent": Passive consultation material. Put reading passages, articles, dialogues, speech bubbles, instructional guidance ('TIPS!'), or consolidated support phrases/vocabulary here that provide reference context and DO NOT require an interactive answer. (null if none). Preserva fielmente la estructura visual y saltos de línea del documento original ('\n\n' entre párrafos y '\n' entre turnos de diálogo o listas). NUNCA repitas el título aquí ni agregues meta-explicaciones.
 4. "wordBank": If the clipping contains a vocabulary box, word box, container, or pool of options to choose from, extract ONLY the available options into "wordBank" as string[] (sean cadenas simples o compuestas por varios términos). (Empty array [] if none).
    * REGLA DE PARTICIÓN 1: NUNCA incluyas cajas de palabras (Word Banks), notas de apoyo ('TIPS!'), números de página o códigos de lección dentro de 'items'.
 5. "interactionType": Must be one of: 'fill_blanks', 'multiple_choice', 'matching', 'buckets', 'reference'.
@@ -424,6 +433,9 @@ UNIVERSAL TAXONOMY & STRICT CONTRACT:
 8. "isGraded": Booleano. Por defecto debe ser true. Si la consigna del ejercicio corresponde a una encuesta personal, opinión o reflexión subjetiva donde no existen respuestas correctas o incorrectas absolutas (p. ej., contiene frases como "true for you", "about yourself", "your opinion", "discuss in pairs"), debe extraerse con "isGraded": false.
 
 CRITICAL NEGATIVE CONSTRAINTS:
+- NUNCA incluyas meta-comentarios pedagógicos, justificaciones didácticas ni notas dirigidas al profesor (ej. "This is an open-ended activity...", "This exercise is designed to encourage students..."). Todo el texto debe ser 100% material directo para el alumno.
+- NUNCA repitas el título principal de la actividad como primera línea o encabezado dentro de 'referenceContent'.
+- NUNCA uses párrafos descriptivos abstractos para actividades que solicitan listas o mención de elementos; usa plantillas con viñetas o líneas modelo (ej. '1. ... — Why: ...').
 - NUNCA descartes recortes complementarios de vocabulario o frases en actividades 'reference'; deben consolidarse en 'referenceContent' junto al modelo conversacional.
 - NUNCA conviertas diálogos, role-plays o ejemplos modelo de actividades comunicativas / speaking en ejercicios de rellenar espacios ('fill_blanks') generando huecos sintéticos. Deben preservarse íntegros como material de consulta y guía ('referenceContent' con interactionType: 'reference').
 - NUNCA dupliques en 'referenceContent' las mismas frases, oraciones o reactivos que forman parte de los ítems interactivos de ejercicios evaluables mecánicos.
@@ -650,6 +662,43 @@ function buildExtractedBlockFromPayload(
 }
 
 /**
+ * Strips pedagogical meta-comments or teacher instructions generated by AI
+ * (e.g. "This is an open-ended activity designed to...", "In this activity, students will...")
+ */
+export function stripMetaComments(text: string): string {
+  if (!text) return '';
+  const metaRegex = /^(?:this is an? (?:open-ended|speaking|communicative|interactive|writing|reading) activity|this (?:activity|exercise|task|lesson) is (?:designed|intended|meant|created) to|in this activity,? students (?:will|are encouraged to|can|practice)|this task encourages students|designed to encourage students|this is designed to encourage)/i;
+
+  return text
+    .split(/\n{2,}/)
+    .filter((para) => !metaRegex.test(para.trim()))
+    .join('\n\n')
+    .trim();
+}
+
+/**
+ * Strips redundant title if repeated as the first line of reference content
+ */
+export function stripLeadingDuplicateTitle(text: string, title: string): string {
+  if (!text || !title) return text;
+  const normalizedTitle = title.trim().toLowerCase().replace(/^[#\s*_-]+|[#\s*_-]+$/g, '');
+  if (!normalizedTitle) return text;
+
+  const lines = text.split('\n');
+  if (lines.length > 0) {
+    const firstLineClean = lines[0].trim().toLowerCase().replace(/^[#\s*_-]+|[#\s*_-]+$/g, '');
+    if (firstLineClean === normalizedTitle || firstLineClean.startsWith(normalizedTitle + ':')) {
+      lines.shift();
+      while (lines.length > 0 && !lines[0].trim()) {
+        lines.shift();
+      }
+      return lines.join('\n').trim();
+    }
+  }
+  return text;
+}
+
+/**
  * Pure, defensive normalization of structured payload:
  * Guarantees that every item has expectedAnswer, acceptedAnswers, and isExample boolean.
  * ZERO ad-hoc heuristics, zero arbitrary word counts, zero string patching.
@@ -734,11 +783,13 @@ function sanitizeExtractedPayload(payload: ExtractedStructuredPayload): Extracte
     ? payload.referenceContent.map((s) => String(s).trim()).filter(Boolean).join('\n\n')
     : (payload.referenceContent ? String(payload.referenceContent).trim() : null);
 
+  const cleanedRawRef = rawRef ? stripLeadingDuplicateTitle(stripMetaComments(rawRef), title) : null;
+
   // In 'reference' activities, ALWAYS preserve referenceContent (never drop as duplicate)
   // and consolidate complementary support phrases/vocabulary into referenceContent
   let referenceContent = payload.interactionType === 'reference'
-    ? rawRef
-    : (isDuplicateReferenceContent(rawRef, sanitizedItems) ? null : rawRef);
+    ? cleanedRawRef
+    : (isDuplicateReferenceContent(cleanedRawRef, sanitizedItems) ? null : cleanedRawRef);
 
   if (payload.interactionType === 'reference') {
     const existingRef = referenceContent || '';
@@ -761,7 +812,7 @@ function sanitizeExtractedPayload(payload: ExtractedStructuredPayload): Extracte
     }
 
     if (parts.length > 0) {
-      referenceContent = parts.join('\n\n');
+      referenceContent = stripLeadingDuplicateTitle(stripMetaComments(parts.join('\n\n')), title);
     }
   }
 

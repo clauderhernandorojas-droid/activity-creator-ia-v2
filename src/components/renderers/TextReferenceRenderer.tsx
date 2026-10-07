@@ -7,12 +7,14 @@ const MAX_IMAGES = 4;
 interface Props {
   block: ReferenceTextBlock;
   isEditMode?: boolean;
+  slideTitle?: string;
   onChange?: (updated: ReferenceTextBlock) => void;
 }
 
 export const TextReferenceRenderer: React.FC<Props> = ({
   block,
   isEditMode = false,
+  slideTitle,
   onChange,
 }) => {
   const [isPickerOpen, setIsPickerOpen] = useState(false);
@@ -298,12 +300,12 @@ export const TextReferenceRenderer: React.FC<Props> = ({
         <input
           type="text"
           value={block.title || ''}
-          placeholder="Título de la lectura o contexto..."
+          placeholder="Título de la lectura o contexto (opcional)..."
           onChange={(e) => onChange?.({ ...block, title: e.target.value })}
           className="text-base font-bold text-slate-900 bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 mb-3 outline-none focus:border-indigo-500 focus:bg-white transition shrink-0"
         />
       ) : (
-        block.title && (
+        block.title && (!slideTitle || block.title.trim().toLowerCase() !== slideTitle.trim().toLowerCase()) && (
           <h3 className="text-base sm:text-lg font-bold text-slate-900 mb-3 tracking-tight shrink-0">
             {block.title}
           </h3>
