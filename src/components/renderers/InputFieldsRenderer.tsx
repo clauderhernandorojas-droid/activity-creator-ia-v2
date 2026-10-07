@@ -104,9 +104,9 @@ export const InputFieldsRenderer: React.FC<Props> = ({
   onChange,
 }) => {
   const isTableLayout = Boolean(
-    block.layoutMode === 'table' &&
     Array.isArray(block.tableRows) &&
-    block.tableRows.length > 0
+    block.tableRows.length > 0 &&
+    (block.layoutMode === 'table' || !block.listItems || block.listItems.length === 0)
   );
 
   const hasWordBank = Boolean(

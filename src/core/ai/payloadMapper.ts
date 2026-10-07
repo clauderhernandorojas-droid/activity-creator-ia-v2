@@ -61,26 +61,39 @@ export function mapBlockToInputFields(block: ExtractedBlock): InputFieldsBlock {
     ? parsed.wordBank.map((w: any) => String(w).trim()).filter(Boolean)
     : undefined;
 
-  const rawTableHeaders = Array.isArray(parsed.tableHeaders) ? parsed.tableHeaders : [];
-  const rawTableRows = Array.isArray(parsed.tableRows) ? parsed.tableRows : [];
+  const rawTableHeaders = Array.isArray(parsed.tableHeaders)
+    ? parsed.tableHeaders
+    : (Array.isArray(parsed.headers) ? parsed.headers : []);
+  const rawTableRows = Array.isArray(parsed.tableRows)
+    ? parsed.tableRows
+    : (Array.isArray(parsed.rows) ? parsed.rows : []);
 
+  const hasTableRows = rawTableRows.length > 0;
   const isTableLayout = Boolean(
     parsed.layoutMode === 'table' ||
-    (rawTableRows.length > 0 && rawTableHeaders.length > 0)
+    hasTableRows
   );
 
   let tableHeaders: string[] = [];
   let tableRows: InputFieldTableCell[][] = [];
 
-  if (isTableLayout && rawTableRows.length > 0) {
+  if (hasTableRows) {
     tableHeaders = rawTableHeaders.map((h: any) => String(h).trim()).filter(Boolean);
+
+    // If headers are missing, auto-create generic Column headers based on max row length
+    if (tableHeaders.length === 0) {
+      const maxCols = Math.max(...rawTableRows.map((r: any) => (Array.isArray(r) ? r.length : 0)));
+      for (let c = 0; c < maxCols; c++) {
+        tableHeaders.push(`Columna ${c + 1}`);
+      }
+    }
 
     tableRows = rawTableRows.map((row: any[], rIdx: number) => {
       if (!Array.isArray(row)) return [];
       return row.map((cell: any, cIdx: number) => {
         const isInput = Boolean(cell?.isInput);
         const text = String(cell?.text || '').trim();
-        const expectedAnswer = String(cell?.expectedAnswer || '').trim();
+        const expectedAnswer = String(cell?.expectedAnswer || (isInput && text ? text : '')).trim();
         let acceptedAnswers: string[] = [];
         if (Array.isArray(cell?.acceptedAnswers) && cell.acceptedAnswers.length > 0) {
           acceptedAnswers = cell.acceptedAnswers.map((a: any) => String(a).trim()).filter(Boolean);
@@ -169,6 +182,29 @@ export function mapBlockToInputFields(block: ExtractedBlock): InputFieldsBlock {
       prefix: typeof item === 'object' && item !== null ? item.prefix : undefined,
     };
   });
+
+  // Synthesize fallback listItems from table input cells if items was not provided
+  // to guarantee no downstream components treat the block as empty
+  if (listItems.length === 0 && tableRows.length > 0) {
+    tableRows.forEach((row, rIdx) => {
+      row.forEach((cell, cIdx) => {
+        if (cell.isInput) {
+          const colHeader = tableHeaders[cIdx] ? `[${tableHeaders[cIdx]}] ` : '';
+          const rowGuide = row.find((c) => !c.isInput && c.text)?.text;
+          const prompt = rowGuide ? `${rowGuide} → ${colHeader}_______` : `Fila ${rIdx + 1}, Col ${cIdx + 1} _______`;
+          listItems.push({
+            id: cell.inputId || `cell-${rIdx}-${cIdx}`,
+            prompt,
+            expectedAnswer: cell.expectedAnswer || '',
+            acceptedAnswers: cell.acceptedAnswers,
+            isExample: cell.isExample,
+            hint: cell.hint,
+            explanation: cell.hint,
+          });
+        }
+      });
+    });
+  }
 
   return {
     type: 'input_fields',

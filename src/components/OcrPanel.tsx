@@ -219,6 +219,15 @@ export const OcrPanel: React.FC = () => {
   // Derive default role directly from detected type without setState in effect
   const defaultRole: PedagogicalRole = (() => {
     if (!activeBlock) return 'interaction_inputs';
+    const pd = activeBlock.parsedData || {};
+    const hasInteractiveTable = Boolean(
+      (Array.isArray(pd.tableRows) && pd.tableRows.some((row: any[]) => Array.isArray(row) && row.some((cell: any) => cell?.isInput))) ||
+      pd.layoutMode === 'table' ||
+      (activeBlock.detectedType === 'table' && pd.interactionType === 'fill_blanks')
+    );
+    if (hasInteractiveTable) {
+      return 'interaction_inputs';
+    }
     switch (activeBlock.detectedType) {
       case 'table':
         return 'reference_table';
@@ -1014,6 +1023,72 @@ export const OcrPanel: React.FC = () => {
                             <Plus className="w-3.5 h-3.5" />
                             <span>Añadir Ficha</span>
                           </button>
+                        </div>
+                      ) : mappedPreview.interaction?.type === 'input_fields' && mappedPreview.interaction.layoutMode === 'table' && mappedPreview.interaction.tableRows.length > 0 ? (
+                        /* Table Grid preview for interactive table */
+                        <div className="space-y-2 overflow-x-auto">
+                          <table className="w-full text-xs text-left border-collapse border border-slate-200 bg-white rounded-lg overflow-hidden shadow-2xs">
+                            <thead>
+                              <tr className="bg-slate-100/80 border-b border-slate-200 text-slate-700">
+                                {mappedPreview.interaction.tableHeaders.map((h, hIdx) => (
+                                  <th key={hIdx} className="p-2 font-bold border-r border-slate-200 last:border-r-0">
+                                    {h}
+                                  </th>
+                                ))}
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100">
+                              {mappedPreview.interaction.tableRows.map((row, rIdx) => (
+                                <tr key={rIdx} className="hover:bg-slate-50/50">
+                                  {row.map((cell, cIdx) => (
+                                    <td key={cIdx} className="p-2 border-r border-slate-100 last:border-r-0 align-top">
+                                      {cell.isInput ? (
+                                        <div className="flex flex-col gap-1">
+                                          <div className="flex items-center gap-1.5 bg-indigo-50/60 border border-indigo-200 rounded px-2 py-1">
+                                            <span className="text-[10px] font-bold text-indigo-600">INPUT:</span>
+                                            <input
+                                              type="text"
+                                              value={cell.expectedAnswer}
+                                              onChange={(e) => {
+                                                const nextRows = Array.isArray(activeBlock.parsedData?.tableRows)
+                                                  ? [...activeBlock.parsedData.tableRows]
+                                                  : [];
+                                                if (nextRows[rIdx]) {
+                                                  const newRow = [...nextRows[rIdx]];
+                                                  newRow[cIdx] = {
+                                                    ...newRow[cIdx],
+                                                    expectedAnswer: e.target.value,
+                                                    acceptedAnswers: [e.target.value],
+                                                    text: e.target.value,
+                                                  };
+                                                  nextRows[rIdx] = newRow;
+                                                  updateExtractedBlock(activeBlock.id, {
+                                                    parsedData: {
+                                                      ...activeBlock.parsedData,
+                                                      tableRows: nextRows,
+                                                    },
+                                                  });
+                                                }
+                                              }}
+                                              className="flex-1 text-xs text-slate-800 bg-transparent outline-none font-medium"
+                                              placeholder="Respuesta esperada..."
+                                            />
+                                            {cell.isExample && (
+                                              <span className="text-[9px] font-bold text-slate-500 bg-slate-200 px-1 py-0.5 rounded">
+                                                Ejemplo
+                                              </span>
+                                            )}
+                                          </div>
+                                        </div>
+                                      ) : (
+                                        <span className="text-xs text-slate-700 font-medium">{cell.text}</span>
+                                      )}
+                                    </td>
+                                  ))}
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
                         </div>
                       ) : mappedPreview.interaction?.type === 'input_fields' && mappedPreview.interaction.listItems.length > 0 ? (
                         /* Items list for Fill in blanks */
