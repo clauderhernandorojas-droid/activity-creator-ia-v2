@@ -335,13 +335,18 @@ export const BucketsRenderer: React.FC<Props> = ({
                     <div className="flex-1 space-y-1.5 overflow-y-auto">
                       {assignedTokens.map((tok) => {
                         const isEvaluated = evaluation.isSubmitted;
-                        const isCorrect = tok.correctBucketId === bucket.id || Boolean(tok.isExample);
+                        const isGraded = evaluation.isGraded !== false;
+                        const isCorrect = isGraded ? (tok.correctBucketId === bucket.id || Boolean(tok.isExample)) : true;
 
                         let tokenStyle = 'bg-white border-slate-200 text-slate-800 shadow-2xs';
                         if (isEvaluated) {
-                          tokenStyle = isCorrect
-                            ? 'bg-emerald-50 border-emerald-400 text-emerald-900 font-semibold'
-                            : 'bg-rose-50 border-rose-400 text-rose-900 font-semibold';
+                          if (!isGraded) {
+                            tokenStyle = 'bg-indigo-50 border-indigo-300 text-indigo-950 font-medium';
+                          } else {
+                            tokenStyle = isCorrect
+                              ? 'bg-emerald-50 border-emerald-400 text-emerald-900 font-semibold'
+                              : 'bg-rose-50 border-rose-400 text-rose-900 font-semibold';
+                          }
                         }
 
                         return (
@@ -360,7 +365,9 @@ export const BucketsRenderer: React.FC<Props> = ({
 
                             <div className="flex items-center gap-1">
                               {isEvaluated ? (
-                                isCorrect ? (
+                                !isGraded ? (
+                                  <CheckCircle2 className="w-4 h-4 text-indigo-600 shrink-0" />
+                                ) : isCorrect ? (
                                   <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
                                 ) : (
                                   <XCircle className="w-4 h-4 text-rose-600 shrink-0" />

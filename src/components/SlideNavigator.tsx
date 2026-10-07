@@ -129,9 +129,15 @@ export const SlideNavigator: React.FC = () => {
                   </span>
                   <div className="flex items-center gap-1 text-[11px] font-medium text-slate-600">
                     {getInteractionIcon(slide)}
-                    <span className="truncate max-w-[90px]">{getInteractionLabel(slide)}</span>
+                    <span className="truncate max-w-[80px]">{getInteractionLabel(slide)}</span>
                   </div>
                 </div>
+
+                {slide.isGraded === false && (
+                  <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700 border border-indigo-200" title="Actividad no calificable / encuesta personal">
+                    Encuesta
+                  </span>
+                )}
               </div>
 
               {/* Title preview */}

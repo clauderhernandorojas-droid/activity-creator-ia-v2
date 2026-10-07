@@ -17,6 +17,7 @@ import type {
   InputFieldListItem
 } from '../../types/schema';
 import { generateGrammarVariants } from '../evaluators/fillBlankValidator';
+import { isDuplicateReferenceContent } from '../text/textDeduplication';
 
 export type PedagogicalRole = 
   | 'interaction_inputs' 
@@ -541,9 +542,12 @@ export function mapBlockToRole(
   role: PedagogicalRole
 ): { reference?: ReferenceBlock; interaction?: InteractionBlock } {
   const parsed = block.parsedData || {};
+  const rawRefText = String(parsed.referenceContent || parsed.content || '').trim();
+  const items = Array.isArray(parsed.items) ? parsed.items : [];
+  const isDuplicate = isDuplicateReferenceContent(rawRefText, items);
+
   const hasReadingContent = Boolean(
-    (parsed.referenceContent && String(parsed.referenceContent).trim().length > 0) ||
-    (parsed.content && String(parsed.content).trim().length > 0)
+    !isDuplicate && rawRefText.length > 0
   );
 
   const hasTableContent = Boolean(

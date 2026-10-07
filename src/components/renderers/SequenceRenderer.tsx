@@ -140,13 +140,18 @@ export const SequenceRenderer: React.FC<Props> = ({
               if (!item) return null;
 
               const isEvaluated = evaluation.isSubmitted;
-              const isCorrectPosition = evaluation.details[`pos-${positionIdx}`];
+              const isGraded = evaluation.isGraded !== false;
+              const isCorrectPosition = isGraded ? Boolean(evaluation.details[`pos-${positionIdx}`]) : true;
 
               let cardStyle = 'bg-white border-slate-200 hover:border-slate-300 shadow-2xs';
               if (isEvaluated) {
-                cardStyle = isCorrectPosition
-                  ? 'bg-emerald-50/80 border-emerald-400 text-emerald-950 font-medium'
-                  : 'bg-rose-50/80 border-rose-400 text-rose-950 font-medium';
+                if (!isGraded) {
+                  cardStyle = 'bg-indigo-50/50 border-indigo-200 text-slate-900 font-medium';
+                } else {
+                  cardStyle = isCorrectPosition
+                    ? 'bg-emerald-50/80 border-emerald-400 text-emerald-950 font-medium'
+                    : 'bg-rose-50/80 border-rose-400 text-rose-950 font-medium';
+                }
               }
 
               return (
@@ -175,7 +180,9 @@ export const SequenceRenderer: React.FC<Props> = ({
                   {/* Actions & Status */}
                   <div className="flex items-center gap-1.5">
                     {isEvaluated ? (
-                      isCorrectPosition ? (
+                      !isGraded ? (
+                        <CheckCircle2 className="w-5 h-5 text-indigo-600" />
+                      ) : isCorrectPosition ? (
                         <CheckCircle2 className="w-5 h-5 text-emerald-600" />
                       ) : (
                         <div className="flex items-center gap-1 text-xs text-rose-700 font-semibold">

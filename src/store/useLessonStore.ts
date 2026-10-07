@@ -38,6 +38,7 @@ export const defaultInitialSlide: Slide = {
   referenceContent: null,
   interaction: null,
   notes: '',
+  isGraded: true,
 };
 
 export const defaultInitialLesson: Lesson = {
@@ -106,6 +107,7 @@ interface LessonState {
   updateSlideSubtitle: (id: string, subtitle: string) => void;
   updateSlideLayout: (id: string, layout: SlideLayout) => void;
   updateSlideNotes: (id: string, notes: string) => void;
+  updateSlideIsGraded: (id: string, isGraded: boolean) => void;
 
   // Actions - Block Content
   updateReferenceBlock: (slideId: string, block: ReferenceBlock | null) => void;
@@ -257,6 +259,7 @@ export const useLessonStore = create<LessonState>()(
           referenceContent: null,
           interaction: null,
           notes: '',
+          isGraded: true,
         };
 
         set((state) => ({
@@ -346,6 +349,7 @@ export const useLessonStore = create<LessonState>()(
         const newId = `slide-${Date.now()}`;
         const title = block?.parsedData?.title || 'Diapositiva Digitalizada';
         const subtitle = block?.parsedData?.instruction || 'Contenido adaptado desde libro de texto';
+        const isGraded = block?.parsedData?.isGraded !== undefined ? Boolean(block.parsedData.isGraded) : true;
         const mapped = block ? mapBlockToRole(block, role) : {};
 
         const newSlide: Slide = {
@@ -357,6 +361,7 @@ export const useLessonStore = create<LessonState>()(
           interaction: mapped.interaction || null,
           cachedInteraction: mapped.interaction || null,
           notes: '',
+          isGraded,
         };
 
         set((s) => ({
@@ -446,6 +451,16 @@ export const useLessonStore = create<LessonState>()(
           lesson: {
             ...state.lesson,
             slides: state.lesson.slides.map((s) => (s.id === id ? { ...s, notes } : s)),
+          },
+        }));
+      },
+
+      updateSlideIsGraded: (id, isGraded) => {
+        set((state) => ({
+          ...recordHistory(state),
+          lesson: {
+            ...state.lesson,
+            slides: state.lesson.slides.map((s) => (s.id === id ? { ...s, isGraded } : s)),
           },
         }));
       },
@@ -669,6 +684,7 @@ export const useLessonStore = create<LessonState>()(
         if (!block) return;
 
         const mapped = mapBlockToRole(block, role);
+        const isGraded = block.parsedData?.isGraded !== undefined ? Boolean(block.parsedData.isGraded) : undefined;
         set((s) => ({
           ...recordHistory(s),
           lesson: {
@@ -677,6 +693,7 @@ export const useLessonStore = create<LessonState>()(
               if (slide.id !== slideId) return slide;
               return {
                 ...slide,
+                ...(isGraded !== undefined ? { isGraded } : {}),
                 ...(mapped.reference ? { referenceContent: mapped.reference } : {}),
                 ...(mapped.interaction ? { interaction: mapped.interaction, cachedInteraction: mapped.interaction } : {}),
               };

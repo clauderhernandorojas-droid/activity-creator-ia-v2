@@ -16,8 +16,12 @@ import { evaluateSequence } from './evaluateSequence';
  */
 export function evaluateInteraction(
   interaction: InteractionBlock,
-  studentAnswers: Record<string, any>
+  studentAnswers: Record<string, any>,
+  isGraded: boolean = true
 ): EvaluationResult {
+  if (!isGraded) {
+    return { score: 0, maxScore: 0, details: {} };
+  }
   switch (interaction.type) {
     case 'input_fields':
       return evaluateInput(interaction, studentAnswers);

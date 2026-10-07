@@ -529,7 +529,8 @@ export const InputFieldsRenderer: React.FC<Props> = ({
                     {row.map((cell, cIdx) => {
                       const cellKey = cell.inputId || `cell-${rIdx}-${cIdx}`;
                       const isEvaluated = evaluation.isSubmitted;
-                      const isCorrect = Boolean(evaluation.details[cellKey]) || Boolean(cell.isExample);
+                      const isGraded = evaluation.isGraded !== false;
+                      const isCorrect = isGraded ? (Boolean(evaluation.details[cellKey]) || Boolean(cell.isExample)) : true;
                       const cellFeedback = evaluation.itemFeedback?.[cellKey];
                       const isTypoWarning = isCorrect && cellFeedback?.status === 'correct_with_typo';
                       const userVal = studentAnswers[cellKey] || '';
@@ -567,11 +568,13 @@ export const InputFieldsRenderer: React.FC<Props> = ({
                                     cell.isExample
                                       ? 'bg-slate-100 text-slate-800 border border-slate-300 font-bold select-none cursor-not-allowed shadow-2xs pr-16'
                                       : isEvaluated
-                                        ? isCorrect
-                                          ? isTypoWarning
-                                            ? 'bg-white text-amber-950 border border-amber-400 font-bold pr-7 shadow-xs'
-                                            : 'bg-white text-emerald-950 border border-emerald-400 font-bold pr-7 shadow-xs'
-                                          : 'bg-white text-rose-950 border border-rose-400 font-bold pr-7 shadow-xs'
+                                        ? !isGraded
+                                          ? 'bg-indigo-50/40 text-slate-900 border border-indigo-300 font-semibold pr-7 shadow-xs'
+                                          : isCorrect
+                                            ? isTypoWarning
+                                              ? 'bg-white text-amber-950 border border-amber-400 font-bold pr-7 shadow-xs'
+                                              : 'bg-white text-emerald-950 border border-emerald-400 font-bold pr-7 shadow-xs'
+                                            : 'bg-white text-rose-950 border border-rose-400 font-bold pr-7 shadow-xs'
                                         : 'bg-white text-slate-900 border border-slate-300 focus:border-indigo-600 focus:ring-2 focus:ring-indigo-100 shadow-2xs'
                                   }`}
                                 />
@@ -584,7 +587,9 @@ export const InputFieldsRenderer: React.FC<Props> = ({
 
                                 {isEvaluated && !cell.isExample && (
                                   <span className="absolute right-2 top-1/2 -translate-y-1/2">
-                                    {isCorrect ? (
+                                    {!isGraded ? (
+                                      <CheckCircle2 className="w-4 h-4 text-indigo-600" />
+                                    ) : isCorrect ? (
                                       isTypoWarning ? (
                                         <AlertCircle className="w-4 h-4 text-amber-600" />
                                       ) : (
@@ -598,7 +603,7 @@ export const InputFieldsRenderer: React.FC<Props> = ({
                               </div>
 
                               {/* Feedback in Table Cell */}
-                              {!cell.isExample && isEvaluated && !isCorrect && (
+                              {!cell.isExample && isEvaluated && isGraded && !isCorrect && (
                                 <div className="text-[11px] text-rose-900 font-medium bg-rose-50/90 px-2 py-1 rounded-lg border border-rose-200 flex flex-col gap-0.5 shadow-2xs">
                                   <span>
                                     Respuesta: <strong className="font-bold underline text-rose-950">{canonicalAnswer}</strong>
@@ -630,7 +635,8 @@ export const InputFieldsRenderer: React.FC<Props> = ({
         <div className="w-full space-y-4">
         {block.listItems.map((item, idx) => {
           const isEvaluated = evaluation.isSubmitted;
-          const isCorrect = Boolean(evaluation.details[item.id]) || Boolean(item.isExample);
+          const isGraded = evaluation.isGraded !== false;
+          const isCorrect = isGraded ? (Boolean(evaluation.details[item.id]) || Boolean(item.isExample)) : true;
           const itemFeedback = evaluation.itemFeedback?.[item.id];
           const isTypoWarning = isCorrect && itemFeedback?.status === 'correct_with_typo';
           const userVal = studentAnswers[item.id] || '';
@@ -662,11 +668,13 @@ export const InputFieldsRenderer: React.FC<Props> = ({
                 item.isExample
                   ? 'bg-slate-50/80 border-slate-200'
                   : isEvaluated
-                    ? isCorrect
-                      ? isTypoWarning
-                        ? 'bg-amber-50/70 border-amber-300 ring-1 ring-amber-300/40'
-                        : 'bg-emerald-50/70 border-emerald-300 ring-1 ring-emerald-300/40'
-                      : 'bg-rose-50/70 border-rose-300 ring-1 ring-rose-300/40'
+                    ? !isGraded
+                      ? 'bg-indigo-50/40 border-indigo-200'
+                      : isCorrect
+                        ? isTypoWarning
+                          ? 'bg-amber-50/70 border-amber-300 ring-1 ring-amber-300/40'
+                          : 'bg-emerald-50/70 border-emerald-300 ring-1 ring-emerald-300/40'
+                        : 'bg-rose-50/70 border-rose-300 ring-1 ring-rose-300/40'
                     : 'bg-slate-50/70 border-slate-200/80 hover:border-slate-300'
               }`}
             >
@@ -763,18 +771,22 @@ export const InputFieldsRenderer: React.FC<Props> = ({
                               item.isExample
                                 ? 'bg-slate-100 text-slate-800 border border-slate-300 font-bold select-none cursor-not-allowed shadow-2xs'
                                 : isEvaluated
-                                  ? isCorrect
-                                    ? isTypoWarning
-                                      ? 'bg-white text-amber-950 border border-amber-400 font-bold pr-8 shadow-xs'
-                                      : 'bg-white text-emerald-950 border border-emerald-400 font-bold pr-8 shadow-xs'
-                                    : 'bg-white text-rose-950 border border-rose-400 font-bold pr-8 shadow-xs'
+                                  ? !isGraded
+                                    ? 'bg-indigo-50/30 text-slate-900 border border-indigo-300 font-semibold pr-8 shadow-xs'
+                                    : isCorrect
+                                      ? isTypoWarning
+                                        ? 'bg-white text-amber-950 border border-amber-400 font-bold pr-8 shadow-xs'
+                                        : 'bg-white text-emerald-950 border border-emerald-400 font-bold pr-8 shadow-xs'
+                                      : 'bg-white text-rose-950 border border-rose-400 font-bold pr-8 shadow-xs'
                                   : 'bg-white text-slate-900 border border-slate-300 focus:border-indigo-600 focus:ring-2 focus:ring-indigo-100 shadow-2xs'
                             }`}
                           />
 
                           {isEvaluated && !item.isExample && (
                             <span className="absolute right-2.5 top-1/2 -translate-y-1/2">
-                              {isCorrect ? (
+                              {!isGraded ? (
+                                <CheckCircle2 className="w-4 h-4 text-indigo-600" />
+                              ) : isCorrect ? (
                                 isTypoWarning ? (
                                   <AlertCircle className="w-4 h-4 text-amber-600" />
                                 ) : (
@@ -863,7 +875,9 @@ export const InputFieldsRenderer: React.FC<Props> = ({
 
                           {isEvaluated && !item.isExample && (
                             <span className="absolute right-3 top-1/2 -translate-y-1/2">
-                              {isCorrect ? (
+                              {!isGraded ? (
+                                <CheckCircle2 className="w-5 h-5 text-indigo-600" />
+                              ) : isCorrect ? (
                                 isTypoWarning ? (
                                   <AlertCircle className="w-5 h-5 text-amber-600" />
                                 ) : (
@@ -891,7 +905,16 @@ export const InputFieldsRenderer: React.FC<Props> = ({
                   {/* Pedagogical Feedback for Non-Example Items */}
                   {!item.isExample && (
                     <>
-                      {isEvaluated && isCorrect && isTypoWarning && (
+                      {isEvaluated && !isGraded && (
+                        <div className="text-xs text-indigo-800 pt-1 flex items-center justify-between font-medium bg-indigo-50/70 p-2 rounded-lg border border-indigo-200">
+                          <span className="flex items-center gap-1.5 text-[11px] text-indigo-700 font-semibold">
+                            <CheckCircle2 className="w-3.5 h-3.5 text-indigo-600" />
+                            <span>Respuesta personal registrada ✓</span>
+                          </span>
+                        </div>
+                      )}
+
+                      {isEvaluated && isGraded && isCorrect && isTypoWarning && (
                         <div className="text-xs text-amber-900 pt-1 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1.5 font-medium bg-amber-100/70 p-2.5 rounded-xl border border-amber-300 shadow-2xs">
                           <div className="flex items-center gap-1.5">
                             <AlertCircle className="w-4 h-4 text-amber-700 shrink-0" />
@@ -908,7 +931,7 @@ export const InputFieldsRenderer: React.FC<Props> = ({
                         </div>
                       )}
 
-                      {isEvaluated && isCorrect && !isTypoWarning && (
+                      {isEvaluated && isGraded && isCorrect && !isTypoWarning && (
                         <div className="text-xs text-emerald-800 pt-1 flex items-center justify-between font-medium">
                           <span className="text-[11px] text-emerald-700 font-semibold">✓ ¡Correcto!</span>
                           {explanationOrHint && (
@@ -917,7 +940,7 @@ export const InputFieldsRenderer: React.FC<Props> = ({
                         </div>
                       )}
 
-                      {isEvaluated && !isCorrect && (
+                      {isEvaluated && isGraded && !isCorrect && (
                         <div className="text-xs text-rose-900 pt-1 flex flex-col gap-1.5 font-medium bg-rose-50/90 p-2.5 rounded-xl border border-rose-300 shadow-2xs">
                           <div className="flex flex-wrap items-center justify-between gap-1">
                             <span>

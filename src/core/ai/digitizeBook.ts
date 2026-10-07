@@ -1,5 +1,6 @@
 import type { ExtractedBlock, ExtractedStructuredPayload } from '../../types/schema';
 import { GoogleGenAI } from '@google/genai';
+import { isDuplicateReferenceContent } from '../text/textDeduplication';
 
 export type ManualTemplateType = 'input_fields' | 'buckets' | 'selection' | 'reference_table' | 'table_grid';
 
@@ -251,9 +252,13 @@ const STRUCTURED_EXTRACTION_SCHEMA = {
   type: 'object',
   properties: {
     title: { type: 'string', description: 'Formal activity title' },
+    isGraded: {
+      type: 'boolean',
+      description: 'Default true. If the exercise instruction corresponds to a personal survey, opinion, self-reflection, or discussion task where there are no absolute correct/wrong answers (e.g. contains phrases like "true for you", "about yourself", "your opinion", "discuss in pairs"), extract as false.'
+    },
     referenceContent: {
       type: 'string',
-      description: 'Passive reading passage, article, dialogue, or guidance notes (TIPS) that do NOT require interactive answers. Empty string or null if none.'
+      description: 'Passive reading passage, article, dialogue, or guidance notes (TIPS) that do NOT require interactive answers. Empty string or null if none. CRITICAL: NEVER duplicate or copy the exercise sentences or interactive items here. If the clipping is only the exercise items/sentences itself (e.g. self-contained checklist, opinion poll, or fill-in-the-blank), this MUST be empty string or null.'
     },
     wordBank: {
       type: 'array',
@@ -370,6 +375,11 @@ REGLAS UNIVERSALES DE BANCO DE OPCIONES Y ASIGNACIÓN BIUNÍVOCA:
   * DEBES preservar fielmente la estructura visual y los saltos de línea del documento original.
   * Separa párrafos o secciones temáticas utilizando saltos de línea explícitos dobles (\`\\n\\n\`).
   * En líneas de diálogo (ej. 'Speaker A: ...\\nSpeaker B: ...'), listas numeradas, viñetas o reglas paso a paso, preserva cada elemento en su línea respectiva mediante saltos de línea (\`\\n\`), evitando que el texto se colapse en un único bloque apelmazado.
+- Regla Universal de Actividades No Calificables / Encuestas Personales:
+  * isGraded: Por defecto debe ser true. Si la consigna del ejercicio corresponde a una encuesta personal, opinión o reflexión subjetiva donde no existen respuestas correctas o incorrectas absolutas (p. ej., contiene frases como "true for you", "about yourself", "your opinion", "discuss in pairs"), debe extraerse obligatoriamente con "isGraded": false.
+- Regla Estricta de NO Duplicación en referenceContent:
+  * referenceContent debe ser null o string vacío a menos que el recorte contenga un texto de lectura externo real (artículo, diálogo base, caja de reglas gramaticales) que el estudiante deba consultar de forma pasiva.
+  * NUNCA dupliques en referenceContent las mismas frases, oraciones o reactivos que van dentro de los ítems interactivos (items/questions). Si el ejercicio es autosuficiente (como un checklist, oraciones para completar, preguntas de selección o encuesta), referenceContent DEBE SER null.
 
 UNIVERSAL TAXONOMY & STRICT CONTRACT:
 1. "title": Formal activity or reading title.
@@ -387,8 +397,10 @@ UNIVERSAL TAXONOMY & STRICT CONTRACT:
    - "explanation": Brief 1-line pedagogical justification of the grammar rule or clue.
    - "options": (If multiple choice) array of choices to select from.
 6. "tableHeaders" y "tableRows": Si el ejercicio se presenta como una cuadrícula o tabla interactiva de doble entrada, genera las columnas en "tableHeaders" y la matriz de celdas en "tableRows" siguiendo la Regla Universal de Tablas/Cuadrículas.
+7. "isGraded": Booleano. Por defecto debe ser true. Si la consigna del ejercicio corresponde a una encuesta personal, opinión o reflexión subjetiva donde no existen respuestas correctas o incorrectas absolutas (p. ej., contiene frases como "true for you", "about yourself", "your opinion", "discuss in pairs"), debe extraerse con "isGraded": false.
 
 CRITICAL NEGATIVE CONSTRAINTS:
+- NUNCA dupliques en 'referenceContent' las mismas frases, oraciones o reactivos que forman parte de los ítems interactivos. En ejercicios autosuficientes (como checklists, encuestas de opinión o selección), 'referenceContent' DEBE SER null.
 - NUNCA conviertas encabezados de tabla ni códigos editoriales en ítems interactivos.
 - NUNCA fusiones las preguntas o el texto del material de referencia con las preguntas de la tarea activa en una sola lista de ítems interactivos.
 - Cada ítem interactivo debe ser un ítem real que el alumno debe completar o resolver.
@@ -552,6 +564,7 @@ function buildExtractedBlockFromPayload(
       items: sanitized.items,
       tableHeaders: sanitized.tableHeaders,
       tableRows: sanitized.tableRows,
+      isGraded: sanitized.isGraded !== undefined ? sanitized.isGraded : true,
     },
   };
 }
@@ -622,11 +635,15 @@ function sanitizeExtractedPayload(payload: ExtractedStructuredPayload): Extracte
       })
     : undefined;
 
+  const rawRef = Array.isArray(payload.referenceContent)
+    ? payload.referenceContent.map((s) => String(s).trim()).filter(Boolean).join('\n\n')
+    : (payload.referenceContent ? String(payload.referenceContent).trim() : null);
+
+  const referenceContent = isDuplicateReferenceContent(rawRef, sanitizedItems) ? null : rawRef;
+
   return {
     title: String(payload.title || 'Actividad Digitalizada').trim(),
-    referenceContent: Array.isArray(payload.referenceContent)
-      ? payload.referenceContent.map((s) => String(s).trim()).filter(Boolean).join('\n\n')
-      : (payload.referenceContent ? String(payload.referenceContent).trim() : null),
+    referenceContent,
     wordBank: Array.isArray(payload.wordBank)
       ? payload.wordBank.map((w) => String(w).trim()).filter(Boolean)
       : [],
@@ -647,6 +664,11 @@ function sanitizeExtractedPayload(payload: ExtractedStructuredPayload): Extracte
     items: sanitizedItems,
     tableHeaders,
     tableRows,
+    isGraded: payload.isGraded !== undefined
+      ? Boolean(payload.isGraded)
+      : !(/true for you|about yourself|your opinion|discuss in pairs|personal reflection/i.test(
+          `${payload.title || ''} ${payload.referenceContent || ''} ${sanitizedItems.map((i) => i.prompt).join(' ')}`
+        )),
   };
 }
 

@@ -349,10 +349,13 @@ export const SelectionRenderer: React.FC<Props> = ({
                 : flatOptions.filter((opt) => studentAnswers[opt.id]).map((opt) => opt.id);
 
               const isEvaluated = evaluation.isSubmitted;
-              const hasMandatoryCorrect = flatOptions.some((o) => o.isCorrect === true);
+              const isGraded = evaluation.isGraded !== false;
+              const hasMandatoryCorrect = isGraded && flatOptions.some((o) => o.isCorrect === true);
+
+              const isMultiColumn = flatOptions.length >= 4;
 
               return (
-                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+                <div className={`grid grid-cols-1 ${isMultiColumn ? 'md:grid-cols-2' : 'sm:grid-cols-2'} gap-3`}>
                   {flatOptions.map((opt) => {
                     const isSelected = selectedOptionIds.includes(opt.id);
 
@@ -399,7 +402,7 @@ export const SelectionRenderer: React.FC<Props> = ({
                           >
                             ✓
                           </span>
-                          <span className="truncate font-medium">{opt.text}</span>
+                          <span className="font-medium leading-snug break-words">{opt.text}</span>
                         </span>
 
                         {isEvaluated && hasMandatoryCorrect && (
@@ -427,19 +430,28 @@ export const SelectionRenderer: React.FC<Props> = ({
         /* ============================================================== */
         /* MODE B: QUESTIONNAIRE / QUIZ MODE                              */
         /* ============================================================== */
-        <div className="w-full space-y-4">
+        <div
+          className={`w-full ${
+            (block.questions || []).length > 3
+              ? 'grid grid-cols-1 md:grid-cols-2 gap-3.5 items-start'
+              : 'space-y-3.5'
+          }`}
+        >
           {(block.questions || []).map((q, qIdx) => {
             const isEvaluated = evaluation.isSubmitted;
-            const isCorrect = evaluation.details[q.id];
+            const isGraded = evaluation.isGraded !== false;
+            const isCorrect = isGraded ? evaluation.details[q.id] : true;
 
             return (
               <div
                 key={q.id}
                 className={`p-4 rounded-xl border transition-all ${
                   isEvaluated
-                    ? isCorrect
-                      ? 'bg-emerald-50/60 border-emerald-300'
-                      : 'bg-rose-50/60 border-rose-300'
+                    ? isGraded
+                      ? isCorrect
+                        ? 'bg-emerald-50/60 border-emerald-300'
+                        : 'bg-rose-50/60 border-rose-300'
+                      : 'bg-indigo-50/40 border-indigo-200'
                     : 'bg-slate-50/70 border-slate-200/80'
                 }`}
               >
@@ -468,7 +480,11 @@ export const SelectionRenderer: React.FC<Props> = ({
                       </p>
                       {isEvaluated && (
                         <span>
-                          {isCorrect ? (
+                          {!isGraded ? (
+                            <span className="flex items-center gap-1 text-xs font-bold text-indigo-700 bg-indigo-100 px-2.5 py-0.5 rounded-full">
+                              <CheckCircle2 className="w-3.5 h-3.5" /> Registrado ✓
+                            </span>
+                          ) : isCorrect ? (
                             <span className="flex items-center gap-1 text-xs font-bold text-emerald-700 bg-emerald-100 px-2.5 py-0.5 rounded-full">
                               <CheckCircle2 className="w-3.5 h-3.5" /> Correcto
                             </span>
@@ -530,63 +546,74 @@ export const SelectionRenderer: React.FC<Props> = ({
                   </div>
                 ) : (
                   /* PREVIEW / STUDENT MODE */
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-2">
-                    {q.options.map((opt) => {
-                      const isSingle = q.mode === 'single_choice';
-                      const isSelected = isSingle
-                        ? studentAnswers[q.id] === opt.id
-                        : Array.isArray(studentAnswers[q.id]) &&
-                          (studentAnswers[q.id] as string[]).includes(opt.id);
+                  (() => {
+                    const isLongOptions = q.options.some((o) => (o.text || '').length > 25) || q.options.length > 2;
+                    return (
+                      <div className={`grid gap-2 mt-2 ${isLongOptions ? 'grid-cols-1' : 'grid-cols-1 sm:grid-cols-2'}`}>
+                        {q.options.map((opt) => {
+                          const isSingle = q.mode === 'single_choice';
+                          const isSelected = isSingle
+                            ? studentAnswers[q.id] === opt.id
+                            : Array.isArray(studentAnswers[q.id]) &&
+                              (studentAnswers[q.id] as string[]).includes(opt.id);
 
-                      let optClasses = 'bg-white border-slate-200 text-slate-800 hover:border-slate-300 hover:bg-slate-50';
+                          let optClasses = 'bg-white border-slate-200 text-slate-800 hover:border-slate-300 hover:bg-slate-50';
 
-                      if (isEvaluated) {
-                        if (opt.isCorrect) {
-                          optClasses = 'bg-emerald-50 border-emerald-400 text-emerald-900 font-bold';
-                        } else if (isSelected && !opt.isCorrect) {
-                          optClasses = 'bg-rose-50 border-rose-400 text-rose-800 line-through';
-                        } else {
-                          optClasses = 'bg-white border-slate-200 text-slate-400 opacity-60';
-                        }
-                      } else if (isSelected) {
-                        optClasses = 'bg-indigo-50/80 border-indigo-500 text-indigo-950 font-bold ring-1 ring-indigo-400/50 shadow-2xs';
-                      }
-
-                      return (
-                        <button
-                          key={opt.id}
-                          disabled={isEvaluated}
-                          onClick={() => {
-                            if (isSingle) {
-                              onAnswerChange?.(q.id, opt.id);
+                          if (isEvaluated) {
+                            if (!isGraded) {
+                              if (isSelected) {
+                                optClasses = 'bg-indigo-50/90 border-indigo-500 text-indigo-950 font-bold ring-1 ring-indigo-400/50 shadow-2xs';
+                              } else {
+                                optClasses = 'bg-white border-slate-200 text-slate-500 opacity-75';
+                              }
+                            } else if (opt.isCorrect) {
+                              optClasses = 'bg-emerald-50 border-emerald-400 text-emerald-900 font-bold';
+                            } else if (isSelected && !opt.isCorrect) {
+                              optClasses = 'bg-rose-50 border-rose-400 text-rose-800 line-through';
                             } else {
-                              toggleStudentMultiChoice(q.id, opt.id);
+                              optClasses = 'bg-white border-slate-200 text-slate-400 opacity-60';
                             }
-                          }}
-                          className={`p-3 rounded-xl border text-left text-sm flex items-center justify-between transition-all ${optClasses}`}
-                        >
-                          <span className="flex items-center gap-2.5">
-                            <span
-                              className={`w-4 h-4 rounded-${
-                                isSingle ? 'full' : 'md'
-                              } border flex items-center justify-center text-[10px] ${
-                                isSelected
-                                  ? 'bg-indigo-600 border-indigo-600 text-white font-bold'
-                                  : 'border-slate-300 bg-white text-transparent'
-                              }`}
-                            >
-                              {isSingle ? '•' : '✓'}
-                            </span>
-                            <span>{opt.text}</span>
-                          </span>
+                          } else if (isSelected) {
+                            optClasses = 'bg-indigo-50/80 border-indigo-500 text-indigo-950 font-bold ring-1 ring-indigo-400/50 shadow-2xs';
+                          }
 
-                          {isEvaluated && opt.isCorrect && (
-                            <CheckCircle2 className="w-4 h-4 text-emerald-600 flex-shrink-0" />
-                          )}
-                        </button>
-                      );
-                    })}
-                  </div>
+                          return (
+                            <button
+                              key={opt.id}
+                              disabled={isEvaluated}
+                              onClick={() => {
+                                if (isSingle) {
+                                  onAnswerChange?.(q.id, opt.id);
+                                } else {
+                                  toggleStudentMultiChoice(q.id, opt.id);
+                                }
+                              }}
+                              className={`p-3 rounded-xl border text-left text-sm flex items-center justify-between gap-2.5 transition-all ${optClasses}`}
+                            >
+                              <span className="flex items-center gap-2.5 flex-1 min-w-0">
+                                <span
+                                  className={`w-4 h-4 rounded-${
+                                    isSingle ? 'full' : 'md'
+                                  } border flex items-center justify-center text-[10px] shrink-0 ${
+                                    isSelected
+                                      ? 'bg-indigo-600 border-indigo-600 text-white font-bold'
+                                      : 'border-slate-300 bg-white text-transparent'
+                                  }`}
+                                >
+                                  {isSingle ? '•' : '✓'}
+                                </span>
+                                <span className="font-medium leading-snug break-words">{opt.text}</span>
+                              </span>
+
+                              {isEvaluated && isGraded && opt.isCorrect && (
+                                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    );
+                  })()
                 )}
               </div>
             );

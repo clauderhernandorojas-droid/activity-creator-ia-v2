@@ -226,6 +226,7 @@ export const SlideSchema = z.object({
   interaction: InteractionBlockSchema.nullable().optional(),
   cachedInteraction: InteractionBlockSchema.nullable().optional(),
   notes: z.string().optional(),
+  isGraded: z.boolean().default(true).optional(),
 });
 
 export type Slide = z.infer<typeof SlideSchema>;
@@ -276,6 +277,7 @@ export const ExtractedStructuredPayloadSchema = z.object({
   items: z.array(ExtractedItemSchema).default([]),
   tableHeaders: z.array(z.string()).optional(),
   tableRows: z.array(z.array(ExtractedTableCellSchema)).optional(),
+  isGraded: z.boolean().default(true).optional(),
 });
 
 export type ExtractedTableCell = z.infer<typeof ExtractedTableCellSchema>;

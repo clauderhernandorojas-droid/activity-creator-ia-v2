@@ -7,6 +7,7 @@ import { useLessonStore } from './useLessonStore';
 export interface SessionEvaluation extends EvaluationResult {
   isSubmitted: boolean;
   usedAi?: boolean;
+  isGraded?: boolean;
 }
 
 interface SessionState {
@@ -98,6 +99,21 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
     if (!currentSlide || !currentSlide.interaction) return;
 
+    // Support for non-graded activities / personal surveys: Register responses cleanly without errors or punitive scoring
+    if (currentSlide.isGraded === false) {
+      set({
+        isAiEvaluating: false,
+        studentEvaluation: {
+          isSubmitted: true,
+          score: 0,
+          maxScore: 0,
+          details: {},
+          isGraded: false,
+        },
+      });
+      return;
+    }
+
     const interaction = currentSlide.interaction;
 
     // AI Semantic Evaluation for input_fields
@@ -132,6 +148,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
             details: evalResult.details,
             itemFeedback: evalResult.itemFeedback,
             usedAi: evalResult.usedAi,
+            isGraded: true,
           },
         });
         return;
@@ -150,6 +167,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       studentEvaluation: {
         isSubmitted: true,
         ...result,
+        isGraded: true,
       },
     });
   },

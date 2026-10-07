@@ -42,6 +42,7 @@ export const Canvas: React.FC = () => {
     updateInteractionBlock,
     updateReferenceBlock,
     convertSlideRole,
+    updateSlideIsGraded,
   } = useLessonStore();
 
   const {
@@ -107,13 +108,25 @@ export const Canvas: React.FC = () => {
   }
 
   const isEditMode = mode === 'edit';
-  const hasReference = Boolean(currentSlide.referenceContent);
+  const hasReference = Boolean(
+    currentSlide.referenceContent && (
+      (currentSlide.referenceContent.type === 'text' && currentSlide.referenceContent.content?.trim().length > 0) ||
+      (currentSlide.referenceContent.type === 'table_reference' && currentSlide.referenceContent.rows?.length > 0) ||
+      (currentSlide.referenceContent.type === 'media' && currentSlide.referenceContent.url?.trim().length > 0)
+    )
+  );
   const hasInteraction = Boolean(currentSlide.interaction);
 
   const handleCheck = async () => {
     await checkCurrentSlideAnswers();
     const evaluation = useSessionStore.getState().studentEvaluation;
-    if (evaluation.score === evaluation.maxScore && evaluation.maxScore > 0) {
+    if (currentSlide?.isGraded === false) {
+      confetti({
+        particleCount: 90,
+        spread: 65,
+        origin: { y: 0.6 }
+      });
+    } else if (evaluation.score === evaluation.maxScore && evaluation.maxScore > 0) {
       confetti({
         particleCount: 110,
         spread: 75,
@@ -234,30 +247,54 @@ export const Canvas: React.FC = () => {
               </span>
             </div>
 
-            <div className="flex flex-wrap items-center gap-1 bg-white p-1 rounded-lg border border-slate-200 shadow-2xs">
-              {FORMAT_SWITCH_OPTIONS.map((opt) => {
-                const isSelected = currentFormat === opt.id || (opt.id === 'reference_text' && currentFormat === 'reference_table');
-                return (
-                  <button
-                    key={opt.id}
-                    type="button"
-                    onClick={() => {
-                      if (!isSelected) {
-                        convertSlideRole(currentSlide.id, opt.id);
-                      }
-                    }}
-                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold transition-all cursor-pointer ${
-                      isSelected
-                        ? 'bg-indigo-600 text-white shadow-xs scale-[1.02]'
-                        : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-                    }`}
-                    title={`Convertir diapositiva a formato ${opt.label} (Reversible con Ctrl+Z)`}
-                  >
-                    <span className="text-xs">{opt.icon}</span>
-                    <span>{opt.label}</span>
-                  </button>
-                );
-              })}
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="flex flex-wrap items-center gap-1 bg-white p-1 rounded-lg border border-slate-200 shadow-2xs">
+                {FORMAT_SWITCH_OPTIONS.map((opt) => {
+                  const isSelected = currentFormat === opt.id || (opt.id === 'reference_text' && currentFormat === 'reference_table');
+                  return (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      onClick={() => {
+                        if (!isSelected) {
+                          convertSlideRole(currentSlide.id, opt.id);
+                        }
+                      }}
+                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold transition-all cursor-pointer ${
+                        isSelected
+                          ? 'bg-indigo-600 text-white shadow-xs scale-[1.02]'
+                          : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                      }`}
+                      title={`Convertir diapositiva a formato ${opt.label} (Reversible con Ctrl+Z)`}
+                    >
+                      <span className="text-xs">{opt.icon}</span>
+                      <span>{opt.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Discrete isGraded Switch */}
+              {hasInteraction && (
+                <label
+                  className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border text-xs font-semibold select-none cursor-pointer transition shadow-2xs ${
+                    currentSlide.isGraded !== false
+                      ? 'bg-white hover:bg-slate-50 border-slate-200 text-slate-700'
+                      : 'bg-indigo-50 border-indigo-200 text-indigo-800'
+                  }`}
+                  title="Define si la actividad otorga puntaje numérico con respuestas correctas fijas o si es una encuesta/reflexión personal de respuesta libre"
+                >
+                  <input
+                    type="checkbox"
+                    checked={currentSlide.isGraded !== false}
+                    onChange={(e) => updateSlideIsGraded(currentSlide.id, e.target.checked)}
+                    className="w-3.5 h-3.5 rounded text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                  />
+                  <span>
+                    {currentSlide.isGraded !== false ? 'Actividad Calificable' : 'Encuesta / No Calificable'}
+                  </span>
+                </label>
+              )}
             </div>
           </div>
         )}
@@ -275,9 +312,20 @@ export const Canvas: React.FC = () => {
                       <BookOpen className="w-4 h-4 text-indigo-600" />
                       <span>Material de Lectura / Consulta</span>
                     </div>
-                    <span className="text-[10px] bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full font-bold">
-                      Referencia Activa
-                    </span>
+                    {isEditMode ? (
+                      <button
+                        type="button"
+                        onClick={() => updateReferenceBlock(currentSlide.id, null)}
+                        className="text-[10px] text-slate-400 hover:text-rose-600 font-semibold px-2 py-0.5 rounded hover:bg-rose-50 transition cursor-pointer"
+                        title="Quitar panel de lectura para dar ancho completo a la actividad"
+                      >
+                        Quitar Referencia
+                      </button>
+                    ) : (
+                      <span className="text-[10px] bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full font-bold">
+                        Referencia Activa
+                      </span>
+                    )}
                   </div>
 
                   <ReferenceComponent
@@ -301,14 +349,16 @@ export const Canvas: React.FC = () => {
               </div>
             ) : hasInteraction && InteractionComponent ? (
               /* Primary Interactive Block takes the full stage */
-              <InteractionComponent
-                block={currentSlide.interaction}
-                studentAnswers={studentAnswers}
-                evaluation={studentEvaluation}
-                isEditMode={isEditMode}
-                onAnswerChange={(key: string, value: any) => setStudentAnswer(key, value)}
-                onChange={(updated: any) => updateInteractionBlock(currentSlide.id, updated)}
-              />
+              <div className="w-full">
+                <InteractionComponent
+                  block={currentSlide.interaction}
+                  studentAnswers={studentAnswers}
+                  evaluation={studentEvaluation}
+                  isEditMode={isEditMode}
+                  onAnswerChange={(key: string, value: any) => setStudentAnswer(key, value)}
+                  onChange={(updated: any) => updateInteractionBlock(currentSlide.id, updated)}
+                />
+              </div>
             ) : hasReference && ReferenceComponent ? (
               /* If slide is purely reference, render reference on main stage */
               <ReferenceComponent
@@ -432,34 +482,48 @@ export const Canvas: React.FC = () => {
           <div className="mt-8 pt-5 border-t border-slate-100 flex flex-col sm:flex-row items-center justify-between gap-4">
             <div className="flex items-center gap-2">
               {studentEvaluation.isSubmitted ? (
-                <div className="flex items-center gap-3">
-                  <div className={`flex items-center gap-1.5 px-4 py-1.5 rounded-full text-xs sm:text-sm font-bold border ${
-                    studentEvaluation.score === studentEvaluation.maxScore
-                      ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
-                      : 'bg-amber-50 text-amber-800 border-amber-200'
-                  }`}>
-                    <Award className="w-4 h-4" />
-                    <span>
-                      Puntaje: {studentEvaluation.score} / {studentEvaluation.maxScore} (
-                      {studentEvaluation.maxScore > 0 ? Math.round((studentEvaluation.score / studentEvaluation.maxScore) * 100) : 100}%)
+                currentSlide.isGraded === false ? (
+                  <div className="flex items-center gap-2.5">
+                    <div className="flex items-center gap-1.5 px-4 py-1.5 rounded-full text-xs sm:text-sm font-bold border bg-indigo-50 text-indigo-800 border-indigo-200 shadow-2xs">
+                      <CheckCircle2 className="w-4 h-4 text-indigo-600" />
+                      <span>¡Respuestas registradas!</span>
+                    </div>
+                    <span className="text-xs sm:text-sm font-medium text-slate-600">
+                      Actividad completada ✓
                     </span>
                   </div>
+                ) : (
+                  <div className="flex items-center gap-3">
+                    <div className={`flex items-center gap-1.5 px-4 py-1.5 rounded-full text-xs sm:text-sm font-bold border ${
+                      studentEvaluation.score === studentEvaluation.maxScore
+                        ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                        : 'bg-amber-50 text-amber-800 border-amber-200'
+                    }`}>
+                      <Award className="w-4 h-4" />
+                      <span>
+                        Puntaje: {studentEvaluation.score} / {studentEvaluation.maxScore} (
+                        {studentEvaluation.maxScore > 0 ? Math.round((studentEvaluation.score / studentEvaluation.maxScore) * 100) : 100}%)
+                      </span>
+                    </div>
 
-                  <span className="text-xs sm:text-sm font-medium text-slate-600">
-                    {studentEvaluation.score === studentEvaluation.maxScore
-                      ? '¡Excelente trabajo! 🎉'
-                      : 'Revisa las correcciones en pantalla.'}
-                  </span>
-                  {studentEvaluation.usedAi && (
-                    <span className="hidden sm:inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-200 shadow-2xs">
-                      <span>🧠</span>
-                      <span>Corrección Semántica IA</span>
+                    <span className="text-xs sm:text-sm font-medium text-slate-600">
+                      {studentEvaluation.score === studentEvaluation.maxScore
+                        ? '¡Excelente trabajo! 🎉'
+                        : 'Revisa las correcciones en pantalla.'}
                     </span>
-                  )}
-                </div>
+                    {studentEvaluation.usedAi && (
+                      <span className="hidden sm:inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-200 shadow-2xs">
+                        <span>🧠</span>
+                        <span>Corrección Semántica IA</span>
+                      </span>
+                    )}
+                  </div>
+                )
               ) : (
                 <span className="text-xs sm:text-sm text-slate-500 font-medium">
-                  Completa el ejercicio en pantalla y pulsa Comprobar para calificar.
+                  {currentSlide.isGraded === false
+                    ? 'Responde según tu criterio o experiencia personal y registra tus respuestas.'
+                    : 'Completa el ejercicio en pantalla y pulsa Comprobar para calificar.'}
                 </span>
               )}
             </div>
@@ -488,6 +552,11 @@ export const Canvas: React.FC = () => {
                   <>
                     <span className="text-base animate-bounce">🧠</span>
                     <span>Evaluando con IA...</span>
+                  </>
+                ) : currentSlide.isGraded === false ? (
+                  <>
+                    <CheckCircle2 className="w-4 h-4" />
+                    <span>{studentEvaluation.isSubmitted ? 'Respuestas Registradas ✓' : 'Registrar Respuestas'}</span>
                   </>
                 ) : (
                   <>
