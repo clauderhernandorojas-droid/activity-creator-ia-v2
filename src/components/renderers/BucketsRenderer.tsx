@@ -246,7 +246,7 @@ export const BucketsRenderer: React.FC<Props> = ({
           <div className="flex-1 flex flex-col space-y-4">
             {(() => {
               const unassignedTokens = block.tokens.filter(
-                (tok) => !studentAnswers[tok.id]
+                (tok) => !studentAnswers[tok.id] && !(tok.isExample && tok.correctBucketId)
               );
 
               return (
@@ -299,7 +299,7 @@ export const BucketsRenderer: React.FC<Props> = ({
               <div className={`flex-1 grid ${getGridColsClass(targetSlots.length)} gap-3.5 min-h-[180px]`}>
                 {targetSlots.map((bucket) => {
                   const assignedTokens = block.tokens.filter(
-                    (tok) => studentAnswers[tok.id] === bucket.id
+                    (tok) => (studentAnswers[tok.id] || (tok.isExample ? tok.correctBucketId : undefined)) === bucket.id
                   );
 
                   return (
@@ -335,7 +335,7 @@ export const BucketsRenderer: React.FC<Props> = ({
                     <div className="flex-1 space-y-1.5 overflow-y-auto">
                       {assignedTokens.map((tok) => {
                         const isEvaluated = evaluation.isSubmitted;
-                        const isCorrect = tok.correctBucketId === bucket.id;
+                        const isCorrect = tok.correctBucketId === bucket.id || Boolean(tok.isExample);
 
                         let tokenStyle = 'bg-white border-slate-200 text-slate-800 shadow-2xs';
                         if (isEvaluated) {
@@ -349,16 +349,23 @@ export const BucketsRenderer: React.FC<Props> = ({
                             key={tok.id}
                             className={`p-2 px-2.5 rounded-xl border text-xs font-medium flex items-center justify-between ${tokenStyle}`}
                           >
-                            <span>{tok.text}</span>
+                            <div className="flex items-center gap-1.5 truncate">
+                              <span className="truncate">{tok.text}</span>
+                              {tok.isExample && (
+                                <span className="text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-slate-200 text-slate-600 border border-slate-300 select-none shrink-0">
+                                  ✓ Ejemplo
+                                </span>
+                              )}
+                            </div>
 
                             <div className="flex items-center gap-1">
                               {isEvaluated ? (
                                 isCorrect ? (
-                                  <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
                                 ) : (
-                                  <XCircle className="w-4 h-4 text-rose-600" />
+                                  <XCircle className="w-4 h-4 text-rose-600 shrink-0" />
                                 )
-                              ) : (
+                              ) : tok.isExample ? null : (
                                 <button
                                   type="button"
                                   onClick={(e) => {

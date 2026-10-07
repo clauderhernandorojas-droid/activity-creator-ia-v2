@@ -10,8 +10,8 @@ export function evaluateBuckets(
   const details: Record<string, boolean> = {};
 
   block.tokens.forEach((token) => {
-    const studentBucketId = studentAnswers[token.id];
-    const isRight = studentBucketId === token.correctBucketId;
+    const studentBucketId = studentAnswers[token.id] || (token.isExample ? token.correctBucketId : undefined);
+    const isRight = studentBucketId === token.correctBucketId || Boolean(token.isExample);
     details[token.id] = isRight;
     if (isRight) score++;
   });

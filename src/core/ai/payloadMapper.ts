@@ -136,62 +136,132 @@ export function mapBlockToInputFields(block: ExtractedBlock): InputFieldsBlock {
 export function mapBlockToBuckets(block: ExtractedBlock): BucketsMatchingBlock {
   const parsed = block.parsedData || {};
 
-  // Extract target slots from buckets or wordBank
-  let targetSlots: TargetSlot[] = [];
-
-  const rawBuckets = Array.isArray(parsed.buckets) && parsed.buckets.length > 0
+  // Extract target slots from buckets or targetSlots
+  const rawBuckets: any[] = Array.isArray(parsed.buckets) && parsed.buckets.length > 0
     ? parsed.buckets
-    : (Array.isArray(parsed.wordBank) && parsed.wordBank.length > 0 ? parsed.wordBank : []);
+    : (Array.isArray(parsed.targetSlots) && parsed.targetSlots.length > 0
+        ? parsed.targetSlots
+        : []);
 
-  if (rawBuckets.length > 0) {
-    targetSlots = rawBuckets.map((cat: any, idx: number) => {
-      const label = typeof cat === 'string' ? cat.trim() : String(cat.label || cat.name || '').trim();
-      return {
-        id: `slot-${slugify(label)}-${idx}`,
-        label,
-        description: label,
-        color: BUCKET_COLORS[idx % BUCKET_COLORS.length]
-      };
-    });
-  } else if (Array.isArray(parsed.targetSlots) && parsed.targetSlots.length > 0) {
-    targetSlots = parsed.targetSlots.map((ts: any, idx: number) => ({
-      id: ts.id || `slot-${idx}`,
-      label: ts.label || `Categoría ${idx + 1}`,
-      description: ts.description,
-      color: ts.color || BUCKET_COLORS[idx % BUCKET_COLORS.length]
-    }));
+  // If no explicit buckets/targetSlots, infer from items' expectedAnswer
+  if (rawBuckets.length === 0 && Array.isArray(parsed.items) && parsed.items.length > 0) {
+    const inferred = Array.from(
+      new Set(
+        parsed.items
+          .map((it: any) => typeof it === 'object' && it ? String(it.expectedAnswer || it.target || '').trim() : '')
+          .filter(Boolean)
+      )
+    );
+    if (inferred.length > 0) {
+      rawBuckets.push(...inferred);
+    }
   }
+
+  // Fallback: if rawBuckets is still empty, and wordBank was provided without items
+  if (
+    rawBuckets.length === 0 &&
+    Array.isArray(parsed.wordBank) &&
+    parsed.wordBank.length > 0 &&
+    (!parsed.items || parsed.items.length === 0)
+  ) {
+    rawBuckets.push(...parsed.wordBank);
+  }
+
+  const targetSlots: TargetSlot[] = rawBuckets.map((cat: any, idx: number) => {
+    const label = typeof cat === 'string' ? cat.trim() : String(cat.label || cat.name || `Categoría ${idx + 1}`).trim();
+    return {
+      id: `slot-${slugify(label)}-${idx}`,
+      label,
+      description: typeof cat === 'object' && cat ? cat.description : label,
+      color: (typeof cat === 'object' && cat && cat.color) || BUCKET_COLORS[idx % BUCKET_COLORS.length]
+    };
+  });
+
+  const findSlot = (targetLabel: string) => {
+    if (!targetLabel) return undefined;
+    const lower = targetLabel.trim().toLowerCase();
+    return (
+      targetSlots.find((s) => s.label.toLowerCase() === lower || s.id.toLowerCase() === lower) ||
+      targetSlots.find((s) => lower.includes(s.label.toLowerCase()) || s.label.toLowerCase().includes(lower))
+    );
+  };
 
   const rawItems: any[] = Array.isArray(parsed.items)
     ? parsed.items
     : (Array.isArray(parsed.tokens) ? parsed.tokens : []);
 
-  // Map tokens directly 1:1
-  const tokens: BucketToken[] = rawItems.map((item: any, idx: number) => {
+  const tokens: BucketToken[] = [];
+  const seenTexts = new Set<string>();
+
+  // 1. Map tokens directly 1:1 from items
+  rawItems.forEach((item: any, idx: number) => {
     const text = typeof item === 'object' && item !== null
       ? String(item.prompt || item.text || `Elemento ${idx + 1}`).trim()
       : String(item).trim();
 
+    if (!text) return;
+
     const targetLabel = typeof item === 'object' && item !== null
-      ? String(item.expectedAnswer || item.target || '').trim().toLowerCase()
+      ? String(item.expectedAnswer || item.target || '').trim()
       : '';
 
-    const matchedSlot = targetSlots.find(
-      (s) => s.label.toLowerCase() === targetLabel || s.id.toLowerCase() === targetLabel
-    ) || targetSlots[0];
+    const isExample = typeof item === 'object' && item !== null ? Boolean(item.isExample) : false;
+    const matchedSlot = findSlot(targetLabel) || targetSlots[0];
 
-    return {
+    tokens.push({
       id: generateId('tok'),
       text,
       correctBucketId: matchedSlot ? matchedSlot.id : '',
+      isExample,
       hint: item.explanation || (matchedSlot ? matchedSlot.label : undefined)
-    };
+    });
+
+    seenTexts.add(text.toLowerCase());
   });
+
+  // 2. Reconcile terms from wordBank if terms were provided in the bank
+  if (Array.isArray(parsed.wordBank) && parsed.wordBank.length > 0) {
+    parsed.wordBank.forEach((wbItem: any) => {
+      const rawWb = String(wbItem).trim();
+      if (!rawWb) return;
+
+      let termText = rawWb;
+      let termTarget = '';
+
+      const parenMatch = rawWb.match(/^(.+?)\s*(?:\((.+?)\)|[-—–:>]+\s*(.+))$/);
+      if (parenMatch) {
+        termText = parenMatch[1].trim();
+        termTarget = (parenMatch[2] || parenMatch[3] || '').trim();
+      }
+
+      if (!seenTexts.has(termText.toLowerCase())) {
+        const matchingItem = rawItems.find((it: any) => {
+          const itText = typeof it === 'object' && it ? String(it.prompt || it.text || '') : String(it);
+          return itText.trim().toLowerCase() === termText.toLowerCase();
+        });
+
+        const finalTarget = termTarget || (matchingItem ? String(matchingItem.expectedAnswer || matchingItem.target || '').trim() : '');
+        const matchedSlot = findSlot(finalTarget) || targetSlots[0];
+        const isExample = matchingItem ? Boolean(matchingItem.isExample) : false;
+
+        tokens.push({
+          id: generateId('tok'),
+          text: termText,
+          correctBucketId: matchedSlot ? matchedSlot.id : '',
+          isExample,
+          hint: matchedSlot ? matchedSlot.label : undefined
+        });
+
+        seenTexts.add(termText.toLowerCase());
+      }
+    });
+  }
 
   const sourceItems: SourceItem[] = tokens.map((t) => ({
     id: t.id,
     text: t.text,
     correctTargetId: t.correctBucketId || undefined,
+    isExample: t.isExample,
     hint: t.hint
   }));
 
@@ -469,7 +539,7 @@ export function slideToExtractedBlock(slide: Slide): ExtractedBlock {
             prompt: t.text,
             expectedAnswer: targetSlot?.label || '',
             acceptedAnswers: targetSlot ? [targetSlot.label] : [],
-            isExample: false,
+            isExample: Boolean((t as any).isExample),
             explanation: t.hint
           };
         });

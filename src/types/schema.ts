@@ -134,6 +134,7 @@ export const SourceItemSchema = z.object({
   id: z.string(),
   text: z.string(),
   correctTargetId: z.string().optional(),
+  isExample: z.boolean().optional(),
   hint: z.string().optional(),
 });
 
@@ -154,6 +155,7 @@ export const BucketTokenSchema = z.object({
   id: z.string(),
   text: z.string(),
   correctBucketId: z.string(),
+  isExample: z.boolean().optional(),
   hint: z.string().optional(),
 });
 

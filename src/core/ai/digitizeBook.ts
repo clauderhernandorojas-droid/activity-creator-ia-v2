@@ -285,6 +285,12 @@ REGLAS UNIVERSALES DE BANCO DE OPCIONES Y ASIGNACIÓN BIUNÍVOCA:
 - Regla Universal de Banco de Opciones: Cuando la imagen contenga un contenedor o lista de opciones (wordBank), el valor de expectedAnswer de cada ítem interactivo DEBE ser exactamente uno de los elementos presentes en dicho conjunto (ya consistan en una sola palabra o en cadenas multitérmino). NUNCA utilices texto perteneciente a enunciados o definiciones como valor de respuesta esperada.
 - Regla Universal de Muestras Impresas: Si en el documento original un ítem ya presenta de forma visible uno de los elementos del wordBank asignado a su posición de respuesta, clasifícalo obligatoriamente como isExample: true con dicho elemento en expectedAnswer.
 - Regla Universal de Contenido de Ítem: En cada elemento interactivo, \`prompt\` DEBE contener el texto informativo, premisa o definición que el usuario necesita leer para deducir la respuesta. NUNCA asignes como \`prompt\` únicamente el número secuencial del ítem.
+- Regla Universal de Clasificación por Categorías (Buckets): Cuando un ejercicio instruya asociar o clasificar un conjunto de elementos dentro de categorías contenedoras (interacción 'buckets'):
+  * \`buckets\`: Debe contener exclusivamente la lista de nombres de las categorías de destino (ej. las columnas o cajas clasificadoras).
+  * \`items\`: Debe contener la lista de todos los elementos o términos individuales que deben ser clasificados. Para cada ítem:
+    - \`prompt\`: El término o expresión a clasificar.
+    - \`expectedAnswer\`: El nombre exacto de la categoría (bucket) a la que pertenece.
+    - \`isExample\`: true si el término ya viene clasificado como muestra en el documento original.
 
 UNIVERSAL TAXONOMY & STRICT CONTRACT:
 1. "title": Formal activity or reading title.
@@ -293,6 +299,7 @@ UNIVERSAL TAXONOMY & STRICT CONTRACT:
    * REGLA DE PARTICIÓN 1: NUNCA incluyas cajas de palabras (Word Banks), notas de apoyo ('TIPS!'), números de página o códigos de lección dentro de 'items'.
 4. "interactionType": Must be one of: 'fill_blanks', 'multiple_choice', 'matching', 'buckets'.
    - Matching/vocabulary tables (e.g. 'term | definition') are categorized as 'matching' or 'fill_blanks'.
+   - Ejercicios de agrupar o clasificar términos en categorías o columnas usan 'buckets' siguiendo la Regla Universal de Clasificación por Categorías.
 5. "items": Array of interactive items ONLY:
    - "prompt": The visible text, sentence with blank, or clue/definition that the student reads. Sigue la Regla Universal de Contenido de Ítem: DEBE contener el texto informativo, premisa o definición; NUNCA únicamente el número secuencial del ítem.
    - "expectedAnswer": The canonical resolved solution deduced by you as an expert teacher. MUST NEVER BE EMPTY. Must follow the Regla Universal de Banco de Opciones whenever a wordBank is present.
@@ -503,9 +510,19 @@ function sanitizeExtractedPayload(payload: ExtractedStructuredPayload): Extracte
       ? payload.wordBank.map((w) => String(w).trim()).filter(Boolean)
       : [],
     interactionType: payload.interactionType || 'fill_blanks',
-    buckets: Array.isArray(payload.buckets)
-      ? payload.buckets.map((b) => String(b).trim()).filter(Boolean)
-      : undefined,
+    buckets: (() => {
+      const explicit = Array.isArray(payload.buckets)
+        ? payload.buckets.map((b) => String(b).trim()).filter(Boolean)
+        : [];
+      if (explicit.length > 0) return explicit;
+      if (payload.interactionType === 'buckets') {
+        const inferred = Array.from(
+          new Set(items.map((it) => String(it.expectedAnswer || '').trim()).filter(Boolean))
+        );
+        if (inferred.length > 0) return inferred;
+      }
+      return undefined;
+    })(),
     items: sanitizedItems,
   };
 }
