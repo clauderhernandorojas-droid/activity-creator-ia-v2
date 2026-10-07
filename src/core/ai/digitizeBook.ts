@@ -227,8 +227,13 @@ export function consolidateBlocks(blocks: ExtractedBlock[], sourceUrl?: string):
     }
   }
 
+  const mergedInstruction = blocks.map((b) => b.parsedData?.instruction).filter(Boolean).join(' ') || primary.instruction || '';
+  const mergedTitle = blocks.map((b) => b.parsedData?.title).filter(Boolean)[0] || primary.title || '';
+
   const mergedParsed: Record<string, any> = {
     ...primary,
+    ...(mergedInstruction ? { instruction: mergedInstruction } : {}),
+    ...(mergedTitle ? { title: mergedTitle } : {}),
     items: mergedItems.length > 0 ? mergedItems : primary.items,
     wordBank: mergedWordBank.length > 0 ? mergedWordBank : primary.wordBank,
     tableHeaders: primary.tableHeaders,
@@ -251,7 +256,11 @@ export function consolidateBlocks(blocks: ExtractedBlock[], sourceUrl?: string):
 const STRUCTURED_EXTRACTION_SCHEMA = {
   type: 'object',
   properties: {
-    title: { type: 'string', description: 'Formal activity title' },
+    title: { type: 'string', description: 'Concise formal activity title (e.g. "Speaking: Tell other students about yourself")' },
+    instruction: {
+      type: 'string',
+      description: 'The explicit pedagogical directive, task instruction, or rubric prompt present in the clipping (e.g. "Work in groups. Tell other students about yourself. Use the phrases from 1 or your own ideas"). MUST NEVER BE EMPTY if the image contains an instructional order or directive.'
+    },
     isGraded: {
       type: 'boolean',
       description: 'Default true. If the exercise instruction corresponds to a personal survey, opinion, self-reflection, or discussion task where there are no absolute correct/wrong answers (e.g. contains phrases like "true for you", "about yourself", "your opinion", "discuss in pairs"), extract as false.'
@@ -267,8 +276,8 @@ const STRUCTURED_EXTRACTION_SCHEMA = {
     },
     interactionType: {
       type: 'string',
-      enum: ['fill_blanks', 'multiple_choice', 'matching', 'buckets'],
-      description: 'The strict pedagogical archetype of the interactive exercise'
+      enum: ['fill_blanks', 'multiple_choice', 'matching', 'buckets', 'reference'],
+      description: 'The strict pedagogical archetype of the interactive exercise. Use "reference" for communicative activities, speaking cards, or discussion material where no digital answer is evaluated.'
     },
     buckets: {
       type: 'array',
@@ -336,7 +345,7 @@ const STRUCTURED_EXTRACTION_SCHEMA = {
       description: 'Interactive exercise items ONLY. Never include word banks, page codes, or TIPS in items.'
     }
   },
-  required: ['title', 'wordBank', 'interactionType', 'items']
+  required: ['title', 'instruction', 'wordBank', 'interactionType', 'items']
 };
 
 /**
@@ -375,32 +384,49 @@ REGLAS UNIVERSALES DE BANCO DE OPCIONES Y ASIGNACIÓN BIUNÍVOCA:
   * DEBES preservar fielmente la estructura visual y los saltos de línea del documento original.
   * Separa párrafos o secciones temáticas utilizando saltos de línea explícitos dobles (\`\\n\\n\`).
   * En líneas de diálogo (ej. 'Speaker A: ...\\nSpeaker B: ...'), listas numeradas, viñetas o reglas paso a paso, preserva cada elemento en su línea respectiva mediante saltos de línea (\`\\n\`), evitando que el texto se colapse en un único bloque apelmazado.
+- Regla Universal de Extracción Estricta de instruction y title:
+  * Si en la imagen existe una directiva pedagógica, orden o consigna de trabajo (p. ej. "Work in groups. Tell other students about yourself. Use the phrases from 1 or your own ideas"), DEBE poblar obligatoriamente el campo 'instruction'. NUNCA dejes 'instruction' vacío si existe una consigna.
+  * 'title' debe ser un título conciso y representativo (ej. "Speaking: Tell other students about yourself"), reservando la directiva completa para 'instruction'.
+- Regla Universal de Consolidación Multirrecorte en Formato 'reference':
+  * Si se proporcionan múltiples recortes donde uno contiene una tarea comunicativa/speaking y el otro contiene vocabulario, listas de frases de apoyo o contexto previo referenciado en la instrucción (ej. "Use the phrases from 1"):
+    1. 'instruction': La directiva completa de la tarea comunicativa.
+    2. 'referenceContent': DEBE consolidar AMBOS recortes de manera organizada y legible:
+       - Primero: El banco de frases o vocabulario de apoyo (las frases del recorte complementario estructuradas con viñetas o saltos de línea bajo un título claro como 'Useful phrases:' o 'Support vocabulary:').
+       - Segundo: El modelo conversacional o diálogo de ejemplo (los bocadillos/globos de diálogo o modelo provisto).
+    3. NUNCA descartes el recorte complementario de vocabulario o frases. La regla de no duplicación aplica exclusivamente para evitar duplicar oraciones entre referenceContent y reactivos evaluables en ejercicios mecánicos ('fill_blanks'/'multiple_choice'); NUNCA debe descartar material en actividades 'reference'.
 - Regla Universal de Actividades No Calificables / Encuestas Personales:
   * isGraded: Por defecto debe ser true. Si la consigna del ejercicio corresponde a una encuesta personal, opinión o reflexión subjetiva donde no existen respuestas correctas o incorrectas absolutas (p. ej., contiene frases como "true for you", "about yourself", "your opinion", "discuss in pairs"), debe extraerse obligatoriamente con "isGraded": false.
-- Regla Estricta de NO Duplicación en referenceContent:
+- Regla Estricta de NO Duplicación en referenceContent para ejercicios mecánicos:
   * referenceContent debe ser null o string vacío a menos que el recorte contenga un texto de lectura externo real (artículo, diálogo base, caja de reglas gramaticales) que el estudiante deba consultar de forma pasiva.
-  * NUNCA dupliques en referenceContent las mismas frases, oraciones o reactivos que van dentro de los ítems interactivos (items/questions). Si el ejercicio es autosuficiente (como un checklist, oraciones para completar, preguntas de selección o encuesta), referenceContent DEBE SER null.
+  * En ejercicios evaluables mecánicos (como checklists de oraciones, oraciones para completar, preguntas de selección), NUNCA dupliques en referenceContent las mismas frases que van en los ítems interactivos.
+- PRINCIPIO DE INTERACCIÓN HUMANA / COMUNICATIVA (Formato 'reference'):
+  * Si la actividad didáctica tiene como objetivo la producción oral libre, la conversación en parejas/grupos o el intercambio comunicativo entre estudiantes (donde la tarea pedagógica ocurre fuera de la pantalla y el software no debe capturar una respuesta evaluable), clasifícala siempre como interactionType: 'reference' (Speaking Card).
+  * Los diálogos o ejemplos modelo deben conservarse íntegros como material de consulta y guía para los alumnos dentro de 'referenceContent'; NUNCA deben convertirse artificialmente en ejercicios de rellenar espacios ('fill_blanks') ni generar huecos sintéticos.
 
 UNIVERSAL TAXONOMY & STRICT CONTRACT:
-1. "title": Formal activity or reading title.
-2. "referenceContent": Passive consultation material. Put reading passages, articles, dialogues, or instructional guidance ('TIPS!') here that provide reference context and DO NOT require an interactive answer. (null if none). Preserva fielmente la estructura visual y saltos de línea del documento original ('\\n\\n' entre párrafos y '\\n' entre turnos de diálogo o listas).
-3. "wordBank": If the clipping contains a vocabulary box, word box, container, or pool of options to choose from, extract ONLY the available options into "wordBank" as string[] (sean cadenas simples o compuestas por varios términos). (Empty array [] if none).
+1. "title": Concise formal activity or section title.
+2. "instruction": The explicit pedagogical directive, task instruction, or rubric prompt present in the clipping (e.g. "Work in groups. Tell other students about yourself. Use the phrases from 1 or your own ideas"). MUST NEVER BE EMPTY if the clipping contains an instructional directive.
+3. "referenceContent": Passive consultation material. Put reading passages, articles, dialogues, speech bubbles, instructional guidance ('TIPS!'), or consolidated support phrases/vocabulary here that provide reference context and DO NOT require an interactive answer. (null if none). Preserva fielmente la estructura visual y saltos de línea del documento original ('\n\n' entre párrafos y '\n' entre turnos de diálogo o listas).
+4. "wordBank": If the clipping contains a vocabulary box, word box, container, or pool of options to choose from, extract ONLY the available options into "wordBank" as string[] (sean cadenas simples o compuestas por varios términos). (Empty array [] if none).
    * REGLA DE PARTICIÓN 1: NUNCA incluyas cajas de palabras (Word Banks), notas de apoyo ('TIPS!'), números de página o códigos de lección dentro de 'items'.
-4. "interactionType": Must be one of: 'fill_blanks', 'multiple_choice', 'matching', 'buckets'.
+5. "interactionType": Must be one of: 'fill_blanks', 'multiple_choice', 'matching', 'buckets', 'reference'.
    - Matching/vocabulary tables (e.g. 'term | definition') are categorized as 'matching' or 'fill_blanks'.
    - Ejercicios de agrupar o clasificar términos en categorías o columnas usan 'buckets' siguiendo la Regla Universal de Clasificación por Categorías.
-5. "items": Array of interactive items ONLY:
+   - Actividades comunicativas de producción oral libre, diálogo o speaking card usan 'reference', consolidando los modelos y bancos de frases de apoyo íntegros en 'referenceContent'.
+6. "items": Array of interactive items ONLY (empty [] if interactionType is 'reference'):
    - "prompt": The visible text, sentence with blank, or clue/definition that the student reads. Sigue la Regla Universal de Contenido de Ítem: DEBE contener el texto informativo, premisa o definición; NUNCA únicamente el número secuencial del ítem.
    - "expectedAnswer": The canonical resolved solution deduced by you as an expert teacher. MUST NEVER BE EMPTY. Must follow the Regla Universal de Banco de Opciones whenever a wordBank is present.
    - "acceptedAnswers": List of valid variations (contractions, spelling, or synonyms). Must include expectedAnswer.
    - "isExample": Booleano. Must follow the Regla Universal de Muestras Impresas: las filas o ítems que ya presentan una respuesta visible de muestra impresa en el material original deben clasificarse obligatoriamente como "isExample": true con dicho elemento en expectedAnswer, NUNCA omitirse ni dejarse en blanco.
    - "explanation": Brief 1-line pedagogical justification of the grammar rule or clue.
    - "options": (If multiple choice) array of choices to select from.
-6. "tableHeaders" y "tableRows": Si el ejercicio se presenta como una cuadrícula o tabla interactiva de doble entrada, genera las columnas en "tableHeaders" y la matriz de celdas en "tableRows" siguiendo la Regla Universal de Tablas/Cuadrículas.
-7. "isGraded": Booleano. Por defecto debe ser true. Si la consigna del ejercicio corresponde a una encuesta personal, opinión o reflexión subjetiva donde no existen respuestas correctas o incorrectas absolutas (p. ej., contiene frases como "true for you", "about yourself", "your opinion", "discuss in pairs"), debe extraerse con "isGraded": false.
+7. "tableHeaders" y "tableRows": Si el ejercicio se presenta como una cuadrícula o tabla interactiva de doble entrada, genera las columnas en "tableHeaders" y la matriz de celdas en "tableRows" siguiendo la Regla Universal de Tablas/Cuadrículas.
+8. "isGraded": Booleano. Por defecto debe ser true. Si la consigna del ejercicio corresponde a una encuesta personal, opinión o reflexión subjetiva donde no existen respuestas correctas o incorrectas absolutas (p. ej., contiene frases como "true for you", "about yourself", "your opinion", "discuss in pairs"), debe extraerse con "isGraded": false.
 
 CRITICAL NEGATIVE CONSTRAINTS:
-- NUNCA dupliques en 'referenceContent' las mismas frases, oraciones o reactivos que forman parte de los ítems interactivos. En ejercicios autosuficientes (como checklists, encuestas de opinión o selección), 'referenceContent' DEBE SER null.
+- NUNCA descartes recortes complementarios de vocabulario o frases en actividades 'reference'; deben consolidarse en 'referenceContent' junto al modelo conversacional.
+- NUNCA conviertas diálogos, role-plays o ejemplos modelo de actividades comunicativas / speaking en ejercicios de rellenar espacios ('fill_blanks') generando huecos sintéticos. Deben preservarse íntegros como material de consulta y guía ('referenceContent' con interactionType: 'reference').
+- NUNCA dupliques en 'referenceContent' las mismas frases, oraciones o reactivos que forman parte de los ítems interactivos de ejercicios evaluables mecánicos.
 - NUNCA conviertas encabezados de tabla ni códigos editoriales en ítems interactivos.
 - NUNCA fusiones las preguntas o el texto del material de referencia con las preguntas de la tarea activa en una sola lista de ítems interactivos.
 - Cada ítem interactivo debe ser un ítem real que el alumno debe completar o resolver.
@@ -410,7 +436,16 @@ CRITICAL NEGATIVE CONSTRAINTS:
 /**
  * Universal Digitize Book: Calls Gemini via GoogleGenAI SDK or OpenRouter enforcing strict JSON Schema.
  */
-export async function digitizeBook(images: string | string[]): Promise<ExtractedBlock[]> {
+export async function digitizeBook(
+  images: string | string[],
+  signal?: AbortSignal
+): Promise<ExtractedBlock[]> {
+  if (signal?.aborted) {
+    const err = new Error('Operación cancelada por el usuario');
+    err.name = 'AbortError';
+    throw err;
+  }
+
   const imageList = Array.isArray(images) ? images.filter(Boolean) : [images];
   const primaryImage = imageList[0] || '';
 
@@ -443,6 +478,12 @@ export async function digitizeBook(images: string | string[]): Promise<Extracted
       const candidateModels = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash'];
 
       for (const model of candidateModels) {
+        if (signal?.aborted) {
+          const err = new Error('Operación cancelada por el usuario');
+          err.name = 'AbortError';
+          throw err;
+        }
+
         try {
           const response = await ai.models.generateContent({
             model,
@@ -450,8 +491,15 @@ export async function digitizeBook(images: string | string[]): Promise<Extracted
             config: {
               responseMimeType: 'application/json',
               temperature: 0.1,
+              abortSignal: signal,
             },
           });
+
+          if (signal?.aborted) {
+            const err = new Error('Operación cancelada por el usuario');
+            err.name = 'AbortError';
+            throw err;
+          }
 
           const rawText = response.text?.trim();
           if (rawText) {
@@ -459,11 +507,17 @@ export async function digitizeBook(images: string | string[]): Promise<Extracted
             const parsed = JSON.parse(cleanJson) as ExtractedStructuredPayload;
             return [buildExtractedBlockFromPayload(parsed, primaryImage)];
           }
-        } catch (modelErr) {
+        } catch (modelErr: any) {
+          if (signal?.aborted || modelErr?.name === 'AbortError') {
+            throw modelErr;
+          }
           console.warn(`[digitizeBook] Gemini SDK model ${model} failed, trying next candidate:`, modelErr);
         }
       }
-    } catch (geminiErr) {
+    } catch (geminiErr: any) {
+      if (signal?.aborted || geminiErr?.name === 'AbortError') {
+        throw geminiErr;
+      }
       console.warn('[digitizeBook] Gemini SDK execution failed, falling back to OpenRouter:', geminiErr);
     }
   }
@@ -473,9 +527,16 @@ export async function digitizeBook(images: string | string[]): Promise<Extracted
   const openRouterModel = import.meta.env.VITE_OPENROUTER_MODEL || 'google/gemini-2.5-flash';
 
   if (openRouterApiKey && openRouterApiKey.trim() !== '') {
+    if (signal?.aborted) {
+      const err = new Error('Operación cancelada por el usuario');
+      err.name = 'AbortError';
+      throw err;
+    }
+
     try {
       const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
         method: 'POST',
+        signal,
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${openRouterApiKey}`,
@@ -508,6 +569,12 @@ export async function digitizeBook(images: string | string[]): Promise<Extracted
         }),
       });
 
+      if (signal?.aborted) {
+        const err = new Error('Operación cancelada por el usuario');
+        err.name = 'AbortError';
+        throw err;
+      }
+
       if (response.ok) {
         const data = await response.json();
         const rawContent = data.choices?.[0]?.message?.content;
@@ -517,9 +584,18 @@ export async function digitizeBook(images: string | string[]): Promise<Extracted
           return [buildExtractedBlockFromPayload(parsed, primaryImage)];
         }
       }
-    } catch (orErr) {
+    } catch (orErr: any) {
+      if (signal?.aborted || orErr?.name === 'AbortError') {
+        throw orErr;
+      }
       console.warn('[digitizeBook] OpenRouter vision call failed:', orErr);
     }
+  }
+
+  if (signal?.aborted) {
+    const err = new Error('Operación cancelada por el usuario');
+    err.name = 'AbortError';
+    throw err;
   }
 
   // Fallback to manual template if all Vision APIs are unavailable
@@ -537,6 +613,7 @@ function buildExtractedBlockFromPayload(
 
   const rawTextParts = [
     sanitized.title,
+    sanitized.instruction,
     sanitized.referenceContent,
     ...sanitized.items.map((i) => i.prompt),
   ].filter(Boolean);
@@ -546,6 +623,8 @@ function buildExtractedBlockFromPayload(
       ? 'table'
       : sanitized.interactionType === 'buckets'
       ? 'vocabulary'
+      : sanitized.interactionType === 'reference' || (Boolean(sanitized.referenceContent) && sanitized.items.length === 0)
+      ? 'paragraph'
       : 'numbered_list';
 
   return {
@@ -556,6 +635,7 @@ function buildExtractedBlockFromPayload(
     sourceImageSnippetUrl: sourceUrl,
     parsedData: {
       title: sanitized.title,
+      instruction: sanitized.instruction,
       referenceContent: sanitized.referenceContent || undefined,
       content: sanitized.referenceContent || undefined,
       wordBank: sanitized.wordBank.length > 0 ? sanitized.wordBank : undefined,
@@ -635,14 +715,59 @@ function sanitizeExtractedPayload(payload: ExtractedStructuredPayload): Extracte
       })
     : undefined;
 
+  const rawInstruction = payload.instruction ? String(payload.instruction).trim() : '';
+  const rawTitle = payload.title ? String(payload.title).trim() : '';
+
+  let title = rawTitle;
+  let instruction = rawInstruction;
+
+  if (!instruction && title.length > 50) {
+    instruction = title;
+    title = 'Speaking / Activity Task';
+  } else if (!title && instruction) {
+    title = instruction.length <= 50 ? instruction : 'Speaking / Activity Task';
+  } else if (!title && !instruction) {
+    title = 'Actividad Digitalizada';
+  }
+
   const rawRef = Array.isArray(payload.referenceContent)
     ? payload.referenceContent.map((s) => String(s).trim()).filter(Boolean).join('\n\n')
     : (payload.referenceContent ? String(payload.referenceContent).trim() : null);
 
-  const referenceContent = isDuplicateReferenceContent(rawRef, sanitizedItems) ? null : rawRef;
+  // In 'reference' activities, ALWAYS preserve referenceContent (never drop as duplicate)
+  // and consolidate complementary support phrases/vocabulary into referenceContent
+  let referenceContent = payload.interactionType === 'reference'
+    ? rawRef
+    : (isDuplicateReferenceContent(rawRef, sanitizedItems) ? null : rawRef);
+
+  if (payload.interactionType === 'reference') {
+    const existingRef = referenceContent || '';
+    const supportPhrases = sanitizedItems
+      .map((it) => it.prompt.replace(/_{2,}/g, '').trim())
+      .filter((p) => p && p.length > 3 && !existingRef.includes(p));
+
+    const extraWords = (payload.wordBank || [])
+      .map((w) => String(w).trim())
+      .filter((w) => w && w.length > 1 && !existingRef.includes(w));
+
+    const parts: string[] = [];
+    if (existingRef) {
+      parts.push(existingRef);
+    }
+    if (supportPhrases.length > 0) {
+      parts.push(`Useful phrases / Support sentences:\n${supportPhrases.map((p) => `• ${p}`).join('\n')}`);
+    } else if (extraWords.length > 0) {
+      parts.push(`Useful vocabulary:\n${extraWords.map((w) => `• ${w}`).join('\n')}`);
+    }
+
+    if (parts.length > 0) {
+      referenceContent = parts.join('\n\n');
+    }
+  }
 
   return {
-    title: String(payload.title || 'Actividad Digitalizada').trim(),
+    title,
+    instruction: instruction || undefined,
     referenceContent,
     wordBank: Array.isArray(payload.wordBank)
       ? payload.wordBank.map((w) => String(w).trim()).filter(Boolean)
@@ -667,7 +792,7 @@ function sanitizeExtractedPayload(payload: ExtractedStructuredPayload): Extracte
     isGraded: payload.isGraded !== undefined
       ? Boolean(payload.isGraded)
       : !(/true for you|about yourself|your opinion|discuss in pairs|personal reflection/i.test(
-          `${payload.title || ''} ${payload.referenceContent || ''} ${sanitizedItems.map((i) => i.prompt).join(' ')}`
+          `${title} ${instruction} ${referenceContent || ''} ${sanitizedItems.map((i) => i.prompt).join(' ')}`
         )),
   };
 }

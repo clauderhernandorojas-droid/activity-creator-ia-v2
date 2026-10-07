@@ -79,6 +79,8 @@ interface LessonState {
   extractedBlocks: ExtractedBlock[];
   lastExtractedPayload: ExtractedBlock[] | null;
   ocrProcessing: boolean;
+  activeOcrAbortController: AbortController | null;
+  cancelOcrProcessing: () => void;
   pastedImagePreview: string | null;
   pastedImages: string[];
 
@@ -102,7 +104,7 @@ interface LessonState {
     blockId: string,
     role: 'reference_text' | 'reference_table' | 'interaction_inputs' | 'interaction_selection' | 'interaction_buckets' | 'interaction_sequence'
   ) => string;
-  reorderSlides: (startIndex: number, endIndex: number) => void;
+  reorderSlides: (sourceIndex: number, destinationIndex: number) => void;
   updateSlideTitle: (id: string, title: string) => void;
   updateSlideSubtitle: (id: string, subtitle: string) => void;
   updateSlideLayout: (id: string, layout: SlideLayout) => void;
@@ -119,7 +121,7 @@ interface LessonState {
   addPastedImage: (url: string) => void;
   removePastedImage: (index: number) => void;
   clearPastedImages: () => void;
-  processPastedImages: (images?: string[]) => Promise<void>;
+  processPastedImages: (images?: string[], signal?: AbortSignal) => Promise<void>;
   processPastedImage: (fileOrUrl: string) => Promise<void>;
   loadPresetBookSample: (sampleIndex: number) => void;
   removeExtractedBlock: (id: string) => void;
@@ -172,6 +174,7 @@ export const useLessonStore = create<LessonState>()(
       extractedBlocks: [],
       lastExtractedPayload: null,
       ocrProcessing: false,
+      activeOcrAbortController: null,
       pastedImagePreview: null,
       pastedImages: [],
 
@@ -239,12 +242,29 @@ export const useLessonStore = create<LessonState>()(
         useSessionStore.getState().setCurrentSlideId(activeId);
       },
 
+      cancelOcrProcessing: () => {
+        const controller = get().activeOcrAbortController;
+        if (controller) {
+          controller.abort();
+        }
+        set({
+          ocrProcessing: false,
+          activeOcrAbortController: null,
+        });
+      },
+
       resetOcrState: () => {
+        const controller = get().activeOcrAbortController;
+        if (controller) {
+          controller.abort();
+        }
         set({
           pastedImagePreview: null,
           pastedImages: [],
           extractedBlocks: [],
-          lastExtractedPayload: null
+          lastExtractedPayload: null,
+          ocrProcessing: false,
+          activeOcrAbortController: null,
         });
       },
 
@@ -403,14 +423,27 @@ export const useLessonStore = create<LessonState>()(
         return cloneId;
       },
 
-      reorderSlides: (startIndex, endIndex) => {
+      reorderSlides: (sourceIndex: number, destinationIndex: number) => {
         set((state) => {
+          const total = state.lesson.slides.length;
+          if (
+            sourceIndex === destinationIndex ||
+            sourceIndex < 0 ||
+            sourceIndex >= total ||
+            destinationIndex < 0 ||
+            destinationIndex >= total
+          ) {
+            return state;
+          }
+
           const slides = [...state.lesson.slides];
-          const [removed] = slides.splice(startIndex, 1);
-          slides.splice(endIndex, 0, removed);
+          const [movedSlide] = slides.splice(sourceIndex, 1);
+          slides.splice(destinationIndex, 0, movedSlide);
+
           return {
             ...recordHistory(state),
             lesson: { ...state.lesson, slides },
+            activeSlideId: state.activeSlideId,
           };
         });
       },
@@ -539,22 +572,37 @@ export const useLessonStore = create<LessonState>()(
         });
       },
 
-      processPastedImages: async (imagesToProcess) => {
+      processPastedImages: async (imagesToProcess, externalSignal) => {
         const state = get();
         const images = imagesToProcess || state.pastedImages;
         if (!images || images.length === 0) return;
 
-        set({ ocrProcessing: true });
+        if (state.activeOcrAbortController) {
+          state.activeOcrAbortController.abort();
+        }
+
+        const controller = new AbortController();
+        if (externalSignal) {
+          externalSignal.addEventListener('abort', () => controller.abort());
+          if (externalSignal.aborted) controller.abort();
+        }
+
+        set({ ocrProcessing: true, activeOcrAbortController: controller });
         try {
-          const extracted = await digitizeBook(images);
+          const extracted = await digitizeBook(images, controller.signal);
           set({
             ocrProcessing: false,
+            activeOcrAbortController: null,
             extractedBlocks: extracted,
             lastExtractedPayload: extracted
           });
-        } catch (err) {
+        } catch (err: any) {
+          if (controller.signal.aborted || err?.name === 'AbortError') {
+            set({ ocrProcessing: false, activeOcrAbortController: null });
+            return;
+          }
           console.error('Error processing images with AI:', err);
-          set({ ocrProcessing: false });
+          set({ ocrProcessing: false, activeOcrAbortController: null });
         }
       },
 
@@ -564,22 +612,37 @@ export const useLessonStore = create<LessonState>()(
           ? state.pastedImages
           : [...state.pastedImages, fileOrUrl];
 
+        if (state.activeOcrAbortController) {
+          state.activeOcrAbortController.abort();
+        }
+
+        const controller = new AbortController();
+
         set({
           pastedImages: nextImages,
           pastedImagePreview: nextImages[0] || null,
-          ocrProcessing: true
+          ocrProcessing: true,
+          activeOcrAbortController: controller
         });
 
         try {
-          const extracted = await digitizeBook(nextImages.length > 0 ? nextImages : [fileOrUrl]);
+          const extracted = await digitizeBook(
+            nextImages.length > 0 ? nextImages : [fileOrUrl],
+            controller.signal
+          );
           set({
             ocrProcessing: false,
+            activeOcrAbortController: null,
             extractedBlocks: extracted,
             lastExtractedPayload: extracted
           });
-        } catch (err) {
+        } catch (err: any) {
+          if (controller.signal.aborted || err?.name === 'AbortError') {
+            set({ ocrProcessing: false, activeOcrAbortController: null });
+            return;
+          }
           console.error('Error processing images with AI:', err);
-          set({ ocrProcessing: false });
+          set({ ocrProcessing: false, activeOcrAbortController: null });
         }
       },
 
@@ -685,14 +748,20 @@ export const useLessonStore = create<LessonState>()(
 
         const mapped = mapBlockToRole(block, role);
         const isGraded = block.parsedData?.isGraded !== undefined ? Boolean(block.parsedData.isGraded) : undefined;
+        const blockTitle = block.parsedData?.title;
+        const blockInstruction = block.parsedData?.instruction;
         set((s) => ({
           ...recordHistory(s),
           lesson: {
             ...s.lesson,
             slides: s.lesson.slides.map((slide) => {
               if (slide.id !== slideId) return slide;
+              const shouldUpdateTitle = blockTitle && (!slide.title || slide.title === 'Nueva diapositiva' || slide.title === 'Diapositiva Digitalizada');
+              const shouldUpdateSubtitle = blockInstruction && (!slide.subtitle || slide.subtitle === 'Instrucción o contexto breve' || slide.subtitle === 'Contenido adaptado desde libro de texto');
               return {
                 ...slide,
+                ...(shouldUpdateTitle ? { title: blockTitle } : {}),
+                ...(shouldUpdateSubtitle ? { subtitle: blockInstruction } : {}),
                 ...(isGraded !== undefined ? { isGraded } : {}),
                 ...(mapped.reference ? { referenceContent: mapped.reference } : {}),
                 ...(mapped.interaction ? { interaction: mapped.interaction, cachedInteraction: mapped.interaction } : {}),

@@ -20,7 +20,8 @@ import {
   ChevronDown,
   Rocket,
   Download,
-  ImageIcon
+  ImageIcon,
+  Square
 } from 'lucide-react';
 import type { ExtractedBlock } from '../types/schema';
 import type { ManualTemplateType } from '../core/ai/digitizeBook';
@@ -31,6 +32,7 @@ export const OcrPanel: React.FC = () => {
     lesson,
     extractedBlocks,
     ocrProcessing,
+    cancelOcrProcessing,
     pastedImages,
     addPastedImage,
     removePastedImage,
@@ -616,26 +618,35 @@ export const OcrPanel: React.FC = () => {
                     </div>
                   </div>
 
-                  {/* Primary Trigger Button for Multimodal Processing */}
+                  {/* Primary Trigger Button for Multimodal Processing with Abort capability */}
                   <div className="pt-1 flex-shrink-0">
-                    <button
-                      type="button"
-                      onClick={() => processPastedImages()}
-                      disabled={ocrProcessing || pastedImages.length === 0}
-                      className="w-full py-2.5 px-4 bg-gradient-to-r from-indigo-600 to-indigo-700 hover:from-indigo-700 hover:to-indigo-800 disabled:opacity-50 text-white font-bold text-xs rounded-xl shadow-xs transition flex items-center justify-center gap-2 cursor-pointer"
-                    >
-                      {ocrProcessing ? (
-                        <>
-                          <Sparkles className="w-4 h-4 animate-spin text-white" />
-                          <span>Analizando {pastedImages.length} recorte(s) con Gemini...</span>
-                        </>
-                      ) : (
-                        <>
-                          <Sparkles className="w-4 h-4 text-amber-300" />
-                          <span>Procesar {pastedImages.length} Recorte{pastedImages.length > 1 ? 's' : ''} con IA</span>
-                        </>
-                      )}
-                    </button>
+                    {ocrProcessing ? (
+                      <div className="flex items-center gap-2">
+                        <div className="flex-1 py-2.5 px-3 bg-indigo-50 border border-indigo-200 text-indigo-700 font-bold text-xs rounded-xl flex items-center justify-center gap-2 shadow-2xs">
+                          <Sparkles className="w-4 h-4 animate-spin text-indigo-600" />
+                          <span className="truncate">Analizando {pastedImages.length} recorte(s)...</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => cancelOcrProcessing()}
+                          className="py-2.5 px-3 bg-rose-50 hover:bg-rose-100 border border-rose-300 text-rose-700 hover:text-rose-800 font-bold text-xs rounded-xl shadow-2xs transition flex items-center gap-1.5 cursor-pointer shrink-0"
+                          title="Cancelar análisis en curso"
+                        >
+                          <Square className="w-3.5 h-3.5 fill-rose-600 text-rose-600" />
+                          <span>Cancelar análisis</span>
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => processPastedImages()}
+                        disabled={pastedImages.length === 0}
+                        className="w-full py-2.5 px-4 bg-gradient-to-r from-indigo-600 to-indigo-700 hover:from-indigo-700 hover:to-indigo-800 disabled:opacity-50 text-white font-bold text-xs rounded-xl shadow-xs transition flex items-center justify-center gap-2 cursor-pointer"
+                      >
+                        <Sparkles className="w-4 h-4 text-amber-300" />
+                        <span>Procesar {pastedImages.length} Recorte{pastedImages.length > 1 ? 's' : ''} con IA</span>
+                      </button>
+                    )}
                   </div>
                 </div>
               )}

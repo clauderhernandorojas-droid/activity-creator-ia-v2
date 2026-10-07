@@ -522,6 +522,35 @@ export function mapBlockToReferenceText(block: ExtractedBlock): ReferenceTextBlo
     rawContent = block.rawText || '';
   }
 
+  // If this is a reference/speaking card, consolidate complementary support phrases or vocabulary
+  if (parsed.interactionType === 'reference' || block.detectedType === 'paragraph') {
+    const existing = String(rawContent || '').trim();
+    const supportPhrases = Array.isArray(parsed.items)
+      ? parsed.items
+          .map((it: any) => String(it.prompt || it.text || '').replace(/_{2,}/g, '').trim())
+          .filter((p: string) => p && p.length > 3 && !existing.includes(p))
+      : [];
+    const supportWords = Array.isArray(parsed.wordBank)
+      ? parsed.wordBank
+          .map((w: any) => String(w).trim())
+          .filter((w: string) => w && w.length > 1 && !existing.includes(w))
+      : [];
+
+    const sections: string[] = [];
+    if (existing) {
+      sections.push(existing);
+    }
+    if (supportPhrases.length > 0) {
+      sections.push(`Useful phrases / Support sentences:\n${supportPhrases.map((p: string) => `• ${p}`).join('\n')}`);
+    } else if (supportWords.length > 0) {
+      sections.push(`Useful vocabulary:\n${supportWords.map((w: string) => `• ${w}`).join('\n')}`);
+    }
+
+    if (sections.length > 0) {
+      rawContent = sections.join('\n\n');
+    }
+  }
+
   const content = String(rawContent || '').trim();
 
   return {
@@ -544,7 +573,9 @@ export function mapBlockToRole(
   const parsed = block.parsedData || {};
   const rawRefText = String(parsed.referenceContent || parsed.content || '').trim();
   const items = Array.isArray(parsed.items) ? parsed.items : [];
-  const isDuplicate = isDuplicateReferenceContent(rawRefText, items);
+  const isDuplicate = parsed.interactionType === 'reference'
+    ? false
+    : isDuplicateReferenceContent(rawRefText, items);
 
   const hasReadingContent = Boolean(
     !isDuplicate && rawRefText.length > 0

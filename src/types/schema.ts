@@ -270,9 +270,10 @@ export const ExtractedItemSchema = z.object({
 
 export const ExtractedStructuredPayloadSchema = z.object({
   title: z.string(),
+  instruction: z.string().optional(),
   referenceContent: z.string().nullable().optional(),
   wordBank: z.array(z.string()).default([]),
-  interactionType: z.enum(['fill_blanks', 'multiple_choice', 'matching', 'buckets']).default('fill_blanks'),
+  interactionType: z.enum(['fill_blanks', 'multiple_choice', 'matching', 'buckets', 'reference']).default('fill_blanks'),
   buckets: z.array(z.string()).optional(),
   items: z.array(ExtractedItemSchema).default([]),
   tableHeaders: z.array(z.string()).optional(),
