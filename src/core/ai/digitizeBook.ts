@@ -1,7 +1,7 @@
 import type { ExtractedBlock, ExtractedStructuredPayload } from '../../types/schema';
 import { GoogleGenAI } from '@google/genai';
 
-export type ManualTemplateType = 'input_fields' | 'buckets' | 'selection' | 'reference_table';
+export type ManualTemplateType = 'input_fields' | 'buckets' | 'selection' | 'reference_table' | 'table_grid';
 
 export const MANUAL_TEMPLATES: Record<ManualTemplateType, {
   label: string;
@@ -122,6 +122,45 @@ Present Perfect | already, yet, ever, never, so far | I have visited Rome twice.
         ['Present Perfect', 'already, yet, ever, never, so far', 'I have visited Rome twice.']
       ]
     }
+  },
+  table_grid: {
+    label: 'Interactive Table (Tabla / Cuadrícula interactiva)',
+    detectedType: 'table',
+    rawText: `Complete the table with the correct question words:
+Question Word | Meaning / Use | Example
+Who | Asking about a person | Who is that?
+Where | Asking about a place | Where do you live?
+When | Asking about time | When is the exam?
+What | Asking about things | What is your name?`,
+    parsedData: {
+      title: 'Manual: Question Words Interactive Grid',
+      instruction: 'Complete the table with the correct question words from the box:',
+      wordBank: ['Who', 'Where', 'When', 'What', 'Why', 'Which'],
+      interactionType: 'fill_blanks',
+      tableHeaders: ['Question Word', 'Meaning / Use', 'Example'],
+      tableRows: [
+        [
+          { text: 'Who', isInput: true, expectedAnswer: 'Who', acceptedAnswers: ['Who'], isExample: true },
+          { text: 'Asking about a person', isInput: false, isExample: false },
+          { text: 'Who is that?', isInput: false, isExample: false }
+        ],
+        [
+          { text: '', isInput: true, expectedAnswer: 'Where', acceptedAnswers: ['Where'], isExample: false },
+          { text: 'Asking about a place', isInput: false, isExample: false },
+          { text: 'Where do you live?', isInput: false, isExample: false }
+        ],
+        [
+          { text: '', isInput: true, expectedAnswer: 'When', acceptedAnswers: ['When'], isExample: false },
+          { text: 'Asking about time', isInput: false, isExample: false },
+          { text: 'When is the exam?', isInput: false, isExample: false }
+        ],
+        [
+          { text: '', isInput: true, expectedAnswer: 'What', acceptedAnswers: ['What'], isExample: false },
+          { text: 'Asking about things', isInput: false, isExample: false },
+          { text: 'What is your name?', isInput: false, isExample: false }
+        ]
+      ]
+    }
   }
 };
 
@@ -190,7 +229,9 @@ export function consolidateBlocks(blocks: ExtractedBlock[], sourceUrl?: string):
   const mergedParsed: Record<string, any> = {
     ...primary,
     items: mergedItems.length > 0 ? mergedItems : primary.items,
-    wordBank: mergedWordBank.length > 0 ? mergedWordBank : primary.wordBank
+    wordBank: mergedWordBank.length > 0 ? mergedWordBank : primary.wordBank,
+    tableHeaders: primary.tableHeaders,
+    tableRows: primary.tableRows
   };
 
   return {
@@ -228,6 +269,30 @@ const STRUCTURED_EXTRACTION_SCHEMA = {
       type: 'array',
       items: { type: 'string' },
       description: 'Target categories or preposition names if interactionType is buckets, otherwise omit or empty array'
+    },
+    tableHeaders: {
+      type: 'array',
+      items: { type: 'string' },
+      description: 'Column header titles if the exercise is structured as a 2D table or double-entry grid, otherwise omit or empty array'
+    },
+    tableRows: {
+      type: 'array',
+      items: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            text: { type: 'string', description: 'Fixed guidance or read-only text in cell' },
+            isInput: { type: 'boolean', description: 'True if student must complete or fill this cell' },
+            expectedAnswer: { type: 'string', description: 'Canonical answer deduced by teacher if isInput is true' },
+            acceptedAnswers: { type: 'array', items: { type: 'string' }, description: 'Valid variants including expectedAnswer' },
+            isExample: { type: 'boolean', description: 'True if cell is already filled as a model/sample in the book' },
+            hint: { type: 'string', description: 'Optional clue or tip' }
+          },
+          required: ['text', 'isInput', 'isExample']
+        }
+      },
+      description: '2D matrix of cells if the exercise is structured as a table or grid, otherwise omit or empty array'
     },
     items: {
       type: 'array',
@@ -291,6 +356,12 @@ REGLAS UNIVERSALES DE BANCO DE OPCIONES Y ASIGNACIÓN BIUNÍVOCA:
     - \`prompt\`: El término o expresión a clasificar.
     - \`expectedAnswer\`: El nombre exacto de la categoría (bucket) a la que pertenece.
     - \`isExample\`: true si el término ya viene clasificado como muestra en el documento original.
+- Regla Universal de Tablas/Cuadrículas: Si el ejercicio se presenta estructuralmente como una matriz o tabla de doble entrada con filas y columnas:
+  * Genera \`tableHeaders\` con los títulos de las columnas.
+  * Genera \`tableRows\` como una matriz de celdas bidimensionales.
+  * Si una celda contiene texto fijo o de guía que el alumno debe leer, márcala con \`isInput: false\` y su contenido en \`text\`.
+  * Si una celda es un espacio en blanco para responder, márcala con \`isInput: true\` y su respuesta canónica en \`expectedAnswer\`.
+  * Si una celda de respuesta ya viene resuelta en el libro como modelo, márcala con \`isInput: true\`, \`isExample: true\` y su contenido en \`expectedAnswer\`.
 
 UNIVERSAL TAXONOMY & STRICT CONTRACT:
 1. "title": Formal activity or reading title.
@@ -307,6 +378,7 @@ UNIVERSAL TAXONOMY & STRICT CONTRACT:
    - "isExample": Booleano. Must follow the Regla Universal de Muestras Impresas: las filas o ítems que ya presentan una respuesta visible de muestra impresa en el material original deben clasificarse obligatoriamente como "isExample": true con dicho elemento en expectedAnswer, NUNCA omitirse ni dejarse en blanco.
    - "explanation": Brief 1-line pedagogical justification of the grammar rule or clue.
    - "options": (If multiple choice) array of choices to select from.
+6. "tableHeaders" y "tableRows": Si el ejercicio se presenta como una cuadrícula o tabla interactiva de doble entrada, genera las columnas en "tableHeaders" y la matriz de celdas en "tableRows" siguiendo la Regla Universal de Tablas/Cuadrículas.
 
 CRITICAL NEGATIVE CONSTRAINTS:
 - NUNCA conviertas encabezados de tabla ni códigos editoriales en ítems interactivos.
@@ -449,7 +521,11 @@ function buildExtractedBlockFromPayload(
   ].filter(Boolean);
 
   const detectedType: ExtractedBlock['detectedType'] =
-    sanitized.interactionType === 'buckets' ? 'vocabulary' : 'numbered_list';
+    sanitized.tableRows && sanitized.tableRows.length > 0
+      ? 'table'
+      : sanitized.interactionType === 'buckets'
+      ? 'vocabulary'
+      : 'numbered_list';
 
   return {
     id: `ocr-gen-${Date.now()}`,
@@ -465,6 +541,8 @@ function buildExtractedBlockFromPayload(
       interactionType: sanitized.interactionType,
       buckets: sanitized.buckets,
       items: sanitized.items,
+      tableHeaders: sanitized.tableHeaders,
+      tableRows: sanitized.tableRows,
     },
   };
 }
@@ -503,6 +581,38 @@ function sanitizeExtractedPayload(payload: ExtractedStructuredPayload): Extracte
     };
   });
 
+  const rawTableHeaders = Array.isArray(payload.tableHeaders) ? payload.tableHeaders : undefined;
+  const tableHeaders = rawTableHeaders ? rawTableHeaders.map((h) => String(h).trim()).filter(Boolean) : undefined;
+
+  const rawTableRows = Array.isArray(payload.tableRows) ? payload.tableRows : undefined;
+  const tableRows = rawTableRows
+    ? rawTableRows.map((row) => {
+        if (!Array.isArray(row)) return [];
+        return row.map((cell) => {
+          const isInput = Boolean(cell?.isInput);
+          const isExample = Boolean(cell?.isExample);
+          const text = String(cell?.text || '').trim();
+          const expectedAnswer = String(cell?.expectedAnswer || '').trim();
+          let acceptedAnswers = Array.isArray(cell?.acceptedAnswers) && cell.acceptedAnswers.length > 0
+            ? cell.acceptedAnswers.map((a) => String(a).trim()).filter(Boolean)
+            : (expectedAnswer ? [expectedAnswer] : []);
+
+          if (expectedAnswer && !acceptedAnswers.includes(expectedAnswer)) {
+            acceptedAnswers.unshift(expectedAnswer);
+          }
+
+          return {
+            text,
+            isInput,
+            expectedAnswer: isInput ? (expectedAnswer || acceptedAnswers[0] || '') : undefined,
+            acceptedAnswers,
+            isExample,
+            hint: cell?.hint ? String(cell.hint).trim() : undefined,
+          };
+        });
+      })
+    : undefined;
+
   return {
     title: String(payload.title || 'Actividad Digitalizada').trim(),
     referenceContent: payload.referenceContent ? String(payload.referenceContent).trim() : null,
@@ -524,6 +634,8 @@ function sanitizeExtractedPayload(payload: ExtractedStructuredPayload): Extracte
       return undefined;
     })(),
     items: sanitizedItems,
+    tableHeaders,
+    tableRows,
   };
 }
 

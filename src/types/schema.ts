@@ -61,12 +61,13 @@ export const InputFieldListItemSchema = z.object({
 });
 
 export const InputFieldTableCellSchema = z.object({
-  text: z.string(),
+  text: z.string().default(''),
   isInput: z.boolean().default(false),
   inputId: z.string().optional(),
   acceptedAnswers: z.array(z.string()).default([]),
   expectedAnswer: z.string().optional(),
-  isExample: z.boolean().optional(),
+  isExample: z.boolean().default(false),
+  hint: z.string().optional(),
 });
 
 export const InputFieldsBlockSchema = z.object({
@@ -246,6 +247,15 @@ export type Lesson = z.infer<typeof LessonSchema>;
 // E. FLUJO OCR Y EXTRACCIÓN LIMPIA (PASO 1 -> PASO 2)
 // ==========================================
 
+export const ExtractedTableCellSchema = z.object({
+  text: z.string().default(''),
+  isInput: z.boolean().default(false),
+  expectedAnswer: z.string().optional(),
+  acceptedAnswers: z.array(z.string()).default([]),
+  isExample: z.boolean().default(false),
+  hint: z.string().optional(),
+});
+
 export const ExtractedItemSchema = z.object({
   prompt: z.string(),
   expectedAnswer: z.string(),
@@ -263,8 +273,11 @@ export const ExtractedStructuredPayloadSchema = z.object({
   interactionType: z.enum(['fill_blanks', 'multiple_choice', 'matching', 'buckets']).default('fill_blanks'),
   buckets: z.array(z.string()).optional(),
   items: z.array(ExtractedItemSchema).default([]),
+  tableHeaders: z.array(z.string()).optional(),
+  tableRows: z.array(z.array(ExtractedTableCellSchema)).optional(),
 });
 
+export type ExtractedTableCell = z.infer<typeof ExtractedTableCellSchema>;
 export type ExtractedItem = z.infer<typeof ExtractedItemSchema>;
 export type ExtractedStructuredPayload = z.infer<typeof ExtractedStructuredPayloadSchema>;
 

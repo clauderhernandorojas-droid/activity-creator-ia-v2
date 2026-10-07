@@ -50,9 +50,21 @@ export function evaluateInput(
       row.forEach((cell, cIdx) => {
         if (cell.isInput) {
           inputCount++;
-          const cellKey = `cell-${rIdx}-${cIdx}`;
-          const rawUserVal = String(studentAnswers[cellKey] || '');
-          const validation = validateFillInBlank(rawUserVal, cell.acceptedAnswers);
+          const cellKey = cell.inputId || `cell-${rIdx}-${cIdx}`;
+          const isExample = Boolean(cell.isExample);
+          const rawUserVal = String(studentAnswers[cellKey] || (isExample ? cell.expectedAnswer : '') || '');
+          const validation = validateFillInBlank(
+            rawUserVal,
+            cell.acceptedAnswers,
+            cell.expectedAnswer,
+            cell.hint
+          );
+
+          if (isExample) {
+            validation.isCorrect = true;
+            validation.status = 'correct';
+            validation.feedback = 'Ejemplo resuelto como modelo pedagógico.';
+          }
 
           details[cellKey] = validation.isCorrect;
           itemFeedback[cellKey] = validation;

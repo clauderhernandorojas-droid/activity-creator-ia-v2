@@ -721,7 +721,17 @@ export const OcrPanel: React.FC = () => {
                         <Table className="w-4 h-4 text-indigo-600 flex-shrink-0" />
                         <div>
                           <p className="font-semibold">Reference Table</p>
-                          <p className="text-[10px] text-slate-400">Cuadro gramatical / Tabla</p>
+                          <p className="text-[10px] text-slate-400">Cuadro gramatical (Solo lectura)</p>
+                        </div>
+                      </button>
+                      <button
+                        onClick={() => handleCreateManual('table_grid', 'Tabla interactiva')}
+                        className="w-full text-left text-xs p-2 rounded-xl hover:bg-purple-50 text-slate-700 hover:text-purple-700 flex items-center gap-2 transition"
+                      >
+                        <Table className="w-4 h-4 text-purple-600 flex-shrink-0" />
+                        <div>
+                          <p className="font-semibold">Tabla interactiva</p>
+                          <p className="text-[10px] text-slate-400">Cuadrícula 2D con inputs</p>
                         </div>
                       </button>
                     </div>

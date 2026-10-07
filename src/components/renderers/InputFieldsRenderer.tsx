@@ -1,5 +1,5 @@
 import React from 'react';
-import type { InputFieldsBlock, InputFieldListItem } from '../../types/schema';
+import type { InputFieldsBlock, InputFieldListItem, InputFieldTableCell } from '../../types/schema';
 import type { SessionEvaluation } from '../../store/useSessionStore';
 import { Plus, Trash2, CheckCircle2, XCircle, HelpCircle, AlertCircle, Sparkles } from 'lucide-react';
 
@@ -103,6 +103,12 @@ export const InputFieldsRenderer: React.FC<Props> = ({
   onAnswerChange,
   onChange,
 }) => {
+  const isTableLayout = Boolean(
+    block.layoutMode === 'table' &&
+    Array.isArray(block.tableRows) &&
+    block.tableRows.length > 0
+  );
+
   const hasWordBank = Boolean(
     block.wordBank && block.wordBank.filter((w) => typeof w === 'string' && w.trim().length > 0).length > 0
   );
@@ -125,8 +131,21 @@ export const InputFieldsRenderer: React.FC<Props> = ({
         }
       }
     });
+    // Canonical values assigned to table cells with isExample: true
+    if (block.tableRows) {
+      block.tableRows.forEach((row) => {
+        row.forEach((cell) => {
+          if (cell.isInput && cell.isExample) {
+            const canonical = cell.expectedAnswer?.trim() || cell.acceptedAnswers?.[0]?.trim();
+            if (canonical) {
+              set.add(canonical.toLowerCase());
+            }
+          }
+        });
+      });
+    }
     return set;
-  }, [studentAnswers, block.listItems]);
+  }, [studentAnswers, block.listItems, block.tableRows]);
 
   const handleListItemChange = (index: number, field: keyof InputFieldListItem, value: any) => {
     if (!onChange) return;
@@ -191,6 +210,76 @@ export const InputFieldsRenderer: React.FC<Props> = ({
     });
   };
 
+  /* Table Management Handlers */
+  const handleTableHeaderChange = (colIdx: number, val: string) => {
+    if (!onChange) return;
+    const updated = [...block.tableHeaders];
+    updated[colIdx] = val;
+    onChange({ ...block, tableHeaders: updated });
+  };
+
+  const handleTableCellChange = (
+    rowIdx: number,
+    colIdx: number,
+    updates: Partial<InputFieldTableCell>
+  ) => {
+    if (!onChange) return;
+    const updatedRows = block.tableRows.map((r, rI) => {
+      if (rI !== rowIdx) return r;
+      return r.map((c, cI) => {
+        if (cI !== colIdx) return c;
+        return { ...c, ...updates };
+      });
+    });
+    onChange({ ...block, tableRows: updatedRows });
+  };
+
+  const addTableRow = () => {
+    if (!onChange) return;
+    const colCount = Math.max(block.tableHeaders.length, block.tableRows[0]?.length || 2);
+    const newRow: InputFieldTableCell[] = Array.from({ length: colCount }).map((_, cIdx) => ({
+      text: '',
+      isInput: cIdx > 0,
+      inputId: `cell-${block.tableRows.length}-${cIdx}`,
+      acceptedAnswers: [],
+      expectedAnswer: '',
+      isExample: false,
+    }));
+    onChange({ ...block, tableRows: [...block.tableRows, newRow] });
+  };
+
+  const removeTableRow = (rowIdx: number) => {
+    if (!onChange || block.tableRows.length <= 1) return;
+    const updatedRows = block.tableRows.filter((_, idx) => idx !== rowIdx);
+    onChange({ ...block, tableRows: updatedRows });
+  };
+
+  const addTableColumn = () => {
+    if (!onChange) return;
+    const newHeader = `Col ${block.tableHeaders.length + 1}`;
+    const updatedHeaders = [...block.tableHeaders, newHeader];
+    const newColIdx = block.tableHeaders.length;
+    const updatedRows = block.tableRows.map((r, rIdx) => [
+      ...r,
+      {
+        text: '',
+        isInput: true,
+        inputId: `cell-${rIdx}-${newColIdx}`,
+        acceptedAnswers: [],
+        expectedAnswer: '',
+        isExample: false,
+      },
+    ]);
+    onChange({ ...block, tableHeaders: updatedHeaders, tableRows: updatedRows });
+  };
+
+  const removeTableColumn = (colIdx: number) => {
+    if (!onChange || block.tableHeaders.length <= 1) return;
+    const updatedHeaders = block.tableHeaders.filter((_, idx) => idx !== colIdx);
+    const updatedRows = block.tableRows.map((r) => r.filter((_, idx) => idx !== colIdx));
+    onChange({ ...block, tableHeaders: updatedHeaders, tableRows: updatedRows });
+  };
+
   return (
     <div className="w-full flex flex-col">
       {/* Pedagogical Instruction */}
@@ -210,13 +299,34 @@ export const InputFieldsRenderer: React.FC<Props> = ({
         )}
 
         {isEditMode && (
-          <button
-            onClick={addListItem}
-            className="text-xs flex items-center gap-1 px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-semibold rounded-lg border border-indigo-200 transition cursor-pointer"
-          >
-            <Plus className="w-3.5 h-3.5" />
-            <span>Pregunta</span>
-          </button>
+          isTableLayout ? (
+            <div className="flex items-center gap-1.5">
+              <button
+                onClick={addTableColumn}
+                className="text-xs flex items-center gap-1 px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold rounded-lg border border-slate-200 transition cursor-pointer"
+                title="Añadir columna a la tabla"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>Columna</span>
+              </button>
+              <button
+                onClick={addTableRow}
+                className="text-xs flex items-center gap-1 px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-semibold rounded-lg border border-indigo-200 transition cursor-pointer"
+                title="Añadir fila a la tabla"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>Fila</span>
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={addListItem}
+              className="text-xs flex items-center gap-1 px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-semibold rounded-lg border border-indigo-200 transition cursor-pointer"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              <span>Pregunta</span>
+            </button>
+          )
         )}
       </div>
 
@@ -273,8 +383,251 @@ export const InputFieldsRenderer: React.FC<Props> = ({
         )
       )}
 
-      {/* Questions list */}
-      <div className="w-full space-y-4">
+      {/* Table vs List Mode Rendering */}
+      {isTableLayout ? (
+        /* ============================================================== */
+        /* 2D TABLE / GRID INTERACTION                                   */
+        /* ============================================================== */
+        isEditMode ? (
+          /* TABLE EDIT MODE */
+          <div className="w-full space-y-3">
+            <div className="w-full overflow-x-auto border border-slate-200 rounded-xl bg-white shadow-sm p-3">
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr className="bg-slate-50 border-b border-slate-200">
+                    {block.tableHeaders.map((header, hIdx) => (
+                      <th key={hIdx} className="p-2 border-r border-slate-200 last:border-r-0 min-w-[150px]">
+                        <div className="flex items-center gap-1">
+                          <input
+                            type="text"
+                            value={header}
+                            onChange={(e) => handleTableHeaderChange(hIdx, e.target.value)}
+                            placeholder={`Columna ${hIdx + 1}`}
+                            className="w-full text-xs font-bold text-slate-800 bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 outline-none focus:border-indigo-500"
+                          />
+                          {block.tableHeaders.length > 1 && (
+                            <button
+                              onClick={() => removeTableColumn(hIdx)}
+                              className="p-1 text-slate-400 hover:text-rose-600 rounded transition"
+                              title="Eliminar columna"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </div>
+                      </th>
+                    ))}
+                    <th className="w-12 p-2 text-center text-xs font-bold text-slate-400">Acción</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {block.tableRows.map((row, rIdx) => (
+                    <tr key={rIdx} className="hover:bg-slate-50/40">
+                      {row.map((cell, cIdx) => (
+                        <td key={cIdx} className="p-2 border-r border-slate-100 last:border-r-0 align-top min-w-[150px]">
+                          <div className="flex flex-col gap-1.5">
+                            <div className="flex items-center justify-between">
+                              <label className="text-[10px] font-semibold text-slate-500 flex items-center gap-1 cursor-pointer select-none">
+                                <input
+                                  type="checkbox"
+                                  checked={cell.isInput}
+                                  onChange={(e) => handleTableCellChange(rIdx, cIdx, { isInput: e.target.checked })}
+                                  className="rounded text-indigo-600 focus:ring-indigo-500 w-3 h-3"
+                                />
+                                <span>{cell.isInput ? 'Editable' : 'Fijo'}</span>
+                              </label>
+
+                              {cell.isInput && (
+                                <label className="text-[10px] font-semibold text-amber-700 flex items-center gap-1 cursor-pointer select-none">
+                                  <input
+                                    type="checkbox"
+                                    checked={Boolean(cell.isExample)}
+                                    onChange={(e) => handleTableCellChange(rIdx, cIdx, { isExample: e.target.checked })}
+                                    className="rounded text-amber-600 focus:ring-amber-500 w-3 h-3"
+                                  />
+                                  <span>Muestra</span>
+                                </label>
+                              )}
+                            </div>
+
+                            {!cell.isInput ? (
+                              <input
+                                type="text"
+                                value={cell.text}
+                                onChange={(e) => handleTableCellChange(rIdx, cIdx, { text: e.target.value })}
+                                placeholder="Texto de guía..."
+                                className="w-full text-xs text-slate-800 bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 outline-none focus:border-indigo-500 font-medium"
+                              />
+                            ) : (
+                              <div className="space-y-1">
+                                <input
+                                  type="text"
+                                  value={cell.expectedAnswer || ''}
+                                  onChange={(e) => {
+                                    const val = e.target.value;
+                                    const accepted = cell.acceptedAnswers.includes(val)
+                                      ? cell.acceptedAnswers
+                                      : [val, ...cell.acceptedAnswers.filter(Boolean)];
+                                    handleTableCellChange(rIdx, cIdx, { expectedAnswer: val, acceptedAnswers: accepted });
+                                  }}
+                                  placeholder="Respuesta canónica..."
+                                  className="w-full text-xs font-bold text-slate-800 bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 outline-none focus:border-indigo-500"
+                                />
+                                <input
+                                  type="text"
+                                  value={cell.acceptedAnswers.join(', ')}
+                                  onChange={(e) => {
+                                    const list = e.target.value.split(',').map((s) => s.trim()).filter(Boolean);
+                                    handleTableCellChange(rIdx, cIdx, { acceptedAnswers: list });
+                                  }}
+                                  placeholder="Variantes (comas)..."
+                                  className="w-full text-[10px] text-slate-600 bg-white border border-slate-200 rounded-lg px-2 py-1 outline-none focus:border-indigo-500"
+                                />
+                              </div>
+                            )}
+                          </div>
+                        </td>
+                      ))}
+                      <td className="p-2 text-center align-middle">
+                        {block.tableRows.length > 1 && (
+                          <button
+                            onClick={() => removeTableRow(rIdx)}
+                            className="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg hover:bg-rose-50 transition"
+                            title="Eliminar fila"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        ) : (
+          /* TABLE STUDENT / PREVIEW MODE */
+          <div className="w-full overflow-x-auto border border-slate-200 rounded-xl bg-white shadow-sm">
+            <table className="w-full text-left border-collapse">
+              {block.tableHeaders.length > 0 && (
+                <thead>
+                  <tr className="bg-slate-50 border-b border-slate-200">
+                    {block.tableHeaders.map((header, hIdx) => (
+                      <th
+                        key={hIdx}
+                        className="px-4 py-3 text-xs font-bold text-slate-700 uppercase tracking-wider border-r border-slate-200 last:border-r-0"
+                      >
+                        {header}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+              )}
+              <tbody className="divide-y divide-slate-100">
+                {block.tableRows.map((row, rIdx) => (
+                  <tr key={rIdx} className="hover:bg-slate-50/50 transition-colors">
+                    {row.map((cell, cIdx) => {
+                      const cellKey = cell.inputId || `cell-${rIdx}-${cIdx}`;
+                      const isEvaluated = evaluation.isSubmitted;
+                      const isCorrect = Boolean(evaluation.details[cellKey]) || Boolean(cell.isExample);
+                      const cellFeedback = evaluation.itemFeedback?.[cellKey];
+                      const isTypoWarning = isCorrect && cellFeedback?.status === 'correct_with_typo';
+                      const userVal = studentAnswers[cellKey] || '';
+                      const canonicalAnswer =
+                        cellFeedback?.canonicalAnswer?.trim() ||
+                        cellFeedback?.expectedAnswer?.trim() ||
+                        cell.expectedAnswer?.trim() ||
+                        cell.acceptedAnswers?.[0]?.trim() ||
+                        '';
+                      const explanationOrHint =
+                        cellFeedback?.feedback?.trim() ||
+                        cellFeedback?.explanation?.trim() ||
+                        cell.hint?.trim() ||
+                        '';
+
+                      return (
+                        <td
+                          key={cIdx}
+                          className="px-4 py-3 text-sm border-r border-slate-100 last:border-r-0 align-middle"
+                        >
+                          {!cell.isInput ? (
+                            <span className="font-medium text-slate-800 leading-relaxed">
+                              {cell.text}
+                            </span>
+                          ) : (
+                            <div className="flex flex-col gap-1 min-w-[130px]">
+                              <div className="relative flex items-center">
+                                <input
+                                  type="text"
+                                  value={cell.isExample ? (cell.expectedAnswer || userVal) : userVal}
+                                  disabled={isEvaluated || cell.isExample}
+                                  placeholder={cell.isExample ? '' : '...'}
+                                  onChange={(e) => onAnswerChange?.(cellKey, e.target.value)}
+                                  className={`w-full text-sm rounded-lg px-3 py-1.5 outline-none font-semibold transition ${
+                                    cell.isExample
+                                      ? 'bg-slate-100 text-slate-800 border border-slate-300 font-bold select-none cursor-not-allowed shadow-2xs pr-16'
+                                      : isEvaluated
+                                        ? isCorrect
+                                          ? isTypoWarning
+                                            ? 'bg-white text-amber-950 border border-amber-400 font-bold pr-7 shadow-xs'
+                                            : 'bg-white text-emerald-950 border border-emerald-400 font-bold pr-7 shadow-xs'
+                                          : 'bg-white text-rose-950 border border-rose-400 font-bold pr-7 shadow-xs'
+                                        : 'bg-white text-slate-900 border border-slate-300 focus:border-indigo-600 focus:ring-2 focus:ring-indigo-100 shadow-2xs'
+                                  }`}
+                                />
+
+                                {cell.isExample && (
+                                  <span className="absolute right-1.5 top-1/2 -translate-y-1/2 text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-slate-200 text-slate-600 border border-slate-300 select-none">
+                                    ✓ Ejemplo
+                                  </span>
+                                )}
+
+                                {isEvaluated && !cell.isExample && (
+                                  <span className="absolute right-2 top-1/2 -translate-y-1/2">
+                                    {isCorrect ? (
+                                      isTypoWarning ? (
+                                        <AlertCircle className="w-4 h-4 text-amber-600" />
+                                      ) : (
+                                        <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                                      )
+                                    ) : (
+                                      <XCircle className="w-4 h-4 text-rose-600" />
+                                    )}
+                                  </span>
+                                )}
+                              </div>
+
+                              {/* Feedback in Table Cell */}
+                              {!cell.isExample && isEvaluated && !isCorrect && (
+                                <div className="text-[11px] text-rose-900 font-medium bg-rose-50/90 px-2 py-1 rounded-lg border border-rose-200 flex flex-col gap-0.5 shadow-2xs">
+                                  <span>
+                                    Respuesta: <strong className="font-bold underline text-rose-950">{canonicalAnswer}</strong>
+                                  </span>
+                                  {explanationOrHint && (
+                                    <span className="text-[10px] text-slate-600">💡 {explanationOrHint}</span>
+                                  )}
+                                </div>
+                              )}
+
+                              {!cell.isExample && isEvaluated && isCorrect && isTypoWarning && (
+                                <div className="text-[11px] text-amber-900 font-medium bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
+                                  Ortografía: <strong className="underline text-amber-950">{canonicalAnswer}</strong>
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )
+      ) : (
+        /* Questions list */
+        <div className="w-full space-y-4">
         {block.listItems.map((item, idx) => {
           const isEvaluated = evaluation.isSubmitted;
           const isCorrect = Boolean(evaluation.details[item.id]) || Boolean(item.isExample);
@@ -592,6 +945,7 @@ export const InputFieldsRenderer: React.FC<Props> = ({
           );
         })}
       </div>
+      )}
     </div>
   );
 };

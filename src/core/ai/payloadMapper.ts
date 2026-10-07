@@ -5,6 +5,7 @@ import type {
   ReferenceTableBlock,
   InteractionBlock,
   InputFieldsBlock,
+  InputFieldTableCell,
   SelectionBlock,
   SelectionOption,
   BucketsMatchingBlock,
@@ -50,7 +51,7 @@ export function slugify(text: string): string {
 }
 
 /**
- * Pure 1:1 Universal Mapper for Input Fields (Fill in Blanks / Matching Tables)
+ * Pure 1:1 Universal Mapper for Input Fields (Fill in Blanks / Matching Tables / 2D Grids)
  */
 export function mapBlockToInputFields(block: ExtractedBlock): InputFieldsBlock {
   const parsed = block.parsedData || {};
@@ -59,6 +60,59 @@ export function mapBlockToInputFields(block: ExtractedBlock): InputFieldsBlock {
   const wordBank: string[] | undefined = Array.isArray(parsed.wordBank) && parsed.wordBank.length > 0
     ? parsed.wordBank.map((w: any) => String(w).trim()).filter(Boolean)
     : undefined;
+
+  const rawTableHeaders = Array.isArray(parsed.tableHeaders) ? parsed.tableHeaders : [];
+  const rawTableRows = Array.isArray(parsed.tableRows) ? parsed.tableRows : [];
+
+  const isTableLayout = Boolean(
+    parsed.layoutMode === 'table' ||
+    (rawTableRows.length > 0 && rawTableHeaders.length > 0)
+  );
+
+  let tableHeaders: string[] = [];
+  let tableRows: InputFieldTableCell[][] = [];
+
+  if (isTableLayout && rawTableRows.length > 0) {
+    tableHeaders = rawTableHeaders.map((h: any) => String(h).trim()).filter(Boolean);
+
+    tableRows = rawTableRows.map((row: any[], rIdx: number) => {
+      if (!Array.isArray(row)) return [];
+      return row.map((cell: any, cIdx: number) => {
+        const isInput = Boolean(cell?.isInput);
+        const text = String(cell?.text || '').trim();
+        const expectedAnswer = String(cell?.expectedAnswer || '').trim();
+        let acceptedAnswers: string[] = [];
+        if (Array.isArray(cell?.acceptedAnswers) && cell.acceptedAnswers.length > 0) {
+          acceptedAnswers = cell.acceptedAnswers.map((a: any) => String(a).trim()).filter(Boolean);
+        } else if (expectedAnswer) {
+          acceptedAnswers = [expectedAnswer];
+        }
+
+        if (expectedAnswer && !acceptedAnswers.includes(expectedAnswer)) {
+          acceptedAnswers.unshift(expectedAnswer);
+        }
+
+        // Expand standard grammar variants (contractions, spelling)
+        const variantSet = new Set<string>(acceptedAnswers);
+        acceptedAnswers.forEach((a) => {
+          generateGrammarVariants(a).forEach((v) => variantSet.add(v));
+        });
+
+        const isExample = Boolean(cell?.isExample);
+        const hint = cell?.hint || cell?.explanation ? String(cell.hint || cell.explanation).trim() : undefined;
+
+        return {
+          text,
+          isInput,
+          inputId: isInput ? `cell-${rIdx}-${cIdx}` : undefined,
+          acceptedAnswers: Array.from(variantSet),
+          expectedAnswer: expectedAnswer || (acceptedAnswers[0] ?? ''),
+          isExample,
+          hint,
+        };
+      });
+    });
+  }
 
   const rawItems: any[] = Array.isArray(parsed.items) ? parsed.items : [];
 
@@ -120,11 +174,11 @@ export function mapBlockToInputFields(block: ExtractedBlock): InputFieldsBlock {
     type: 'input_fields',
     id: generateId('inter-inp'),
     instruction: parsed.instruction || parsed.title || 'Escribe la respuesta correcta en cada espacio:',
-    layoutMode: 'list',
+    layoutMode: isTableLayout && tableRows.length > 0 ? 'table' : 'list',
     wordBank,
     listItems,
-    tableHeaders: [],
-    tableRows: [],
+    tableHeaders,
+    tableRows,
     paragraphTemplate: '',
     paragraphInputs: {}
   };
@@ -494,6 +548,8 @@ export function slideToExtractedBlock(slide: Slide): ExtractedBlock {
   let buckets: string[] | undefined;
   let headers: string[] | undefined;
   let rows: string[][] | undefined;
+  let tableHeaders: string[] | undefined;
+  let tableRows: any[][] | undefined;
   let referenceContent: string | undefined;
 
   if (ref && ref.type === 'text') {
@@ -507,6 +563,17 @@ export function slideToExtractedBlock(slide: Slide): ExtractedBlock {
     switch (inter.type) {
       case 'input_fields':
         wordBank = inter.wordBank;
+        if (inter.layoutMode === 'table') {
+          tableHeaders = inter.tableHeaders;
+          tableRows = inter.tableRows.map((r) => r.map((c) => ({
+            text: c.text,
+            isInput: c.isInput,
+            expectedAnswer: c.expectedAnswer,
+            acceptedAnswers: c.acceptedAnswers,
+            isExample: Boolean(c.isExample),
+            hint: c.hint,
+          })));
+        }
         items = inter.listItems.map((i) => ({
           prompt: i.prompt,
           expectedAnswer: i.expectedAnswer || i.acceptedAnswers[0] || '',
@@ -565,9 +632,15 @@ export function slideToExtractedBlock(slide: Slide): ExtractedBlock {
     ...items.map((i) => i.prompt || i.text || '')
   ].filter(Boolean);
 
+  const detectedType = inter?.type === 'buckets_matching'
+    ? 'vocabulary'
+    : inter?.type === 'input_fields' && inter.layoutMode === 'table'
+    ? 'table'
+    : 'numbered_list';
+
   return {
     id: `converted-block-${Date.now()}`,
-    detectedType: inter?.type === 'buckets_matching' ? 'vocabulary' : 'numbered_list',
+    detectedType,
     confidence: 1.0,
     rawText: rawTextParts.join('\n\n'),
     parsedData: {
@@ -579,6 +652,8 @@ export function slideToExtractedBlock(slide: Slide): ExtractedBlock {
       items,
       headers,
       rows,
+      tableHeaders,
+      tableRows,
       content: referenceContent
     }
   };
