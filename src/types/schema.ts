@@ -291,6 +291,7 @@ export const ExtractedBlockSchema = z.object({
   detectedType: z.enum(['paragraph', 'table', 'numbered_list', 'dialogue', 'vocabulary']),
   confidence: z.number().min(0).max(1),
   sourceImageSnippetUrl: z.string().optional(),
+  sourceImages: z.array(z.string()).optional(),
   parsedData: z.record(z.string(), z.any()).optional(),
 });
 

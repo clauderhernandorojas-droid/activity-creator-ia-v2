@@ -195,9 +195,19 @@ export function consolidateBlocks(blocks: ExtractedBlock[], sourceUrl?: string):
   }
 
   if (blocks.length === 1) {
+    const single = blocks[0];
+    const singleImages = Array.isArray(single.sourceImages) && single.sourceImages.length > 0
+      ? single.sourceImages
+      : (sourceUrl ? [sourceUrl] : (single.sourceImageSnippetUrl ? [single.sourceImageSnippetUrl] : []));
     return {
-      ...blocks[0],
-      sourceImageSnippetUrl: sourceUrl || blocks[0].sourceImageSnippetUrl
+      ...single,
+      sourceImageSnippetUrl: sourceUrl || single.sourceImageSnippetUrl,
+      sourceImages: singleImages.length > 0 ? singleImages : undefined,
+      parsedData: {
+        ...(single.parsedData || {}),
+        images: singleImages.length > 0 ? singleImages : undefined,
+        imageUrl: singleImages[0] || undefined,
+      }
     };
   }
 
@@ -216,6 +226,9 @@ export function consolidateBlocks(blocks: ExtractedBlock[], sourceUrl?: string):
   const primary = blocks[0].parsedData || {};
   const mergedItems: any[] = [];
   const mergedWordBank: string[] = [];
+  const allImages: string[] = [];
+
+  if (sourceUrl) allImages.push(sourceUrl);
 
   for (const b of blocks) {
     const pd = b.parsedData || {};
@@ -223,6 +236,18 @@ export function consolidateBlocks(blocks: ExtractedBlock[], sourceUrl?: string):
     if (Array.isArray(pd.wordBank)) {
       pd.wordBank.forEach((w: string) => {
         if (!mergedWordBank.includes(w)) mergedWordBank.push(w);
+      });
+    }
+    if (Array.isArray(b.sourceImages)) {
+      b.sourceImages.forEach((img) => {
+        if (img && !allImages.includes(img)) allImages.push(img);
+      });
+    } else if (b.sourceImageSnippetUrl && !allImages.includes(b.sourceImageSnippetUrl)) {
+      allImages.push(b.sourceImageSnippetUrl);
+    }
+    if (Array.isArray(pd.images)) {
+      pd.images.forEach((img: string) => {
+        if (img && !allImages.includes(img)) allImages.push(img);
       });
     }
   }
@@ -237,7 +262,9 @@ export function consolidateBlocks(blocks: ExtractedBlock[], sourceUrl?: string):
     items: mergedItems.length > 0 ? mergedItems : primary.items,
     wordBank: mergedWordBank.length > 0 ? mergedWordBank : primary.wordBank,
     tableHeaders: primary.tableHeaders,
-    tableRows: primary.tableRows
+    tableRows: primary.tableRows,
+    images: allImages.length > 0 ? allImages : undefined,
+    imageUrl: allImages[0] || undefined,
   };
 
   return {
@@ -245,7 +272,8 @@ export function consolidateBlocks(blocks: ExtractedBlock[], sourceUrl?: string):
     rawText,
     detectedType,
     confidence: Math.max(...blocks.map((b) => b.confidence || 0.9)),
-    sourceImageSnippetUrl: sourceUrl,
+    sourceImageSnippetUrl: sourceUrl || allImages[0],
+    sourceImages: allImages.length > 0 ? allImages : undefined,
     parsedData: mergedParsed
   };
 }
@@ -411,11 +439,16 @@ REGLAS UNIVERSALES DE BANCO DE OPCIONES Y ASIGNACIÓN BIUNÍVOCA:
 - PRINCIPIO DE INTERACCIÓN HUMANA / COMUNICATIVA (Formato 'reference'):
   * Si la actividad didáctica tiene como objetivo la producción oral libre, la conversación en parejas/grupos o el intercambio comunicativo entre estudiantes (donde la tarea pedagógica ocurre fuera de la pantalla y el software no debe capturar una respuesta evaluable), clasifícala siempre como interactionType: 'reference' (Speaking Card).
   * Los diálogos o ejemplos modelo deben conservarse íntegros como material de consulta y guía para los alumnos dentro de 'referenceContent'; NUNCA deben convertirse artificialmente en ejercicios de rellenar espacios ('fill_blanks') ni generar huecos sintéticos.
+- PRINCIPIO DE ESTÍMULO VISUAL (Visual Prompts):
+  * En actividades inductivas, de predicción, descripción o conversación basadas en observación de imágenes o fotografías ("Look at the pictures / photos", "Discuss what you see", "Look at the people in the photo..."):
+  * NUNCA redactes descripciones en prosa, resúmenes ni desveles en texto lo que muestran las imágenes. Redactar lo que hay en la foto anula el propósito pedagógico inductivo para el estudiante.
+  * La diapositiva debe presentar únicamente la consigna pedagógica ('instruction') y, si el recorte lo incluye, preguntas disparadoras de discusión para los alumnos (ej. "Where are they? What are they doing?").
+  * Toda la información visual debe provenir exclusivamente de la imagen real observada directamente por el estudiante en la pantalla.
 
 UNIVERSAL TAXONOMY & STRICT CONTRACT:
 1. "title": Concise formal activity or section title.
 2. "instruction": The explicit pedagogical directive, task instruction, or rubric prompt present in the clipping (e.g. "Work in groups. Tell other students about yourself. Use the phrases from 1 or your own ideas"). MUST NEVER BE EMPTY if the clipping contains an instructional directive.
-3. "referenceContent": Passive consultation material. Put reading passages, articles, dialogues, speech bubbles, instructional guidance ('TIPS!'), or consolidated support phrases/vocabulary here that provide reference context and DO NOT require an interactive answer. (null if none). Preserva fielmente la estructura visual y saltos de línea del documento original ('\n\n' entre párrafos y '\n' entre turnos de diálogo o listas). NUNCA repitas el título aquí ni agregues meta-explicaciones.
+3. "referenceContent": Passive consultation material. Put reading passages, articles, dialogues, speech bubbles, instructional guidance ('TIPS!'), or consolidated support phrases/vocabulary here that provide reference context and DO NOT require an interactive answer. (null if none). Preserva fielmente la estructura visual y saltos de línea del documento original ('\n\n' entre párrafos y '\n' entre turnos de diálogo o listas). NUNCA repitas el título aquí ni agregues meta-explicaciones ni descripciones de fotos.
 4. "wordBank": If the clipping contains a vocabulary box, word box, container, or pool of options to choose from, extract ONLY the available options into "wordBank" as string[] (sean cadenas simples o compuestas por varios términos). (Empty array [] if none).
    * REGLA DE PARTICIÓN 1: NUNCA incluyas cajas de palabras (Word Banks), notas de apoyo ('TIPS!'), números de página o códigos de lección dentro de 'items'.
 5. "interactionType": Must be one of: 'fill_blanks', 'multiple_choice', 'matching', 'buckets', 'reference'.
@@ -434,6 +467,7 @@ UNIVERSAL TAXONOMY & STRICT CONTRACT:
 
 CRITICAL NEGATIVE CONSTRAINTS:
 - NUNCA incluyas meta-comentarios pedagógicos, justificaciones didácticas ni notas dirigidas al profesor (ej. "This is an open-ended activity...", "This exercise is designed to encourage students..."). Todo el texto debe ser 100% material directo para el alumno.
+- NUNCA redactes descripciones en texto ni resúmenes de lo que muestran las fotos en actividades basadas en observación visual ("Look at the photos..."); la imagen real observada por el estudiante es el estímulo y no debe sustituirse por prosa descriptiva.
 - NUNCA repitas el título principal de la actividad como primera línea o encabezado dentro de 'referenceContent'.
 - NUNCA uses párrafos descriptivos abstractos para actividades que solicitan listas o mención de elementos; usa plantillas con viñetas o líneas modelo (ej. '1. ... — Why: ...').
 - NUNCA descartes recortes complementarios de vocabulario o frases en actividades 'reference'; deben consolidarse en 'referenceContent' junto al modelo conversacional.
@@ -517,7 +551,7 @@ export async function digitizeBook(
           if (rawText) {
             const cleanJson = rawText.replace(/```(?:json)?/gi, '').replace(/```/g, '').trim();
             const parsed = JSON.parse(cleanJson) as ExtractedStructuredPayload;
-            return [buildExtractedBlockFromPayload(parsed, primaryImage)];
+            return [buildExtractedBlockFromPayload(parsed, primaryImage, imageList)];
           }
         } catch (modelErr: any) {
           if (signal?.aborted || modelErr?.name === 'AbortError') {
@@ -593,7 +627,7 @@ export async function digitizeBook(
         if (rawContent) {
           const cleanJson = rawContent.replace(/```(?:json)?/gi, '').replace(/```/g, '').trim();
           const parsed = JSON.parse(cleanJson) as ExtractedStructuredPayload;
-          return [buildExtractedBlockFromPayload(parsed, primaryImage)];
+          return [buildExtractedBlockFromPayload(parsed, primaryImage, imageList)];
         }
       }
     } catch (orErr: any) {
@@ -611,7 +645,7 @@ export async function digitizeBook(
   }
 
   // Fallback to manual template if all Vision APIs are unavailable
-  return cloneSampleBlocks(primaryImage);
+  return cloneSampleBlocks(primaryImage, imageList);
 }
 
 /**
@@ -619,9 +653,13 @@ export async function digitizeBook(
  */
 function buildExtractedBlockFromPayload(
   payload: ExtractedStructuredPayload,
-  sourceUrl: string
+  sourceUrl: string,
+  sourceImages?: string[]
 ): ExtractedBlock {
   const sanitized = sanitizeExtractedPayload(payload);
+  const allImages = (Array.isArray(sourceImages) && sourceImages.length > 0)
+    ? sourceImages.filter(Boolean)
+    : (sourceUrl ? [sourceUrl] : []);
 
   const rawTextParts = [
     sanitized.title,
@@ -644,7 +682,8 @@ function buildExtractedBlockFromPayload(
     rawText: rawTextParts.join('\n\n'),
     detectedType,
     confidence: 0.98,
-    sourceImageSnippetUrl: sourceUrl,
+    sourceImageSnippetUrl: sourceUrl || allImages[0],
+    sourceImages: allImages.length > 0 ? allImages : undefined,
     parsedData: {
       title: sanitized.title,
       instruction: sanitized.instruction,
@@ -657,6 +696,8 @@ function buildExtractedBlockFromPayload(
       tableHeaders: sanitized.tableHeaders,
       tableRows: sanitized.tableRows,
       isGraded: sanitized.isGraded !== undefined ? sanitized.isGraded : true,
+      images: allImages.length > 0 ? allImages : undefined,
+      imageUrl: allImages[0] || undefined,
     },
   };
 }
@@ -664,10 +705,11 @@ function buildExtractedBlockFromPayload(
 /**
  * Strips pedagogical meta-comments or teacher instructions generated by AI
  * (e.g. "This is an open-ended activity designed to...", "In this activity, students will...")
+ * as well as artificial descriptions of photographs ("The picture shows...", "In the photo, we see...")
  */
 export function stripMetaComments(text: string): string {
   if (!text) return '';
-  const metaRegex = /^(?:this is an? (?:open-ended|speaking|communicative|interactive|writing|reading) activity|this (?:activity|exercise|task|lesson) is (?:designed|intended|meant|created) to|in this activity,? students (?:will|are encouraged to|can|practice)|this task encourages students|designed to encourage students|this is designed to encourage)/i;
+  const metaRegex = /^(?:this is an? (?:open-ended|speaking|communicative|interactive|writing|reading) activity|this (?:activity|exercise|task|lesson) is (?:designed|intended|meant|created) to|in this activity,? students (?:will|are encouraged to|can|practice)|this task encourages students|designed to encourage students|this is designed to encourage|the (?:picture|photo|image|photograph)s? (?:shows?|displays?|depicts?|presents?)|in the (?:picture|photo|image)s?,? (?:we can see|there is|there are))/i;
 
   return text
     .split(/\n{2,}/)
@@ -848,8 +890,13 @@ function sanitizeExtractedPayload(payload: ExtractedStructuredPayload): Extracte
   };
 }
 
-function cloneSampleBlocks(sourceImageSnippetUrl?: string): ExtractedBlock[] {
+function cloneSampleBlocks(sourceImageSnippetUrl?: string, sourceImages?: string[]): ExtractedBlock[] {
   const fallback = createManualBlock('input_fields');
   fallback.sourceImageSnippetUrl = sourceImageSnippetUrl;
+  fallback.sourceImages = sourceImages || (sourceImageSnippetUrl ? [sourceImageSnippetUrl] : undefined);
+  if (fallback.parsedData) {
+    fallback.parsedData.images = fallback.sourceImages;
+    fallback.parsedData.imageUrl = fallback.sourceImageSnippetUrl;
+  }
   return [fallback];
 }

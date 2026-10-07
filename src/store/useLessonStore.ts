@@ -749,7 +749,14 @@ export const useLessonStore = create<LessonState>()(
         const mapped = mapBlockToRole(block, role);
         const isGraded = block.parsedData?.isGraded !== undefined ? Boolean(block.parsedData.isGraded) : undefined;
         const blockTitle = block.parsedData?.title;
-        const blockInstruction = block.parsedData?.instruction;
+        const blockImages = (
+          Array.isArray(block.sourceImages) && block.sourceImages.length > 0
+            ? block.sourceImages
+            : (Array.isArray(block.parsedData?.images) && block.parsedData.images.length > 0
+              ? block.parsedData.images
+              : (block.sourceImageSnippetUrl ? [block.sourceImageSnippetUrl] : []))
+        ).filter(Boolean);
+
         set((s) => ({
           ...recordHistory(s),
           lesson: {
@@ -758,12 +765,24 @@ export const useLessonStore = create<LessonState>()(
               if (slide.id !== slideId) return slide;
               const shouldUpdateTitle = blockTitle && (!slide.title || slide.title === 'Nueva diapositiva' || slide.title === 'Diapositiva Digitalizada');
               const shouldUpdateSubtitle = blockInstruction && (!slide.subtitle || slide.subtitle === 'Instrucción o contexto breve' || slide.subtitle === 'Contenido adaptado desde libro de texto');
+              
+              let refContent = mapped.reference;
+              if (!refContent && slide.referenceContent && slide.referenceContent.type === 'text' && blockImages.length > 0) {
+                if (!slide.referenceContent.images || slide.referenceContent.images.length === 0) {
+                  refContent = {
+                    ...slide.referenceContent,
+                    images: blockImages,
+                    imageUrl: blockImages[0],
+                  };
+                }
+              }
+
               return {
                 ...slide,
                 ...(shouldUpdateTitle ? { title: blockTitle } : {}),
                 ...(shouldUpdateSubtitle ? { subtitle: blockInstruction } : {}),
                 ...(isGraded !== undefined ? { isGraded } : {}),
-                ...(mapped.reference ? { referenceContent: mapped.reference } : {}),
+                ...(refContent ? { referenceContent: refContent } : {}),
                 ...(mapped.interaction ? { interaction: mapped.interaction, cachedInteraction: mapped.interaction } : {}),
               };
             }),

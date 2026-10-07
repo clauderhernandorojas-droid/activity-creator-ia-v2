@@ -559,12 +559,25 @@ export function mapBlockToReferenceText(block: ExtractedBlock): ReferenceTextBlo
   const isPureReference = parsed.interactionType === 'reference' || block.detectedType === 'paragraph';
   const title = isPureReference ? '' : (parsed.title || 'Lectura / Notas de Referencia');
 
+  // Collect all available image assets from the extracted block
+  const blockImages: string[] = (
+    Array.isArray(block.sourceImages) && block.sourceImages.length > 0
+      ? block.sourceImages
+      : (Array.isArray(parsed.images) && parsed.images.length > 0
+        ? parsed.images
+        : (block.sourceImageSnippetUrl ? [block.sourceImageSnippetUrl] : (parsed.imageUrl ? [parsed.imageUrl] : [])))
+  ).filter(Boolean);
+
+  const primaryImageUrl = blockImages[0] || block.sourceImageSnippetUrl || parsed.imageUrl || undefined;
+
   return {
     type: 'text',
     id: generateId('ref-txt'),
     title,
     content,
-    category: 'reading'
+    category: 'reading',
+    images: blockImages.length > 0 ? blockImages : undefined,
+    imageUrl: primaryImageUrl,
   };
 }
 
@@ -583,9 +596,19 @@ export function mapBlockToRole(
     ? false
     : isDuplicateReferenceContent(rawRefText, items);
 
+  const blockImages: string[] = (
+    Array.isArray(block.sourceImages) && block.sourceImages.length > 0
+      ? block.sourceImages
+      : (Array.isArray(parsed.images) && parsed.images.length > 0
+        ? parsed.images
+        : (block.sourceImageSnippetUrl ? [block.sourceImageSnippetUrl] : (parsed.imageUrl ? [parsed.imageUrl] : [])))
+  ).filter(Boolean);
+
   const hasReadingContent = Boolean(
     !isDuplicate && rawRefText.length > 0
   );
+
+  const hasVisualAssets = blockImages.length > 0;
 
   const hasTableContent = Boolean(
     Array.isArray(parsed.headers) &&
@@ -593,7 +616,7 @@ export function mapBlockToRole(
     parsed.rows.length > 0
   );
 
-  const defaultReference: ReferenceBlock | undefined = hasReadingContent
+  const defaultReference: ReferenceBlock | undefined = (hasReadingContent || hasVisualAssets)
     ? mapBlockToReferenceText(block)
     : hasTableContent
     ? mapBlockToReferenceTable(block)

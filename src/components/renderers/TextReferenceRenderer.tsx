@@ -401,51 +401,70 @@ export const TextReferenceRenderer: React.FC<Props> = ({
             />
           </div>
         ) : (
-          /* Student / Preview Mode: Editorial magazine/textbook layout with floating picture frame(s) */
+          /* Student / Preview Mode: Responsive Adaptive Gallery or Editorial layout */
           <div className="text-sm sm:text-base leading-relaxed text-slate-700">
-            {activeImages.length === 1 ? (
-              <div className="sm:float-right sm:ml-4 sm:mb-3 mb-4 w-full sm:w-auto max-w-full sm:max-w-[46%] flex-shrink-0">
+            {/* Visual Stimuli / Gallery when multiple images OR when text content is short */}
+            {activeImages.length > 1 || (activeImages.length === 1 && (paragraphs.length <= 2 && (block.content || '').length < 300)) ? (
+              <div className="w-full mb-5">
+                {activeImages.length === 1 ? (
+                  <div className="bg-slate-50 p-2 sm:p-3 border border-slate-200/90 rounded-2xl shadow-xs max-w-2xl mx-auto flex items-center justify-center">
+                    <img
+                      src={activeImages[0]}
+                      alt={block.title || 'Estímulo visual'}
+                      className="object-contain max-h-72 sm:max-h-80 w-auto rounded-xl block"
+                      loading="lazy"
+                    />
+                  </div>
+                ) : (
+                  <div className={`grid gap-3 sm:gap-4 ${
+                    activeImages.length === 2 ? 'grid-cols-1 sm:grid-cols-2' : 'grid-cols-2 sm:grid-cols-2 md:grid-cols-3'
+                  }`}>
+                    {activeImages.map((src, idx) => (
+                      <div
+                        key={idx}
+                        className="bg-slate-50 p-2 sm:p-2.5 border border-slate-200/90 rounded-2xl shadow-xs flex flex-col items-center justify-center group hover:shadow-md transition-all relative overflow-hidden"
+                      >
+                        <img
+                          src={src}
+                          alt={`${block.title || 'Estímulo visual'} (${idx + 1})`}
+                          className="object-contain max-h-52 sm:max-h-56 w-auto mx-auto rounded-xl block"
+                          loading="lazy"
+                        />
+                        <span className="absolute bottom-2 left-2 px-2 py-0.5 bg-slate-900/60 text-white text-[10px] font-semibold rounded-md backdrop-blur-xs">
+                          Foto #{idx + 1}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ) : activeImages.length === 1 ? (
+              /* Single image with long editorial reading text: sleek right float */
+              <div className="sm:float-right sm:ml-5 sm:mb-3 mb-4 w-full sm:w-auto max-w-full sm:max-w-[46%] flex-shrink-0">
                 <div className="bg-slate-50 p-2 border border-slate-200 rounded-2xl shadow-md shadow-slate-200/50 relative group transition-all">
                   <img
                     src={activeImages[0]}
-                    alt={block.title || 'Context reference illustration'}
+                    alt={block.title || 'Estímulo visual'}
                     className="object-contain max-h-56 sm:max-h-60 w-auto mx-auto rounded-xl block"
                     loading="lazy"
                   />
                 </div>
               </div>
-            ) : activeImages.length > 1 ? (
-              <div className="sm:float-right sm:ml-4 sm:mb-3 mb-4 w-full sm:w-auto max-w-full sm:max-w-[44%] flex-shrink-0">
-                <div className="flex flex-col gap-3">
-                  {activeImages.map((src, idx) => (
-                    <div
-                      key={idx}
-                      className="bg-slate-50 p-2 border border-slate-200 rounded-2xl shadow-sm transition-all"
-                    >
-                      <img
-                        src={src}
-                        alt={`${block.title || 'Context reference illustration'} (${idx + 1})`}
-                        className={`object-contain ${
-                          activeImages.length === 2 ? 'max-h-40' : 'max-h-32'
-                        } w-auto mx-auto rounded-xl block`}
-                        loading="lazy"
-                      />
-                    </div>
-                  ))}
-                </div>
-              </div>
             ) : null}
-            <div className="space-y-4 font-normal text-slate-800 leading-relaxed text-sm sm:text-[15px] whitespace-pre-line break-words">
-              {paragraphs.length > 0 ? (
-                paragraphs.map((paragraph, idx) => (
-                  <p key={idx} className="whitespace-pre-line break-words leading-relaxed">
-                    {paragraph}
-                  </p>
-                ))
-              ) : (
-                <p className="whitespace-pre-line break-words leading-relaxed">{block.content}</p>
-              )}
-            </div>
+
+            {block.content && (
+              <div className="space-y-4 font-normal text-slate-800 leading-relaxed text-sm sm:text-[15px] whitespace-pre-line break-words">
+                {paragraphs.length > 0 ? (
+                  paragraphs.map((paragraph, idx) => (
+                    <p key={idx} className="whitespace-pre-line break-words leading-relaxed">
+                      {paragraph}
+                    </p>
+                  ))
+                ) : (
+                  <p className="whitespace-pre-line break-words leading-relaxed">{block.content}</p>
+                )}
+              </div>
+            )}
             {/* Clearfix */}
             <div className="clear-both" />
           </div>
