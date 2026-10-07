@@ -362,6 +362,10 @@ REGLAS UNIVERSALES DE BANCO DE OPCIONES Y ASIGNACIÓN BIUNÍVOCA:
   * Si una celda contiene texto fijo o de guía que el alumno debe leer, márcala con \`isInput: false\` y su contenido en \`text\`.
   * Si una celda es un espacio en blanco para responder, márcala con \`isInput: true\` y su respuesta canónica en \`expectedAnswer\`.
   * Si una celda de respuesta ya viene resuelta en el libro como modelo, márcala con \`isInput: true\`, \`isExample: true\` y su contenido en \`expectedAnswer\`.
+- Regla Universal de Referencia Cruzada: Si un recorte de ejercicio contiene una instrucción que remite a otro material (ej. 'Look again at...', 'Based on...', 'Read the text and answer...'):
+  * El material o bloque al que se remite DEBE serializarse íntegramente dentro de \`referenceContent\` (como texto pasivo de consulta).
+  * Únicamente las preguntas, oraciones o reactivos derivados de la instrucción activa deben serializarse en \`items\` interactivos.
+  * NUNCA fusiones las preguntas del material de referencia con las preguntas de la tarea activa en una sola lista de items interactivos.
 
 UNIVERSAL TAXONOMY & STRICT CONTRACT:
 1. "title": Formal activity or reading title.
@@ -382,6 +386,7 @@ UNIVERSAL TAXONOMY & STRICT CONTRACT:
 
 CRITICAL NEGATIVE CONSTRAINTS:
 - NUNCA conviertas encabezados de tabla ni códigos editoriales en ítems interactivos.
+- NUNCA fusiones las preguntas o el texto del material de referencia con las preguntas de la tarea activa en una sola lista de ítems interactivos.
 - Cada ítem interactivo debe ser un ítem real que el alumno debe completar o resolver.
 - Devuelve estrictamente el objeto JSON conforme al esquema estructurado.`;
 }
