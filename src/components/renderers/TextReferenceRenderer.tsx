@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import type { ReferenceTextBlock } from '../../types/schema';
 import { Camera, Image as ImageIcon, Upload, Link as LinkIcon, X, Plus } from 'lucide-react';
+import { compressImageBase64 } from '../../core/utils/imageCompressor';
 
 const MAX_IMAGES = 4;
 
@@ -92,10 +93,11 @@ export const TextReferenceRenderer: React.FC<Props> = ({
       });
     });
 
-    Promise.all(promises).then((results) => {
+    Promise.all(promises).then(async (results) => {
       const valid = results.filter(Boolean);
       if (valid.length > 0) {
-        addImages(valid);
+        const compressed = await Promise.all(valid.map((img) => compressImageBase64(img)));
+        addImages(compressed);
       }
     });
   };
@@ -355,12 +357,12 @@ export const TextReferenceRenderer: React.FC<Props> = ({
                   {activeImages.map((src, idx) => (
                     <div
                       key={idx}
-                      className="bg-slate-50 p-2 border border-slate-200 rounded-2xl shadow-sm relative group transition-all flex flex-col items-center justify-center min-h-[120px]"
+                      className="bg-slate-50/80 p-2 border border-slate-200/90 rounded-2xl shadow-xs relative group transition-all flex items-center justify-center h-32 w-full overflow-hidden"
                     >
                       <img
                         src={src}
                         alt={`Imagen ${idx + 1}`}
-                        className="object-contain max-h-36 w-auto mx-auto rounded-xl block"
+                        className="w-full h-full object-contain rounded-xl block select-none"
                         loading="lazy"
                       />
                       <span className="absolute bottom-2 left-2 px-1.5 py-0.5 bg-slate-900/60 text-white text-[10px] font-semibold rounded-md backdrop-blur-xs">
@@ -407,11 +409,11 @@ export const TextReferenceRenderer: React.FC<Props> = ({
             {activeImages.length > 1 || (activeImages.length === 1 && (paragraphs.length <= 2 && (block.content || '').length < 300)) ? (
               <div className="w-full mb-5">
                 {activeImages.length === 1 ? (
-                  <div className="bg-slate-50 p-2 sm:p-3 border border-slate-200/90 rounded-2xl shadow-xs max-w-2xl mx-auto flex items-center justify-center">
+                  <div className="bg-slate-50/80 p-2 sm:p-3 border border-slate-200/90 rounded-2xl shadow-xs max-w-2xl mx-auto h-64 sm:h-72 md:h-80 w-full flex items-center justify-center overflow-hidden">
                     <img
                       src={activeImages[0]}
                       alt={block.title || 'Estímulo visual'}
-                      className="object-contain max-h-72 sm:max-h-80 w-auto rounded-xl block"
+                      className="w-full h-full object-contain rounded-xl block select-none"
                       loading="lazy"
                     />
                   </div>
@@ -422,15 +424,15 @@ export const TextReferenceRenderer: React.FC<Props> = ({
                     {activeImages.map((src, idx) => (
                       <div
                         key={idx}
-                        className="bg-slate-50 p-2 sm:p-2.5 border border-slate-200/90 rounded-2xl shadow-xs flex flex-col items-center justify-center group hover:shadow-md transition-all relative overflow-hidden"
+                        className="bg-slate-50/80 p-2 sm:p-2.5 border border-slate-200/90 rounded-2xl shadow-xs h-60 sm:h-64 md:h-72 w-full flex items-center justify-center group hover:shadow-md transition-all relative overflow-hidden"
                       >
                         <img
                           src={src}
                           alt={`${block.title || 'Estímulo visual'} (${idx + 1})`}
-                          className="object-contain max-h-52 sm:max-h-56 w-auto mx-auto rounded-xl block"
+                          className="w-full h-full object-contain rounded-xl block select-none"
                           loading="lazy"
                         />
-                        <span className="absolute bottom-2 left-2 px-2 py-0.5 bg-slate-900/60 text-white text-[10px] font-semibold rounded-md backdrop-blur-xs">
+                        <span className="absolute bottom-2.5 left-2.5 px-2 py-0.5 bg-slate-900/70 text-white text-[11px] font-semibold rounded-lg backdrop-blur-md shadow-xs pointer-events-none">
                           Foto #{idx + 1}
                         </span>
                       </div>
@@ -441,11 +443,11 @@ export const TextReferenceRenderer: React.FC<Props> = ({
             ) : activeImages.length === 1 ? (
               /* Single image with long editorial reading text: sleek right float */
               <div className="sm:float-right sm:ml-5 sm:mb-3 mb-4 w-full sm:w-auto max-w-full sm:max-w-[46%] flex-shrink-0">
-                <div className="bg-slate-50 p-2 border border-slate-200 rounded-2xl shadow-md shadow-slate-200/50 relative group transition-all">
+                <div className="bg-slate-50/80 p-2 border border-slate-200/90 rounded-2xl shadow-md shadow-slate-200/50 h-56 sm:h-64 flex items-center justify-center overflow-hidden relative group transition-all">
                   <img
                     src={activeImages[0]}
                     alt={block.title || 'Estímulo visual'}
-                    className="object-contain max-h-56 sm:max-h-60 w-auto mx-auto rounded-xl block"
+                    className="w-full h-full object-contain rounded-xl block select-none"
                     loading="lazy"
                   />
                 </div>

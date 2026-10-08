@@ -18,7 +18,7 @@ import type {
 } from '../../types/schema';
 import { generateGrammarVariants } from '../evaluators/fillBlankValidator';
 import { isDuplicateReferenceContent } from '../text/textDeduplication';
-import { stripMetaComments, stripLeadingDuplicateTitle } from './digitizeBook';
+import { stripMetaComments, stripLeadingDuplicateTitle, stripPredictiveSpoilers } from './digitizeBook';
 
 export type PedagogicalRole = 
   | 'interaction_inputs' 
@@ -553,18 +553,22 @@ export function mapBlockToReferenceText(block: ExtractedBlock): ReferenceTextBlo
   }
 
   const slideTitle = String(parsed.title || '').trim();
-  const content = stripLeadingDuplicateTitle(stripMetaComments(String(rawContent || '').trim()), slideTitle);
+  const contextInstruction = `${parsed.title || ''} ${parsed.instruction || ''}`;
+  const content = stripPredictiveSpoilers(
+    stripLeadingDuplicateTitle(stripMetaComments(String(rawContent || '').trim()), slideTitle),
+    contextInstruction
+  );
 
   // For speaking/reference activities or pure reference slides, avoid repeating the main slide title inside the card
   const isPureReference = parsed.interactionType === 'reference' || block.detectedType === 'paragraph';
   const title = isPureReference ? '' : (parsed.title || 'Lectura / Notas de Referencia');
 
-  // Collect all available image assets from the extracted block
+  // Collect all available image assets from the extracted block (strictly respecting parsed.images / block.sourceImages if filtered)
   const blockImages: string[] = (
-    Array.isArray(block.sourceImages) && block.sourceImages.length > 0
-      ? block.sourceImages
-      : (Array.isArray(parsed.images) && parsed.images.length > 0
-        ? parsed.images
+    Array.isArray(parsed.images)
+      ? parsed.images
+      : (Array.isArray(block.sourceImages)
+        ? block.sourceImages
         : (block.sourceImageSnippetUrl ? [block.sourceImageSnippetUrl] : (parsed.imageUrl ? [parsed.imageUrl] : [])))
   ).filter(Boolean);
 
@@ -597,10 +601,10 @@ export function mapBlockToRole(
     : isDuplicateReferenceContent(rawRefText, items);
 
   const blockImages: string[] = (
-    Array.isArray(block.sourceImages) && block.sourceImages.length > 0
-      ? block.sourceImages
-      : (Array.isArray(parsed.images) && parsed.images.length > 0
-        ? parsed.images
+    Array.isArray(parsed.images)
+      ? parsed.images
+      : (Array.isArray(block.sourceImages)
+        ? block.sourceImages
         : (block.sourceImageSnippetUrl ? [block.sourceImageSnippetUrl] : (parsed.imageUrl ? [parsed.imageUrl] : [])))
   ).filter(Boolean);
 

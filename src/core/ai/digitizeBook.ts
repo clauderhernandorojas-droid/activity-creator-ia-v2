@@ -293,6 +293,11 @@ const STRUCTURED_EXTRACTION_SCHEMA = {
       type: 'boolean',
       description: 'Default true. If the exercise instruction corresponds to a personal survey, opinion, self-reflection, or discussion task where there are no absolute correct/wrong answers (e.g. contains phrases like "true for you", "about yourself", "your opinion", "discuss in pairs"), extract as false.'
     },
+    visualImageIndices: {
+      type: 'array',
+      items: { type: 'integer' },
+      description: '1-based index numbers (1, 2, 3...) of the input image clippings that contain actual photographs, illustrations, drawings, or visual realia. CRITICAL: NEVER include clippings that contain only printed text, instructions, exercise sentences, or questions. Return empty array [] if no clippings contain photos.'
+    },
     referenceContent: {
       type: 'string',
       description: 'Passive reading passage, article, dialogue, or guidance notes (TIPS) that do NOT require interactive answers. Empty string or null if none. CRITICAL: NEVER duplicate or copy the exercise sentences or interactive items here. If the clipping is only the exercise items/sentences itself (e.g. self-contained checklist, opinion poll, or fill-in-the-blank), this MUST be empty string or null.'
@@ -444,30 +449,41 @@ REGLAS UNIVERSALES DE BANCO DE OPCIONES Y ASIGNACIÓN BIUNÍVOCA:
   * NUNCA redactes descripciones en prosa, resúmenes ni desveles en texto lo que muestran las imágenes. Redactar lo que hay en la foto anula el propósito pedagógico inductivo para el estudiante.
   * La diapositiva debe presentar únicamente la consigna pedagógica ('instruction') y, si el recorte lo incluye, preguntas disparadoras de discusión para los alumnos (ej. "Where are they? What are they doing?").
   * Toda la información visual debe provenir exclusivamente de la imagen real observada directamente por el estudiante en la pantalla.
+- REGLA DE PREGUNTAS INDUCTIVAS / PREDICTIVAS:
+  * Si la consigna pedagógica contiene preguntas de opinión, predicción, deducción o inferencia basada en imágenes (ej. "do you think?", "predict", "guess", "why do you think...?", "what do you think they do?"):
+  * NUNCA redactes respuestas factuales, datos enciclopédicos, biografías resumidas ni explicaciones informativas que resuelvan la pregunta (ej. NO escribas "Jamie Oliver is a famous British chef..."). Revelar quién es la persona o qué muestra la imagen destruye la tarea inductiva del estudiante.
+  * El estudiante debe formular sus propias ideas a partir de la observación directa y debatir con sus pares.
+  * Deja 'referenceContent' vacío o null, o si aplica incluye ÚNICAMENTE breves preguntas guía disparadoras para el debate entre alumnos (ej. "• What do you notice in the pictures?\n• What could their job be?"), SIN DAR LA RESPUESTA ni datos biográficos.
+- DISCRIMINACIÓN ESTRICTA DE RECORTES VISUALES vs RECORTES TEXTUALES:
+  * En 'visualImageIndices': reporta ÚNICAMENTE los números de índice 1-based (1, 2, 3...) de los recortes de entrada que contienen fotografías, retratos, ilustraciones o escenas visuales reales.
+  * NUNCA incluyas en 'visualImageIndices' recortes que consistan únicamente en texto impreso (título, consigna, preguntas, cajas de ejercicios). Si ningún recorte contiene fotografías o ilustraciones, devuelve 'visualImageIndices': [].
 
 UNIVERSAL TAXONOMY & STRICT CONTRACT:
 1. "title": Concise formal activity or section title.
 2. "instruction": The explicit pedagogical directive, task instruction, or rubric prompt present in the clipping (e.g. "Work in groups. Tell other students about yourself. Use the phrases from 1 or your own ideas"). MUST NEVER BE EMPTY if the clipping contains an instructional directive.
-3. "referenceContent": Passive consultation material. Put reading passages, articles, dialogues, speech bubbles, instructional guidance ('TIPS!'), or consolidated support phrases/vocabulary here that provide reference context and DO NOT require an interactive answer. (null if none). Preserva fielmente la estructura visual y saltos de línea del documento original ('\n\n' entre párrafos y '\n' entre turnos de diálogo o listas). NUNCA repitas el título aquí ni agregues meta-explicaciones ni descripciones de fotos.
-4. "wordBank": If the clipping contains a vocabulary box, word box, container, or pool of options to choose from, extract ONLY the available options into "wordBank" as string[] (sean cadenas simples o compuestas por varios términos). (Empty array [] if none).
+3. "visualImageIndices": Array of 1-based indices (1, 2, 3...) of clippings containing actual photos/illustrations. Empty array [] if none. Exclude text-only clippings.
+4. "referenceContent": Passive consultation material. Put reading passages, articles, dialogues, speech bubbles, instructional guidance ('TIPS!'), or consolidated support phrases/vocabulary here that provide reference context and DO NOT require an interactive answer. (null if none). Preserva fielmente la estructura visual y saltos de línea del documento original ('\n\n' entre párrafos y '\n' entre turnos de diálogo o listas). NUNCA repitas el título aquí ni agregues meta-explicaciones ni descripciones de fotos ni spoilers a preguntas predictivas.
+5. "wordBank": If the clipping contains a vocabulary box, word box, container, or pool of options to choose from, extract ONLY the available options into "wordBank" as string[] (sean cadenas simples o compuestas por varios términos). (Empty array [] if none).
    * REGLA DE PARTICIÓN 1: NUNCA incluyas cajas de palabras (Word Banks), notas de apoyo ('TIPS!'), números de página o códigos de lección dentro de 'items'.
-5. "interactionType": Must be one of: 'fill_blanks', 'multiple_choice', 'matching', 'buckets', 'reference'.
+6. "interactionType": Must be one of: 'fill_blanks', 'multiple_choice', 'matching', 'buckets', 'reference'.
    - Matching/vocabulary tables (e.g. 'term | definition') are categorized as 'matching' or 'fill_blanks'.
    - Ejercicios de agrupar o clasificar términos en categorías o columnas usan 'buckets' siguiendo la Regla Universal de Clasificación por Categorías.
    - Actividades comunicativas de producción oral libre, diálogo o speaking card usan 'reference', consolidando los modelos y bancos de frases de apoyo íntegros en 'referenceContent'.
-6. "items": Array of interactive items ONLY (empty [] if interactionType is 'reference'):
+7. "items": Array of interactive items ONLY (empty [] if interactionType is 'reference'):
    - "prompt": The visible text, sentence with blank, or clue/definition that the student reads. Sigue la Regla Universal de Contenido de Ítem: DEBE contener el texto informativo, premisa o definición; NUNCA únicamente el número secuencial del ítem.
    - "expectedAnswer": The canonical resolved solution deduced by you as an expert teacher. MUST NEVER BE EMPTY. Must follow the Regla Universal de Banco de Opciones whenever a wordBank is present.
    - "acceptedAnswers": List of valid variations (contractions, spelling, or synonyms). Must include expectedAnswer.
    - "isExample": Booleano. Must follow the Regla Universal de Muestras Impresas: las filas o ítems que ya presentan una respuesta visible de muestra impresa en el material original deben clasificarse obligatoriamente como "isExample": true con dicho elemento en expectedAnswer, NUNCA omitirse ni dejarse en blanco.
    - "explanation": Brief 1-line pedagogical justification of the grammar rule or clue.
    - "options": (If multiple choice) array of choices to select from.
-7. "tableHeaders" y "tableRows": Si el ejercicio se presenta como una cuadrícula o tabla interactiva de doble entrada, genera las columnas en "tableHeaders" y la matriz de celdas en "tableRows" siguiendo la Regla Universal de Tablas/Cuadrículas.
-8. "isGraded": Booleano. Por defecto debe ser true. Si la consigna del ejercicio corresponde a una encuesta personal, opinión o reflexión subjetiva donde no existen respuestas correctas o incorrectas absolutas (p. ej., contiene frases como "true for you", "about yourself", "your opinion", "discuss in pairs"), debe extraerse con "isGraded": false.
+8. "tableHeaders" y "tableRows": Si el ejercicio se presenta como una cuadrícula o tabla interactiva de doble entrada, genera las columnas en "tableHeaders" y la matriz de celdas en "tableRows" siguiendo la Regla Universal de Tablas/Cuadrículas.
+9. "isGraded": Booleano. Por defecto debe ser true. Si la consigna del ejercicio corresponde a una encuesta personal, opinión o reflexión subjetiva donde no existen respuestas correctas o incorrectas absolutas (p. ej., contiene frases como "true for you", "about yourself", "your opinion", "discuss in pairs"), debe extraerse con "isGraded": false.
 
 CRITICAL NEGATIVE CONSTRAINTS:
 - NUNCA incluyas meta-comentarios pedagógicos, justificaciones didácticas ni notas dirigidas al profesor (ej. "This is an open-ended activity...", "This exercise is designed to encourage students..."). Todo el texto debe ser 100% material directo para el alumno.
 - NUNCA redactes descripciones en texto ni resúmenes de lo que muestran las fotos en actividades basadas en observación visual ("Look at the photos..."); la imagen real observada por el estudiante es el estímulo y no debe sustituirse por prosa descriptiva.
+- NUNCA redactes respuestas factuales, biografías ni datos enciclopédicos que resuelvan preguntas inductivas o de predicción ("Why is X famous, do you think?", "What do you think their job is?"); deja 'referenceContent' sin spoilers para que los alumnos piensen y debatan.
+- NUNCA incluyas recortes puramente textuales en 'visualImageIndices'; solo fotografías o ilustraciones reales.
 - NUNCA repitas el título principal de la actividad como primera línea o encabezado dentro de 'referenceContent'.
 - NUNCA uses párrafos descriptivos abstractos para actividades que solicitan listas o mención de elementos; usa plantillas con viñetas o líneas modelo (ej. '1. ... — Why: ...').
 - NUNCA descartes recortes complementarios de vocabulario o frases en actividades 'reference'; deben consolidarse en 'referenceContent' junto al modelo conversacional.
@@ -521,7 +537,18 @@ export async function digitizeBook(
       }
 
       const contents = [promptText, ...inlineParts];
-      const candidateModels = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash'];
+      const envGeminiModel = import.meta.env.VITE_GEMINI_MODEL?.trim();
+      const candidateModels = Array.from(new Set([
+        ...(envGeminiModel ? [envGeminiModel] : []),
+        'gemini-2.5-flash',
+        'gemini-2.5-pro',
+        'gemini-2.0-flash-001',
+        'gemini-2.0-flash',
+        'gemini-2.0-flash-lite',
+        'gemini-1.5-flash-latest',
+        'gemini-1.5-pro-latest',
+        'gemini-1.5-flash',
+      ]));
 
       for (const model of candidateModels) {
         if (signal?.aborted) {
@@ -557,7 +584,7 @@ export async function digitizeBook(
           if (signal?.aborted || modelErr?.name === 'AbortError') {
             throw modelErr;
           }
-          console.warn(`[digitizeBook] Gemini SDK model ${model} failed, trying next candidate:`, modelErr);
+          console.warn(`[digitizeBook] Gemini SDK model "${model}" failed, trying next candidate:`, modelErr);
         }
       }
     } catch (geminiErr: any) {
@@ -570,71 +597,81 @@ export async function digitizeBook(
 
   // Strategy 2: OpenRouter Vision API with Structured Outputs (JSON Schema)
   const openRouterApiKey = import.meta.env.VITE_OPENROUTER_API_KEY;
-  const openRouterModel = import.meta.env.VITE_OPENROUTER_MODEL || 'google/gemini-2.5-flash';
+  const envOpenRouterModel = import.meta.env.VITE_OPENROUTER_MODEL?.trim();
+  const openRouterCandidates = Array.from(new Set([
+    ...(envOpenRouterModel ? [envOpenRouterModel] : []),
+    'google/gemini-2.5-flash',
+    'google/gemini-2.0-flash-001',
+    'google/gemini-1.5-flash',
+  ]));
 
   if (openRouterApiKey && openRouterApiKey.trim() !== '') {
-    if (signal?.aborted) {
-      const err = new Error('Operación cancelada por el usuario');
-      err.name = 'AbortError';
-      throw err;
-    }
-
-    try {
-      const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-        method: 'POST',
-        signal,
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${openRouterApiKey}`,
-          'HTTP-Referer': typeof window !== 'undefined' ? window.location.origin : 'http://localhost:5173',
-          'X-Title': 'Activity Creator IA V2',
-        },
-        body: JSON.stringify({
-          model: openRouterModel,
-          messages: [
-            {
-              role: 'user',
-              content: [
-                { type: 'text', text: promptText },
-                ...imageList.map((url) => ({
-                  type: 'image_url',
-                  image_url: { url },
-                })),
-              ],
-            },
-          ],
-          response_format: {
-            type: 'json_schema',
-            json_schema: {
-              name: 'activity_extraction',
-              strict: true,
-              schema: STRUCTURED_EXTRACTION_SCHEMA,
-            },
-          },
-          temperature: 0.1,
-        }),
-      });
-
+    for (const orModel of openRouterCandidates) {
       if (signal?.aborted) {
         const err = new Error('Operación cancelada por el usuario');
         err.name = 'AbortError';
         throw err;
       }
 
-      if (response.ok) {
-        const data = await response.json();
-        const rawContent = data.choices?.[0]?.message?.content;
-        if (rawContent) {
-          const cleanJson = rawContent.replace(/```(?:json)?/gi, '').replace(/```/g, '').trim();
-          const parsed = JSON.parse(cleanJson) as ExtractedStructuredPayload;
-          return [buildExtractedBlockFromPayload(parsed, primaryImage, imageList)];
+      try {
+        const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+          method: 'POST',
+          signal,
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${openRouterApiKey}`,
+            'HTTP-Referer': typeof window !== 'undefined' ? window.location.origin : 'http://localhost:5173',
+            'X-Title': 'Activity Creator IA V2',
+          },
+          body: JSON.stringify({
+            model: orModel,
+            messages: [
+              {
+                role: 'user',
+                content: [
+                  { type: 'text', text: promptText },
+                  ...imageList.map((url) => ({
+                    type: 'image_url',
+                    image_url: { url },
+                  })),
+                ],
+              },
+            ],
+            response_format: {
+              type: 'json_schema',
+              json_schema: {
+                name: 'activity_extraction',
+                strict: true,
+                schema: STRUCTURED_EXTRACTION_SCHEMA,
+              },
+            },
+            temperature: 0.1,
+          }),
+        });
+
+        if (signal?.aborted) {
+          const err = new Error('Operación cancelada por el usuario');
+          err.name = 'AbortError';
+          throw err;
         }
+
+        if (response.ok) {
+          const data = await response.json();
+          const rawContent = data.choices?.[0]?.message?.content;
+          if (rawContent) {
+            const cleanJson = rawContent.replace(/```(?:json)?/gi, '').replace(/```/g, '').trim();
+            const parsed = JSON.parse(cleanJson) as ExtractedStructuredPayload;
+            return [buildExtractedBlockFromPayload(parsed, primaryImage, imageList)];
+          }
+        } else {
+          console.warn(`[digitizeBook] OpenRouter model "${orModel}" returned HTTP ${response.status}, trying next candidate...`);
+        }
+      } catch (orErr: any) {
+        if (signal?.aborted || orErr?.name === 'AbortError') {
+          throw orErr;
+        }
+        console.warn(`[digitizeBook] OpenRouter model "${orModel}" failed:`, orErr);
       }
-    } catch (orErr: any) {
-      if (signal?.aborted || orErr?.name === 'AbortError') {
-        throw orErr;
-      }
-      console.warn('[digitizeBook] OpenRouter vision call failed:', orErr);
     }
   }
 
@@ -657,9 +694,22 @@ function buildExtractedBlockFromPayload(
   sourceImages?: string[]
 ): ExtractedBlock {
   const sanitized = sanitizeExtractedPayload(payload);
-  const allImages = (Array.isArray(sourceImages) && sourceImages.length > 0)
+  const rawImages = (Array.isArray(sourceImages) && sourceImages.length > 0)
     ? sourceImages.filter(Boolean)
     : (sourceUrl ? [sourceUrl] : []);
+
+  // Filter genuine visual assets (photos, illustrations) using visualImageIndices
+  let visualImages: string[] = [];
+  if (Array.isArray(sanitized.visualImageIndices) && sanitized.visualImageIndices.length > 0) {
+    visualImages = sanitized.visualImageIndices
+      .map((idx) => rawImages[idx - 1])
+      .filter((img): img is string => Boolean(img));
+  } else if (Array.isArray(sanitized.visualImageIndices) && sanitized.visualImageIndices.length === 0) {
+    // Explicitly 0 photos in the clippings: leave visualImages empty so text clippings are not shown in gallery!
+    visualImages = [];
+  } else {
+    visualImages = rawImages;
+  }
 
   const rawTextParts = [
     sanitized.title,
@@ -682,8 +732,8 @@ function buildExtractedBlockFromPayload(
     rawText: rawTextParts.join('\n\n'),
     detectedType,
     confidence: 0.98,
-    sourceImageSnippetUrl: sourceUrl || allImages[0],
-    sourceImages: allImages.length > 0 ? allImages : undefined,
+    sourceImageSnippetUrl: visualImages[0] || undefined,
+    sourceImages: visualImages.length > 0 ? visualImages : undefined,
     parsedData: {
       title: sanitized.title,
       instruction: sanitized.instruction,
@@ -696,10 +746,30 @@ function buildExtractedBlockFromPayload(
       tableHeaders: sanitized.tableHeaders,
       tableRows: sanitized.tableRows,
       isGraded: sanitized.isGraded !== undefined ? sanitized.isGraded : true,
-      images: allImages.length > 0 ? allImages : undefined,
-      imageUrl: allImages[0] || undefined,
+      images: visualImages.length > 0 ? visualImages : undefined,
+      imageUrl: visualImages[0] || undefined,
+      visualImageIndices: sanitized.visualImageIndices,
     },
   };
+}
+
+/**
+ * Strips predictive spoilers when the instruction asks students to infer or guess
+ * (e.g. "Why is X famous, do you think?")
+ */
+export function stripPredictiveSpoilers(text: string, contextInstruction: string): string {
+  if (!text) return '';
+  const isPredictive = /do you think|why do you think|predict|guess|what do you think|infer/i.test(contextInstruction);
+  if (!isPredictive) return text;
+
+  // Filter out paragraphs that give factual biographical answers or describe why someone is famous
+  const spoilerRegex = /^(?:(?:[A-Z][\w\s.'-]+|\bHe|\bShe|\bThey) (?:is|are|was|were) (?:(?:a|an|the) )?(?:famous|well-known|renowned|celebrity|popular|successful)?\s*(?:chef|cook|actor|actress|singer|musician|artist|athlete|player|writer|author|politician|figure|host|presenter|star)|(?:he|she|they|[A-Z][\w\s.'-]+) (?:is|are|was|were|became) (?:famous|known|popular|celebrated) (?:for|because|as|when|in)|in fact,?\s|the answer is|this person is famous|these people are famous|the reason (?:he|she|they|why))/i;
+
+  return text
+    .split(/\n{2,}/)
+    .filter((para) => !spoilerRegex.test(para.trim()))
+    .join('\n\n')
+    .trim();
 }
 
 /**
@@ -825,7 +895,10 @@ function sanitizeExtractedPayload(payload: ExtractedStructuredPayload): Extracte
     ? payload.referenceContent.map((s) => String(s).trim()).filter(Boolean).join('\n\n')
     : (payload.referenceContent ? String(payload.referenceContent).trim() : null);
 
-  const cleanedRawRef = rawRef ? stripLeadingDuplicateTitle(stripMetaComments(rawRef), title) : null;
+  const contextDirective = `${title} ${instruction || ''}`;
+  const cleanedRawRef = rawRef
+    ? stripPredictiveSpoilers(stripLeadingDuplicateTitle(stripMetaComments(rawRef), title), contextDirective)
+    : null;
 
   // In 'reference' activities, ALWAYS preserve referenceContent (never drop as duplicate)
   // and consolidate complementary support phrases/vocabulary into referenceContent
@@ -854,7 +927,10 @@ function sanitizeExtractedPayload(payload: ExtractedStructuredPayload): Extracte
     }
 
     if (parts.length > 0) {
-      referenceContent = stripLeadingDuplicateTitle(stripMetaComments(parts.join('\n\n')), title);
+      referenceContent = stripPredictiveSpoilers(
+        stripLeadingDuplicateTitle(stripMetaComments(parts.join('\n\n')), title),
+        contextDirective
+      );
     }
   }
 
@@ -887,6 +963,11 @@ function sanitizeExtractedPayload(payload: ExtractedStructuredPayload): Extracte
       : !(/true for you|about yourself|your opinion|discuss in pairs|personal reflection/i.test(
           `${title} ${instruction} ${referenceContent || ''} ${sanitizedItems.map((i) => i.prompt).join(' ')}`
         )),
+    visualImageIndices: Array.isArray(payload.visualImageIndices)
+      ? payload.visualImageIndices
+          .map((n) => Number(n))
+          .filter((n) => !isNaN(n) && n > 0)
+      : undefined,
   };
 }
 

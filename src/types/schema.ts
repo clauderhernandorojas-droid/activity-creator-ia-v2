@@ -279,6 +279,7 @@ export const ExtractedStructuredPayloadSchema = z.object({
   tableHeaders: z.array(z.string()).optional(),
   tableRows: z.array(z.array(ExtractedTableCellSchema)).optional(),
   isGraded: z.boolean().default(true).optional(),
+  visualImageIndices: z.array(z.number()).optional(),
 });
 
 export type ExtractedTableCell = z.infer<typeof ExtractedTableCellSchema>;

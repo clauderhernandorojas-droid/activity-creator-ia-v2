@@ -26,6 +26,7 @@ import {
 import type { ExtractedBlock } from '../types/schema';
 import type { ManualTemplateType } from '../core/ai/digitizeBook';
 import { mapBlockToRole, type PedagogicalRole } from '../core/ai/payloadMapper';
+import { compressImageBase64 } from '../core/utils/imageCompressor';
 
 export const OcrPanel: React.FC = () => {
   const {
@@ -273,9 +274,11 @@ export const OcrPanel: React.FC = () => {
           if (file) {
             foundImage = true;
             const reader = new FileReader();
-            reader.onload = (event) => {
+            reader.onload = async (event) => {
               if (event.target?.result) {
-                addPastedImage(event.target.result as string);
+                const rawUrl = event.target.result as string;
+                const compressed = await compressImageBase64(rawUrl);
+                addPastedImage(compressed);
               }
             };
             reader.readAsDataURL(file);
@@ -298,9 +301,11 @@ export const OcrPanel: React.FC = () => {
     if (files && files.length > 0) {
       Array.from(files).forEach((file) => {
         const reader = new FileReader();
-        reader.onload = (event) => {
+        reader.onload = async (event) => {
           if (event.target?.result) {
-            addPastedImage(event.target.result as string);
+            const rawUrl = event.target.result as string;
+            const compressed = await compressImageBase64(rawUrl);
+            addPastedImage(compressed);
           }
         };
         reader.readAsDataURL(file);
@@ -314,22 +319,47 @@ export const OcrPanel: React.FC = () => {
    * switches Canvas to real interactive/preview mode, resets OCR session, and closes modal.
    */
   const handleCreateAsNewSlide = (blockId: string, role: PedagogicalRole) => {
-    const newSlideId = createSlideFromBlock(blockId, role);
-    setCurrentSlideId(newSlideId);
-    setMode('preview'); // Instantly activates real playable containers & tokens on Canvas
-    resetOcrState(); // Automatically resets OCR state to blank
-    setIsOcrDrawerOpen(false);
+    try {
+      const newSlideId = createSlideFromBlock(blockId, role);
+      if (newSlideId) {
+        setCurrentSlideId(newSlideId);
+      }
+      setMode('preview'); // Instantly activates real playable containers & tokens on Canvas
+      resetOcrState(); // Automatically resets OCR state to blank
+      setIsOcrDrawerOpen(false);
+    } catch (err) {
+      console.error('[OcrPanel] Error during handleCreateAsNewSlide:', err);
+      try {
+        setMode('preview');
+        resetOcrState();
+        setIsOcrDrawerOpen(false);
+      } catch {
+        // Safe fallback
+      }
+    }
   };
 
   /**
    * Secondary Action: Assigns to the existing current slide, activates interactive mode, resets OCR, closes modal.
    */
   const handleAssignToCurrentSlide = (blockId: string, role: PedagogicalRole) => {
-    if (!currentSlideId) return;
-    assignExtractedBlock(currentSlideId, blockId, role);
-    setMode('preview'); // Instantly activates real playable containers & tokens on Canvas
-    resetOcrState(); // Automatically resets OCR state to blank
-    setIsOcrDrawerOpen(false);
+    try {
+      if (currentSlideId) {
+        assignExtractedBlock(currentSlideId, blockId, role);
+      }
+      setMode('preview'); // Instantly activates real playable containers & tokens on Canvas
+      resetOcrState(); // Automatically resets OCR state to blank
+      setIsOcrDrawerOpen(false);
+    } catch (err) {
+      console.error('[OcrPanel] Error during handleAssignToCurrentSlide:', err);
+      try {
+        setMode('preview');
+        resetOcrState();
+        setIsOcrDrawerOpen(false);
+      } catch {
+        // Safe fallback
+      }
+    }
   };
 
   const handleRestore = () => {
