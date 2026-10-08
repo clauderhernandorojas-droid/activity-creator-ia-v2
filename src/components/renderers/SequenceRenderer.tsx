@@ -1,7 +1,8 @@
 import React from 'react';
 import type { SequenceBlock, SequenceItem } from '../../types/schema';
-import type { SessionEvaluation } from '../../store/useSessionStore';
+import { useSessionStore, type SessionEvaluation } from '../../store/useSessionStore';
 import { Plus, Trash2, ChevronUp, ChevronDown, CheckCircle2, XCircle } from 'lucide-react';
+import { VerificationAudioPlayer } from '../common/VerificationAudioPlayer';
 
 interface Props {
   block: SequenceBlock;
@@ -20,6 +21,9 @@ export const SequenceRenderer: React.FC<Props> = ({
   onAnswerChange,
   onChange,
 }) => {
+  const isVerificationActive = useSessionStore((s) => s.isVerificationAudioActive);
+  const setVerificationAudioActive = useSessionStore((s) => s.setVerificationAudioActive);
+  const hasVerificationAudio = Boolean(block.verificationAudioUrl && block.verificationAudioUrl.trim().length > 0);
   const userOrder: string[] =
     Array.isArray(studentAnswers['sequence_order']) &&
     studentAnswers['sequence_order'].length === block.items.length
@@ -91,6 +95,20 @@ export const SequenceRenderer: React.FC<Props> = ({
           </button>
         )}
       </div>
+
+      {/* Verification Audio Player */}
+      {hasVerificationAudio && (
+        <VerificationAudioPlayer
+          audioUrl={block.verificationAudioUrl}
+          audioLabel={block.audioLabel}
+          isVerificationActive={isVerificationActive}
+          isEvaluated={evaluation.isSubmitted}
+          isEditMode={isEditMode}
+          onAudioChange={(url, label) => onChange?.({ ...block, verificationAudioUrl: url, audioLabel: label })}
+          onRemoveAudio={() => onChange?.({ ...block, verificationAudioUrl: undefined, audioLabel: undefined })}
+          onActivateVerification={() => setVerificationAudioActive(true)}
+        />
+      )}
 
       {/* Content Area */}
       <div className="w-full space-y-3">

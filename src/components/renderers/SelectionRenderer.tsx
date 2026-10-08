@@ -1,7 +1,8 @@
 import React from 'react';
 import type { SelectionBlock, SelectionQuestion, SelectionOption } from '../../types/schema';
-import type { SessionEvaluation } from '../../store/useSessionStore';
+import { useSessionStore, type SessionEvaluation } from '../../store/useSessionStore';
 import { Plus, Trash2, CheckCircle2, XCircle, Check, HelpCircle, ChevronDown } from 'lucide-react';
+import { VerificationAudioPlayer } from '../common/VerificationAudioPlayer';
 
 interface Props {
   block: SelectionBlock;
@@ -22,6 +23,10 @@ export const SelectionRenderer: React.FC<Props> = ({
 }) => {
   const isFlatMode = Boolean(block.options && block.options.length > 0) || (block.questions || []).length === 0;
   const flatOptions: SelectionOption[] = block.options || [];
+
+  const isVerificationActive = useSessionStore((s) => s.isVerificationAudioActive);
+  const setVerificationAudioActive = useSessionStore((s) => s.setVerificationAudioActive);
+  const hasVerificationAudio = Boolean(block.verificationAudioUrl && block.verificationAudioUrl.trim().length > 0);
 
   // ==========================================
   // FLAT SELECTION ACTIONS
@@ -295,6 +300,20 @@ export const SelectionRenderer: React.FC<Props> = ({
           </div>
         )}
       </div>
+
+      {/* Verification Audio Player */}
+      {hasVerificationAudio && (
+        <VerificationAudioPlayer
+          audioUrl={block.verificationAudioUrl}
+          audioLabel={block.audioLabel}
+          isVerificationActive={isVerificationActive}
+          isEvaluated={evaluation.isSubmitted}
+          isEditMode={isEditMode}
+          onAudioChange={(url, label) => onChange?.({ ...block, verificationAudioUrl: url, audioLabel: label })}
+          onRemoveAudio={() => onChange?.({ ...block, verificationAudioUrl: undefined, audioLabel: undefined })}
+          onActivateVerification={() => setVerificationAudioActive(true)}
+        />
+      )}
 
       {/* ============================================================== */}
       {/* MODE A: FLAT SELECTION LIST (Tarjetas interactivas)            */}

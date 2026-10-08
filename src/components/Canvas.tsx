@@ -16,7 +16,8 @@ import {
   ListOrdered, 
   Sparkles,
   Plus,
-  Wand2
+  Wand2,
+  Headphones
 } from 'lucide-react';
 
 interface FormatSwitchOption {
@@ -52,9 +53,11 @@ export const Canvas: React.FC = () => {
     studentAnswers,
     studentEvaluation,
     isAiEvaluating,
+    isVerificationAudioActive,
     setStudentAnswer,
     checkCurrentSlideAnswers,
     resetStudentAnswers,
+    triggerPlayVerificationAudio,
     toggleReferenceDrawer,
     setIsOcrDrawerOpen,
   } = useSessionStore();
@@ -116,6 +119,14 @@ export const Canvas: React.FC = () => {
     )
   );
   const hasInteraction = Boolean(currentSlide.interaction);
+
+  const verificationAudioUrl = currentSlide.interaction && 'verificationAudioUrl' in currentSlide.interaction
+    ? currentSlide.interaction.verificationAudioUrl
+    : undefined;
+  const audioLabel = currentSlide.interaction && 'audioLabel' in currentSlide.interaction
+    ? currentSlide.interaction.audioLabel
+    : undefined;
+  const hasVerificationAudio = Boolean(verificationAudioUrl && verificationAudioUrl.trim().length > 0);
 
   const handleCheck = async () => {
     await checkCurrentSlideAnswers();
@@ -525,6 +536,10 @@ export const Canvas: React.FC = () => {
                 <span className="text-xs sm:text-sm text-slate-500 font-medium">
                   {currentSlide.isGraded === false
                     ? 'Responde según tu criterio o experiencia personal y registra tus respuestas.'
+                    : hasVerificationAudio && !isVerificationAudioActive
+                    ? 'Paso 1: Escribe tus respuestas y pulsa Escuchar y Verificar para oír el audio de autocorrección.'
+                    : hasVerificationAudio && isVerificationAudioActive
+                    ? 'Paso 2: Ajusta tus respuestas mientras escuchas el audio. Cuando termines, pulsa Comprobar.'
                     : 'Completa el ejercicio en pantalla y pulsa Comprobar para calificar.'}
                 </span>
               )}
@@ -534,39 +549,58 @@ export const Canvas: React.FC = () => {
               <button
                 onClick={resetStudentAnswers}
                 disabled={isAiEvaluating}
-                className="flex items-center gap-1.5 px-4 py-2.5 rounded-xl text-xs sm:text-sm font-semibold bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200 transition disabled:opacity-50"
+                className="flex items-center gap-1.5 px-4 py-2.5 rounded-xl text-xs sm:text-sm font-semibold bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200 transition disabled:opacity-50 cursor-pointer"
                 title="Reiniciar respuestas"
               >
                 <RotateCcw className="w-4 h-4" />
                 <span>Reiniciar</span>
               </button>
 
-              <button
-                onClick={handleCheck}
-                disabled={isAiEvaluating}
-                className={`flex items-center gap-2 px-6 py-2.5 rounded-xl text-xs sm:text-sm font-bold shadow-xs transition transform ${
-                  isAiEvaluating
-                    ? 'bg-indigo-500 text-white cursor-wait animate-pulse'
-                    : 'bg-indigo-600 hover:bg-indigo-700 text-white shadow-xs active:scale-95 cursor-pointer'
-                }`}
-              >
-                {isAiEvaluating ? (
-                  <>
-                    <span className="text-base animate-bounce">🧠</span>
-                    <span>Evaluando con IA...</span>
-                  </>
-                ) : currentSlide.isGraded === false ? (
-                  <>
-                    <CheckCircle2 className="w-4 h-4" />
-                    <span>{studentEvaluation.isSubmitted ? 'Respuestas Registradas ✓' : 'Registrar Respuestas'}</span>
-                  </>
-                ) : (
-                  <>
-                    <CheckCircle2 className="w-4 h-4" />
-                    <span>Comprobar Respuestas</span>
-                  </>
-                )}
-              </button>
+              {/* Progressive Action Button (Paso 1: Escuchar y Verificar -> Paso 2: Comprobar Respuestas) */}
+              {hasVerificationAudio && !isVerificationAudioActive && !studentEvaluation.isSubmitted ? (
+                <button
+                  onClick={triggerPlayVerificationAudio}
+                  disabled={isAiEvaluating}
+                  className="flex items-center gap-2 px-6 py-2.5 rounded-xl text-xs sm:text-sm font-bold bg-indigo-600 hover:bg-indigo-700 text-white shadow-xs transition transform active:scale-95 cursor-pointer ring-2 ring-indigo-200/60"
+                  title="Reproducir audio de verificación para autocorrección previa a la calificación"
+                >
+                  <Headphones className="w-4 h-4 animate-pulse" />
+                  <span>
+                    🎧 Escuchar y Verificar {audioLabel ? `[${audioLabel}]` : ''}
+                  </span>
+                </button>
+              ) : (
+                <button
+                  onClick={handleCheck}
+                  disabled={isAiEvaluating}
+                  className={`flex items-center gap-2 px-6 py-2.5 rounded-xl text-xs sm:text-sm font-bold shadow-xs transition transform ${
+                    isAiEvaluating
+                      ? 'bg-indigo-500 text-white cursor-wait animate-pulse'
+                      : 'bg-indigo-600 hover:bg-indigo-700 text-white shadow-xs active:scale-95 cursor-pointer'
+                  }`}
+                >
+                  {isAiEvaluating ? (
+                    <>
+                      <span className="text-base animate-bounce">🧠</span>
+                      <span>Evaluando con IA...</span>
+                    </>
+                  ) : currentSlide.isGraded === false ? (
+                    <>
+                      <CheckCircle2 className="w-4 h-4" />
+                      <span>{studentEvaluation.isSubmitted ? 'Respuestas Registradas ✓' : 'Registrar Respuestas'}</span>
+                    </>
+                  ) : (
+                    <>
+                      <CheckCircle2 className="w-4 h-4" />
+                      <span>
+                        {hasVerificationAudio && isVerificationAudioActive && !studentEvaluation.isSubmitted
+                          ? '✅ Comprobar Respuestas'
+                          : 'Comprobar Respuestas'}
+                      </span>
+                    </>
+                  )}
+                </button>
+              )}
             </div>
           </div>
         )}

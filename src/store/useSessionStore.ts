@@ -20,6 +20,10 @@ interface SessionState {
   studentEvaluation: SessionEvaluation;
   isAiEvaluating: boolean;
 
+  // Verification Audio ("Listen and check")
+  isVerificationAudioActive: boolean;
+  verificationAudioTrigger: number;
+
   // Modals / Drawers
   isReferenceDrawerOpen: boolean;
   isOcrDrawerOpen: boolean;
@@ -31,6 +35,8 @@ interface SessionState {
   setStudentAnswer: (key: string, value: any) => void;
   checkCurrentSlideAnswers: () => Promise<void>;
   resetStudentAnswers: () => void;
+  setVerificationAudioActive: (active: boolean) => void;
+  triggerPlayVerificationAudio: () => void;
   toggleReferenceDrawer: () => void;
   setIsReferenceDrawerOpen: (open: boolean) => void;
   toggleOcrDrawer: () => void;
@@ -50,6 +56,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     details: {},
   },
   isAiEvaluating: false,
+  isVerificationAudioActive: false,
+  verificationAudioTrigger: 0,
 
   isReferenceDrawerOpen: false,
   isOcrDrawerOpen: false,
@@ -60,6 +68,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       studentAnswers: {},
       studentEvaluation: { isSubmitted: false, score: 0, maxScore: 0, details: {} },
       isAiEvaluating: false,
+      isVerificationAudioActive: false,
       isReferenceDrawerOpen: false,
     });
     const lessonStore = useLessonStore.getState();
@@ -74,6 +83,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       studentAnswers: {},
       studentEvaluation: { isSubmitted: false, score: 0, maxScore: 0, details: {} },
       isAiEvaluating: false,
+      isVerificationAudioActive: false,
       isReferenceDrawerOpen: false,
       isOcrDrawerOpen: false,
     });
@@ -177,7 +187,19 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       studentAnswers: {},
       studentEvaluation: { isSubmitted: false, score: 0, maxScore: 0, details: {} },
       isAiEvaluating: false,
+      isVerificationAudioActive: false,
     });
+  },
+
+  setVerificationAudioActive: (active) => {
+    set({ isVerificationAudioActive: active });
+  },
+
+  triggerPlayVerificationAudio: () => {
+    set((state) => ({
+      isVerificationAudioActive: true,
+      verificationAudioTrigger: state.verificationAudioTrigger + 1,
+    }));
   },
 
   toggleReferenceDrawer: () => {

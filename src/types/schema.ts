@@ -74,6 +74,8 @@ export const InputFieldsBlockSchema = z.object({
   type: z.literal('input_fields'),
   id: z.string(),
   instruction: z.string(),
+  verificationAudioUrl: z.string().optional(),
+  audioLabel: z.string().optional(),
   layoutMode: z.enum(['list', 'table', 'inline_paragraph']),
   wordBank: z.array(z.string()).optional(),
   // Para layoutMode: 'list'
@@ -110,6 +112,8 @@ export const SelectionBlockSchema = z.object({
   type: z.literal('selection'),
   id: z.string(),
   instruction: z.string(),
+  verificationAudioUrl: z.string().optional(),
+  audioLabel: z.string().optional(),
   // Dual support:
   // a) Quiz / Questionnaire Mode: per-item questions
   questions: z.array(SelectionQuestionSchema).optional().default([]),
@@ -164,6 +168,8 @@ export const BucketsMatchingBlockSchema = z.object({
   type: z.literal('buckets_matching'),
   id: z.string(),
   instruction: z.string(),
+  verificationAudioUrl: z.string().optional(),
+  audioLabel: z.string().optional(),
   buckets: z.array(BucketTargetSchema),
   tokens: z.array(BucketTokenSchema),
   // Canonical Universal Matching relation (N to M or 1 to 1)
@@ -194,6 +200,8 @@ export const SequenceBlockSchema = z.object({
   type: z.literal('sequence'),
   id: z.string(),
   instruction: z.string(),
+  verificationAudioUrl: z.string().optional(),
+  audioLabel: z.string().optional(),
   items: z.array(SequenceItemSchema),
 });
 
@@ -271,6 +279,8 @@ export const ExtractedItemSchema = z.object({
 export const ExtractedStructuredPayloadSchema = z.object({
   title: z.string(),
   instruction: z.string().optional(),
+  verificationAudioUrl: z.string().optional(),
+  audioLabel: z.string().optional(),
   referenceContent: z.string().nullable().optional(),
   wordBank: z.array(z.string()).default([]),
   interactionType: z.enum(['fill_blanks', 'multiple_choice', 'matching', 'buckets', 'reference']).default('fill_blanks'),

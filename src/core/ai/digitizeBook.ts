@@ -254,11 +254,15 @@ export function consolidateBlocks(blocks: ExtractedBlock[], sourceUrl?: string):
 
   const mergedInstruction = blocks.map((b) => b.parsedData?.instruction).filter(Boolean).join(' ') || primary.instruction || '';
   const mergedTitle = blocks.map((b) => b.parsedData?.title).filter(Boolean)[0] || primary.title || '';
+  const mergedVerificationAudioUrl = blocks.map((b) => b.parsedData?.verificationAudioUrl).filter(Boolean)[0] || primary.verificationAudioUrl;
+  const mergedAudioLabel = blocks.map((b) => b.parsedData?.audioLabel).filter(Boolean)[0] || primary.audioLabel;
 
   const mergedParsed: Record<string, any> = {
     ...primary,
     ...(mergedInstruction ? { instruction: mergedInstruction } : {}),
     ...(mergedTitle ? { title: mergedTitle } : {}),
+    ...(mergedVerificationAudioUrl ? { verificationAudioUrl: mergedVerificationAudioUrl } : {}),
+    ...(mergedAudioLabel ? { audioLabel: mergedAudioLabel } : {}),
     items: mergedItems.length > 0 ? mergedItems : primary.items,
     wordBank: mergedWordBank.length > 0 ? mergedWordBank : primary.wordBank,
     tableHeaders: primary.tableHeaders,
@@ -292,6 +296,14 @@ const STRUCTURED_EXTRACTION_SCHEMA = {
     isGraded: {
       type: 'boolean',
       description: 'Default true. If the exercise instruction corresponds to a personal survey, opinion, self-reflection, or discussion task where there are no absolute correct/wrong answers (e.g. contains phrases like "true for you", "about yourself", "your opinion", "discuss in pairs"), extract as false.'
+    },
+    verificationAudioUrl: {
+      type: 'string',
+      description: 'Audio URL or placeholder path (e.g. "/audio/R1.2.mp3" or "/audio/track.mp3") if the exercise instruction or prompt mentions listening to check or verify answers (e.g. "Listen and check", "Listen and check your answers", "R1.2", "CD1 Track X"). Omit or empty string if not mentioned.'
+    },
+    audioLabel: {
+      type: 'string',
+      description: 'Audio track code or label present in the exercise heading or instruction (e.g. "R1.2", "CD1 Track 5", "Track 1.24"). Omit or empty string if not mentioned.'
     },
     visualImageIndices: {
       type: 'array',
@@ -497,6 +509,10 @@ UNIVERSAL TAXONOMY & STRICT CONTRACT:
    - "options": (If multiple choice or matching) array of choices to select from.
 8. "tableHeaders" y "tableRows": Si el ejercicio se presenta como una cuadrícula o tabla interactiva de doble entrada, genera las columnas en "tableHeaders" y la matriz de celdas en "tableRows" siguiendo la Regla Universal de Tablas/Cuadrículas.
 9. "isGraded": Booleano. Por defecto debe ser true. Si la consigna del ejercicio corresponde a una encuesta personal, opinión o reflexión subjetiva donde no existen respuestas correctas o incorrectas absolutas (p. ej., contiene frases como "true for you", "about yourself", "your opinion", "discuss in pairs"), debe extraerse con "isGraded": false.
+10. "verificationAudioUrl" y "audioLabel": Si la consigna o el recorte contiene referencias a audio de verificación (ej. "Listen and check", "Listen and check your answers", pistas tipo "R1.2", "CD1 Track X", "1.24"):
+    - Mapea el identificador o pista a 'audioLabel' (ej. "R1.2", "CD1 Track 5").
+    - Reserva 'verificationAudioUrl' con una ruta local o placeholder (ej. "/audio/R1.2.mp3").
+    - Si no contiene referencias a audio de verificación, omite estos campos.
 
 CRITICAL NEGATIVE CONSTRAINTS:
 - NUNCA clasifiques tareas de relacionar, emparejar o correspondencia (Matching de párrafos con encabezados, términos con definiciones, preguntas con respuestas) como 'fill_blanks'. Deben modelarse obligatoriamente como 'multiple_choice' con el conjunto completo de alternativas en 'options' para cada ítem.
@@ -775,6 +791,8 @@ function buildExtractedBlockFromPayload(
     parsedData: {
       title: sanitized.title,
       instruction: sanitized.instruction,
+      verificationAudioUrl: sanitized.verificationAudioUrl,
+      audioLabel: sanitized.audioLabel,
       referenceContent: sanitized.referenceContent || undefined,
       content: sanitized.referenceContent || undefined,
       wordBank: sanitized.wordBank.length > 0 ? sanitized.wordBank : undefined,
@@ -1033,6 +1051,40 @@ function sanitizeExtractedPayload(payload: ExtractedStructuredPayload): Extracte
     }
   }
 
+  // Detection and sanitization of verification audio ("Listen and check", "R1.2", "CD1 Track X")
+  let audioLabel = payload.audioLabel ? String(payload.audioLabel).trim() : undefined;
+  let verificationAudioUrl = payload.verificationAudioUrl ? String(payload.verificationAudioUrl).trim() : undefined;
+
+  const combinedSearchText = `${title} ${instruction} ${referenceContent || ''} ${sanitizedItems.map((i) => i.prompt).join(' ')}`;
+
+  if (!audioLabel) {
+    const trackPattern = /\b(?:(?:CD\s*\d+\s*)?Track\s*(\d+(?:\.\d+)?)|(R\d+\.\d+)|(?:Audio\s*(\d+(?:\.\d+)?)))\b/i;
+    const trackMatch = combinedSearchText.match(trackPattern);
+    if (trackMatch) {
+      audioLabel = trackMatch[0].trim();
+    } else {
+      const listenCheckMatch = combinedSearchText.match(/listen\s+(?:and|&|to)\s+check(?:\s+your\s+answers)?(?:\s*\[?([A-Z0-9.\s]+)\]?)?/i);
+      if (listenCheckMatch) {
+        if (listenCheckMatch[1]?.trim()) {
+          audioLabel = listenCheckMatch[1].trim();
+        } else {
+          const decimalMatch = combinedSearchText.match(/\b([1-9]\.\d{1,2})\b/);
+          if (decimalMatch) {
+            audioLabel = decimalMatch[1].trim();
+          } else {
+            audioLabel = 'Audio';
+          }
+        }
+      }
+    }
+  }
+
+  const hasListenReference = /listen\s+(?:and|&|to)\s+check/i.test(combinedSearchText) || Boolean(audioLabel);
+  if (hasListenReference && !verificationAudioUrl) {
+    const slug = audioLabel ? audioLabel.replace(/[^a-zA-Z0-9.-]+/g, '_') : 'verification';
+    verificationAudioUrl = `/audio/${slug}.mp3`;
+  }
+
   return {
     title,
     instruction: instruction || undefined,
@@ -1067,6 +1119,8 @@ function sanitizeExtractedPayload(payload: ExtractedStructuredPayload): Extracte
       : !(/true for you|about yourself|your opinion|discuss in pairs|personal reflection/i.test(
           `${title} ${instruction} ${referenceContent || ''} ${sanitizedItems.map((i) => i.prompt).join(' ')}`
         )),
+    verificationAudioUrl: verificationAudioUrl || undefined,
+    audioLabel: audioLabel || undefined,
     visualImageIndices: Array.isArray(payload.visualImageIndices)
       ? payload.visualImageIndices
           .map((n) => Number(n))

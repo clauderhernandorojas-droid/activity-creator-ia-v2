@@ -212,6 +212,8 @@ export function mapBlockToInputFields(block: ExtractedBlock): InputFieldsBlock {
     type: 'input_fields',
     id: generateId('inter-inp'),
     instruction: parsed.instruction || parsed.title || 'Escribe la respuesta correcta en cada espacio:',
+    verificationAudioUrl: parsed.verificationAudioUrl || undefined,
+    audioLabel: parsed.audioLabel || undefined,
     layoutMode: isTableLayout && tableRows.length > 0 ? 'table' : 'list',
     wordBank,
     listItems,
@@ -368,6 +370,8 @@ export function mapBlockToBuckets(block: ExtractedBlock): BucketsMatchingBlock {
     type: 'buckets_matching',
     id: generateId('inter-buc'),
     instruction: parsed.instruction || parsed.title || 'Relaciona cada elemento con su destino correspondiente:',
+    verificationAudioUrl: parsed.verificationAudioUrl || undefined,
+    audioLabel: parsed.audioLabel || undefined,
     buckets: targetSlots,
     tokens,
     targetSlots,
@@ -408,6 +412,8 @@ export function mapBlockToSelection(block: ExtractedBlock): SelectionBlock {
       type: 'selection',
       id: generateId('inter-sel'),
       instruction: parsed.instruction || parsed.title || 'Elige la opción correcta para cada enunciado:',
+      verificationAudioUrl: parsed.verificationAudioUrl || undefined,
+      audioLabel: parsed.audioLabel || undefined,
       questions
     };
   }
@@ -509,6 +515,8 @@ export function mapBlockToSelection(block: ExtractedBlock): SelectionBlock {
       type: 'selection',
       id: generateId('inter-sel'),
       instruction: parsed.instruction || parsed.title || defaultInstruction,
+      verificationAudioUrl: parsed.verificationAudioUrl || undefined,
+      audioLabel: parsed.audioLabel || undefined,
       questions
     };
   }
@@ -518,6 +526,8 @@ export function mapBlockToSelection(block: ExtractedBlock): SelectionBlock {
     type: 'selection',
     id: generateId('inter-sel'),
     instruction: parsed.instruction || 'Selecciona las opciones correctas:',
+    verificationAudioUrl: parsed.verificationAudioUrl || undefined,
+    audioLabel: parsed.audioLabel || undefined,
     questions: []
   };
 }
@@ -540,6 +550,8 @@ export function mapBlockToSequence(block: ExtractedBlock): SequenceBlock {
     type: 'sequence',
     id: generateId('inter-seq'),
     instruction: parsed.instruction || 'Ordena los elementos en la secuencia lógica correcta:',
+    verificationAudioUrl: parsed.verificationAudioUrl || undefined,
+    audioLabel: parsed.audioLabel || undefined,
     items
   };
 }
@@ -979,6 +991,8 @@ export function slideToExtractedBlock(slide: Slide): ExtractedBlock {
     parsedData: {
       title,
       instruction,
+      verificationAudioUrl: inter && 'verificationAudioUrl' in inter ? inter.verificationAudioUrl : undefined,
+      audioLabel: inter && 'audioLabel' in inter ? inter.audioLabel : undefined,
       referenceContent,
       wordBank,
       buckets,

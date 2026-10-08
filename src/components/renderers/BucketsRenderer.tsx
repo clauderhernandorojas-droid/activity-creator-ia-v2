@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
 import type { BucketsMatchingBlock, BucketTarget, BucketToken } from '../../types/schema';
-import type { SessionEvaluation } from '../../store/useSessionStore';
+import { useSessionStore, type SessionEvaluation } from '../../store/useSessionStore';
 import { Plus, Trash2, CheckCircle2, XCircle } from 'lucide-react';
+import { VerificationAudioPlayer } from '../common/VerificationAudioPlayer';
 
 interface Props {
   block: BucketsMatchingBlock;
@@ -21,6 +22,10 @@ export const BucketsRenderer: React.FC<Props> = ({
   onChange,
 }) => {
   const [selectedTokenId, setSelectedTokenId] = useState<string | null>(null);
+
+  const isVerificationActive = useSessionStore((s) => s.isVerificationAudioActive);
+  const setVerificationAudioActive = useSessionStore((s) => s.setVerificationAudioActive);
+  const hasVerificationAudio = Boolean(block.verificationAudioUrl && block.verificationAudioUrl.trim().length > 0);
 
   const targetSlots: BucketTarget[] =
     block.targetSlots && block.targetSlots.length > 0 ? block.targetSlots : block.buckets;
@@ -153,6 +158,20 @@ export const BucketsRenderer: React.FC<Props> = ({
           </div>
         )}
       </div>
+
+      {/* Verification Audio Player */}
+      {hasVerificationAudio && (
+        <VerificationAudioPlayer
+          audioUrl={block.verificationAudioUrl}
+          audioLabel={block.audioLabel}
+          isVerificationActive={isVerificationActive}
+          isEvaluated={evaluation.isSubmitted}
+          isEditMode={isEditMode}
+          onAudioChange={(url, label) => onChange?.({ ...block, verificationAudioUrl: url, audioLabel: label })}
+          onRemoveAudio={() => onChange?.({ ...block, verificationAudioUrl: undefined, audioLabel: undefined })}
+          onActivateVerification={() => setVerificationAudioActive(true)}
+        />
+      )}
 
       {/* Content Area */}
       <div className="w-full flex flex-col space-y-4">

@@ -1,7 +1,8 @@
 import React from 'react';
 import type { InputFieldsBlock, InputFieldListItem, InputFieldTableCell } from '../../types/schema';
-import type { SessionEvaluation } from '../../store/useSessionStore';
-import { Plus, Trash2, CheckCircle2, XCircle, HelpCircle, AlertCircle, Sparkles } from 'lucide-react';
+import { useSessionStore, type SessionEvaluation } from '../../store/useSessionStore';
+import { Plus, Trash2, CheckCircle2, XCircle, HelpCircle, AlertCircle, Sparkles, Headphones } from 'lucide-react';
+import { VerificationAudioPlayer } from '../common/VerificationAudioPlayer';
 
 interface Props {
   block: InputFieldsBlock;
@@ -112,6 +113,10 @@ export const InputFieldsRenderer: React.FC<Props> = ({
   const hasWordBank = Boolean(
     block.wordBank && block.wordBank.filter((w) => typeof w === 'string' && w.trim().length > 0).length > 0
   );
+
+  const isVerificationActive = useSessionStore((s) => s.isVerificationAudioActive);
+  const setVerificationAudioActive = useSessionStore((s) => s.setVerificationAudioActive);
+  const hasVerificationAudio = Boolean(block.verificationAudioUrl && block.verificationAudioUrl.trim().length > 0);
 
   // Compute set of words currently used in answers or examples
   const usedWords = React.useMemo(() => {
@@ -382,6 +387,38 @@ export const InputFieldsRenderer: React.FC<Props> = ({
           </div>
         )
       )}
+
+      {/* Audio Verification Component / Settings */}
+      {hasVerificationAudio ? (
+        <VerificationAudioPlayer
+          audioUrl={block.verificationAudioUrl}
+          audioLabel={block.audioLabel}
+          isVerificationActive={isVerificationActive}
+          isEvaluated={evaluation.isSubmitted}
+          isEditMode={isEditMode}
+          onAudioChange={(url, label) => onChange?.({ ...block, verificationAudioUrl: url, audioLabel: label })}
+          onRemoveAudio={() => onChange?.({ ...block, verificationAudioUrl: undefined, audioLabel: undefined })}
+          onActivateVerification={() => setVerificationAudioActive(true)}
+        />
+      ) : isEditMode ? (
+        <div className="mb-4">
+          <button
+            type="button"
+            onClick={() =>
+              onChange?.({
+                ...block,
+                verificationAudioUrl: '/audio/verification.mp3',
+                audioLabel: 'R1.2',
+              })
+            }
+            className="flex items-center gap-2 px-3 py-1.5 text-xs font-semibold text-indigo-700 bg-indigo-50/80 hover:bg-indigo-100 border border-indigo-200/80 rounded-xl transition cursor-pointer"
+            title="Añadir pista de audio para fase de autocorrección antes de comprobar respuestas"
+          >
+            <Headphones className="w-3.5 h-3.5" />
+            <span>+ Añadir Audio de Autoverificación (Listen & Check)</span>
+          </button>
+        </div>
+      ) : null}
 
       {/* Table vs List Mode Rendering */}
       {isTableLayout ? (
