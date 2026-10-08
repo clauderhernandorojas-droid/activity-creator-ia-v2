@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Volume2, VolumeX, Play, Pause, Headphones, RotateCcw, Trash2, Edit3, Check } from 'lucide-react';
+import { Volume2, VolumeX, Play, Pause, Headphones, RotateCcw, Trash2, Edit3, Check, UploadCloud, FileAudio } from 'lucide-react';
 import { useSessionStore } from '../../store/useSessionStore';
 
 interface VerificationAudioPlayerProps {
@@ -37,9 +37,46 @@ export const VerificationAudioPlayer: React.FC<VerificationAudioPlayerProps> = (
   const [isEditingSettings, setIsEditingSettings] = useState(false);
   const [editLabel, setEditLabel] = useState(audioLabel || '');
   const [editUrl, setEditUrl] = useState(audioUrl || '');
+  const [uploadedFileName, setUploadedFileName] = useState<string | null>(null);
+  const storeVerificationAudioActive = useSessionStore((s) => s.isVerificationAudioActive);
+  const activeVerification = isVerificationActive || storeVerificationAudioActive;
+  const isAudioLocked = !isEditMode && !activeVerification && !isEvaluated;
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    // Detect track code from filename if editLabel is empty (e.g. "R1.2.mp3" -> "R1.2")
+    const fileNameWithoutExt = file.name.replace(/\.[^/.]+$/, '');
+    const trackMatch = fileNameWithoutExt.match(/(?:(?:CD\s*\d+\s*)?Track\s*\d+(?:\.\d+)?|R\d+\.\d+|Audio\s*\d+)/i);
+    const candidateLabel = trackMatch ? trackMatch[0].trim() : fileNameWithoutExt;
+
+    if (!editLabel.trim() && candidateLabel) {
+      setEditLabel(candidateLabel);
+    }
+
+    setUploadedFileName(file.name);
+
+    // If file is <= 15MB, read as Data URL so it is persistent, otherwise Blob URL
+    if (file.size <= 15 * 1024 * 1024) {
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        const dataUrl = event.target?.result as string;
+        if (dataUrl) {
+          setEditUrl(dataUrl);
+          setHasError(false);
+        }
+      };
+      reader.readAsDataURL(file);
+    } else {
+      const blobUrl = URL.createObjectURL(file);
+      setEditUrl(blobUrl);
+      setHasError(false);
+    }
+  };
 
   const handlePlay = useCallback(() => {
-    if (!audioUrl) return;
+    if (!audioUrl || isAudioLocked) return;
     onActivateVerification?.();
 
     if (hasError || !audioRef.current?.src || audioRef.current.src.includes('undefined')) {
@@ -64,7 +101,7 @@ export const VerificationAudioPlayer: React.FC<VerificationAudioPlayerProps> = (
           setIsPlaying(true);
         });
     }
-  }, [audioUrl, duration, hasError, onActivateVerification]);
+  }, [audioUrl, duration, hasError, isAudioLocked, onActivateVerification]);
 
   const handlePause = useCallback(() => {
     if (audioRef.current && !isSimulating) {
@@ -105,6 +142,7 @@ export const VerificationAudioPlayer: React.FC<VerificationAudioPlayerProps> = (
   }, [isSimulating, isPlaying, duration]);
 
   const togglePlay = () => {
+    if (isAudioLocked) return;
     if (isPlaying) {
       handlePause();
     } else {
@@ -135,6 +173,7 @@ export const VerificationAudioPlayer: React.FC<VerificationAudioPlayerProps> = (
   };
 
   const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (isAudioLocked) return;
     const targetTime = Number(e.target.value);
     setCurrentTime(targetTime);
     if (audioRef.current && !isSimulating) {
@@ -143,6 +182,7 @@ export const VerificationAudioPlayer: React.FC<VerificationAudioPlayerProps> = (
   };
 
   const handleRestart = () => {
+    if (isAudioLocked) return;
     setCurrentTime(0);
     if (audioRef.current && !isSimulating) {
       audioRef.current.currentTime = 0;
@@ -165,6 +205,7 @@ export const VerificationAudioPlayer: React.FC<VerificationAudioPlayerProps> = (
   const openSettings = () => {
     setEditLabel(audioLabel || '');
     setEditUrl(audioUrl || '');
+    setUploadedFileName(null);
     setIsEditingSettings(!isEditingSettings);
   };
 
@@ -222,11 +263,14 @@ export const VerificationAudioPlayer: React.FC<VerificationAudioPlayerProps> = (
               </div>
 
               {/* Status context label */}
-              <p className="text-[11px] font-medium text-slate-500">
-                {!isVerificationActive && !isEvaluated && (
-                  <span>Paso 1: Escribe tus respuestas. Pulsa "Escuchar y Verificar" para autocorrección.</span>
+              <div className="text-[11px] font-medium text-slate-500 mt-0.5">
+                {isAudioLocked && (
+                  <span className="text-amber-800 bg-amber-100/90 px-2 py-0.5 rounded-md font-semibold inline-flex items-center gap-1.5 shadow-2xs">
+                    <span>🔒</span>
+                    <span>Paso 1 (Escritura): Audio bloqueado. Pulsa "🎧 Escuchar y Verificar" abajo para desbloquear la autocorrección.</span>
+                  </span>
                 )}
-                {isVerificationActive && !isEvaluated && (
+                {activeVerification && !isEvaluated && (
                   <span className="text-indigo-700 font-semibold flex items-center gap-1">
                     <span className="inline-block w-2 h-2 rounded-full bg-emerald-500 animate-ping" />
                     <span>Paso 2: Autocorrección activa — Escucha y ajusta tus respuestas antes de calificar.</span>
@@ -237,7 +281,7 @@ export const VerificationAudioPlayer: React.FC<VerificationAudioPlayerProps> = (
                     Paso 3: Respuestas comprobadas ✓ — Puedes volver a escuchar para practicar la pronunciación.
                   </span>
                 )}
-              </p>
+              </div>
             </div>
           </div>
 
@@ -270,41 +314,95 @@ export const VerificationAudioPlayer: React.FC<VerificationAudioPlayerProps> = (
 
         {/* Edit Settings Drawer (when in edit mode) */}
         {isEditMode && isEditingSettings && (
-          <div className="p-3.5 bg-white rounded-xl border border-indigo-200/90 shadow-2xs flex flex-col sm:flex-row items-center gap-3 animate-in fade-in duration-200">
-            <div className="w-full sm:w-1/3">
-              <label className="block text-[11px] font-bold text-slate-600 mb-1">
-                Etiqueta / Pista (ej. R1.2)
-              </label>
-              <input
-                type="text"
-                value={editLabel}
-                placeholder="R1.2, Track 15..."
-                onChange={(e) => setEditLabel(e.target.value)}
-                className="w-full text-xs px-2.5 py-1.5 rounded-lg border border-slate-200 bg-slate-50 focus:bg-white focus:border-indigo-600 outline-none font-semibold text-slate-800"
-              />
+          <div className="p-4 bg-white rounded-xl border border-indigo-200/90 shadow-2xs flex flex-col gap-3.5 animate-in fade-in duration-200">
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 pb-2 border-b border-slate-100">
+              <div className="flex items-center gap-2">
+                <FileAudio className="w-4 h-4 text-indigo-600" />
+                <span className="text-xs font-bold text-slate-800">
+                  Configuración del Audio de Autoverificación
+                </span>
+              </div>
+
+              {/* Upload Local Audio Button */}
+              <div>
+                <input
+                  type="file"
+                  accept="audio/*,.mp3,.wav,.ogg,.m4a"
+                  className="hidden"
+                  id="verification-audio-file-upload"
+                  onChange={handleFileUpload}
+                />
+                <label
+                  htmlFor="verification-audio-file-upload"
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-semibold text-xs rounded-lg border border-indigo-200/80 transition cursor-pointer shadow-2xs"
+                  title="Seleccionar archivo .mp3, .wav, .ogg, .m4a desde tu equipo"
+                >
+                  <UploadCloud className="w-3.5 h-3.5" />
+                  <span>Cargar archivo de audio local (.mp3, .wav, .m4a)</span>
+                </label>
+              </div>
             </div>
 
-            <div className="w-full sm:flex-1">
-              <label className="block text-[11px] font-bold text-slate-600 mb-1">
-                URL o ruta del archivo MP3
-              </label>
-              <input
-                type="text"
-                value={editUrl}
-                placeholder="https://... o /audio/R1.2.mp3"
-                onChange={(e) => setEditUrl(e.target.value)}
-                className="w-full text-xs px-2.5 py-1.5 rounded-lg border border-slate-200 bg-slate-50 focus:bg-white focus:border-indigo-600 outline-none text-slate-800"
-              />
-            </div>
+            {uploadedFileName && (
+              <div className="flex items-center justify-between text-xs px-2.5 py-1.5 bg-emerald-50 text-emerald-800 border border-emerald-200 rounded-lg">
+                <span className="flex items-center gap-1.5 font-medium truncate">
+                  <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0" />
+                  <span>Archivo local seleccionado: <strong className="font-semibold">{uploadedFileName}</strong></span>
+                </span>
+                <span className="text-[10px] text-emerald-600 font-semibold uppercase shrink-0 ml-2">Listo</span>
+              </div>
+            )}
 
-            <button
-              type="button"
-              onClick={saveSettings}
-              className="w-full sm:w-auto mt-2 sm:mt-5 flex items-center justify-center gap-1.5 px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-lg shadow-2xs transition cursor-pointer"
-            >
-              <Check className="w-3.5 h-3.5" />
-              <span>Guardar</span>
-            </button>
+            <div className="flex flex-col sm:flex-row items-center gap-3">
+              <div className="w-full sm:w-1/3">
+                <label className="block text-[11px] font-bold text-slate-600 mb-1">
+                  Etiqueta / Pista (ej. R1.2)
+                </label>
+                <input
+                  type="text"
+                  value={editLabel}
+                  placeholder="R1.2, Track 15..."
+                  onChange={(e) => setEditLabel(e.target.value)}
+                  className="w-full text-xs px-2.5 py-1.5 rounded-lg border border-slate-200 bg-slate-50 focus:bg-white focus:border-indigo-600 outline-none font-semibold text-slate-800"
+                />
+              </div>
+
+              <div className="w-full sm:flex-1">
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-[11px] font-bold text-slate-600">
+                    URL o ruta del archivo MP3
+                  </label>
+                  {editUrl.startsWith('data:audio') && (
+                    <button
+                      type="button"
+                      onClick={() => { setEditUrl(''); setUploadedFileName(null); }}
+                      className="text-[10px] text-rose-600 hover:text-rose-700 font-semibold cursor-pointer"
+                    >
+                      Limpiar / Ingresar URL manual
+                    </button>
+                  )}
+                </div>
+                <input
+                  type="text"
+                  value={editUrl.startsWith('data:audio') ? `[Audio local codificado: ${(editUrl.length / 1024).toFixed(0)} KB]` : editUrl}
+                  readOnly={editUrl.startsWith('data:audio')}
+                  placeholder="https://... o /audio/R1.2.mp3"
+                  onChange={(e) => setEditUrl(e.target.value)}
+                  className={`w-full text-xs px-2.5 py-1.5 rounded-lg border border-slate-200 bg-slate-50 focus:bg-white focus:border-indigo-600 outline-none text-slate-800 ${
+                    editUrl.startsWith('data:audio') ? 'font-medium text-indigo-700 bg-indigo-50/50' : ''
+                  }`}
+                />
+              </div>
+
+              <button
+                type="button"
+                onClick={saveSettings}
+                className="w-full sm:w-auto mt-2 sm:mt-5 flex items-center justify-center gap-1.5 px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-lg shadow-2xs transition cursor-pointer"
+              >
+                <Check className="w-3.5 h-3.5" />
+                <span>Guardar</span>
+              </button>
+            </div>
           </div>
         )}
 
@@ -314,24 +412,44 @@ export const VerificationAudioPlayer: React.FC<VerificationAudioPlayerProps> = (
           <div className="flex items-center gap-2">
             <button
               type="button"
+              disabled={isAudioLocked}
               onClick={togglePlay}
-              className={`w-11 h-11 rounded-full flex items-center justify-center text-white transition transform active:scale-95 shadow-xs cursor-pointer ${
-                isPlaying
-                  ? 'bg-amber-500 hover:bg-amber-600 ring-2 ring-amber-200'
+              className={`w-11 h-11 rounded-full flex items-center justify-center transition transform active:scale-95 shadow-xs ${
+                isAudioLocked
+                  ? 'bg-slate-200 text-slate-400 cursor-not-allowed shadow-none border border-slate-300 ring-0'
+                  : isPlaying
+                  ? 'bg-amber-500 hover:bg-amber-600 ring-2 ring-amber-200 text-white cursor-pointer'
                   : isVerificationActive
-                  ? 'bg-indigo-600 hover:bg-indigo-700 ring-2 ring-indigo-300'
-                  : 'bg-indigo-600 hover:bg-indigo-700'
+                  ? 'bg-indigo-600 hover:bg-indigo-700 ring-2 ring-indigo-300 text-white cursor-pointer'
+                  : 'bg-indigo-600 hover:bg-indigo-700 text-white cursor-pointer'
               }`}
-              title={isPlaying ? 'Pausar audio' : 'Reproducir audio'}
+              title={
+                isAudioLocked
+                  ? 'Audio bloqueado en Fase 1 (Escritura). Pulsa "🎧 Escuchar y Verificar" en la barra inferior para activarlo.'
+                  : isPlaying
+                  ? 'Pausar audio'
+                  : 'Reproducir audio'
+              }
             >
-              {isPlaying ? <Pause className="w-5 h-5" /> : <Play className="w-5 h-5 ml-0.5" />}
+              {isAudioLocked ? (
+                <Play className="w-5 h-5 ml-0.5 text-slate-400 opacity-60" />
+              ) : isPlaying ? (
+                <Pause className="w-5 h-5 text-white" />
+              ) : (
+                <Play className="w-5 h-5 ml-0.5 text-white" />
+              )}
             </button>
 
             <button
               type="button"
+              disabled={isAudioLocked}
               onClick={handleRestart}
-              className="w-8 h-8 rounded-full flex items-center justify-center text-slate-500 hover:text-slate-800 hover:bg-slate-200/60 transition cursor-pointer"
-              title="Reiniciar audio al principio"
+              className={`w-8 h-8 rounded-full flex items-center justify-center transition ${
+                isAudioLocked
+                  ? 'text-slate-300 cursor-not-allowed opacity-50'
+                  : 'text-slate-500 hover:text-slate-800 hover:bg-slate-200/60 cursor-pointer'
+              }`}
+              title={isAudioLocked ? 'Audio bloqueado' : 'Reiniciar audio al principio'}
             >
               <RotateCcw className="w-4 h-4" />
             </button>
@@ -346,8 +464,13 @@ export const VerificationAudioPlayer: React.FC<VerificationAudioPlayerProps> = (
                 max={duration || 100}
                 step="0.1"
                 value={currentTime}
+                disabled={isAudioLocked}
                 onChange={handleSeek}
-                className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-indigo-600 transition"
+                className={`w-full h-2 rounded-lg appearance-none transition ${
+                  isAudioLocked
+                    ? 'bg-slate-200 cursor-not-allowed opacity-60'
+                    : 'bg-slate-200 cursor-pointer accent-indigo-600'
+                }`}
               />
             </div>
 

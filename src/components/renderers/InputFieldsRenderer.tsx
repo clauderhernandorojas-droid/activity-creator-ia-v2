@@ -1006,6 +1006,36 @@ export const InputFieldsRenderer: React.FC<Props> = ({
         })}
       </div>
       )}
+
+      {/* Communicative Follow-up / Oral Practice Prompt (Paso c) */}
+      {(Boolean(block.followUpPrompt) || isEditMode) && (
+        <div className="mt-6 p-4 sm:p-5 rounded-2xl border border-indigo-200/90 bg-gradient-to-r from-indigo-50/80 via-purple-50/60 to-indigo-50/80 shadow-2xs">
+          <div className="flex items-center justify-between gap-2 mb-2">
+            <div className="flex items-center gap-2">
+              <span className="text-lg">🗣️</span>
+              <span className="text-xs font-bold uppercase tracking-wider text-indigo-950">
+                Paso c: Práctica Oral / Cierre Comunicativo
+              </span>
+            </div>
+            {isEditMode && (
+              <span className="text-[10px] text-slate-400 font-semibold uppercase">Opcional</span>
+            )}
+          </div>
+          {isEditMode ? (
+            <input
+              type="text"
+              value={block.followUpPrompt || ''}
+              placeholder="Instrucción de cierre o producción oral (ej. c Ask each other the questions)..."
+              onChange={(e) => onChange?.({ ...block, followUpPrompt: e.target.value || undefined })}
+              className="w-full text-xs sm:text-sm font-semibold text-slate-800 bg-white border border-indigo-200 rounded-xl px-3.5 py-2 outline-none focus:border-indigo-600 focus:ring-1 focus:ring-indigo-300 shadow-2xs"
+            />
+          ) : (
+            <p className="text-xs sm:text-sm font-semibold text-slate-800 pl-7 leading-relaxed">
+              {block.followUpPrompt}
+            </p>
+          )}
+        </div>
+      )}
     </div>
   );
 };

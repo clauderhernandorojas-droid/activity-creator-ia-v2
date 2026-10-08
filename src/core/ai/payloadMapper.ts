@@ -214,6 +214,7 @@ export function mapBlockToInputFields(block: ExtractedBlock): InputFieldsBlock {
     instruction: parsed.instruction || parsed.title || 'Escribe la respuesta correcta en cada espacio:',
     verificationAudioUrl: parsed.verificationAudioUrl || undefined,
     audioLabel: parsed.audioLabel || undefined,
+    followUpPrompt: parsed.followUpPrompt || undefined,
     layoutMode: isTableLayout && tableRows.length > 0 ? 'table' : 'list',
     wordBank,
     listItems,
@@ -372,6 +373,7 @@ export function mapBlockToBuckets(block: ExtractedBlock): BucketsMatchingBlock {
     instruction: parsed.instruction || parsed.title || 'Relaciona cada elemento con su destino correspondiente:',
     verificationAudioUrl: parsed.verificationAudioUrl || undefined,
     audioLabel: parsed.audioLabel || undefined,
+    followUpPrompt: parsed.followUpPrompt || undefined,
     buckets: targetSlots,
     tokens,
     targetSlots,
@@ -517,6 +519,7 @@ export function mapBlockToSelection(block: ExtractedBlock): SelectionBlock {
       instruction: parsed.instruction || parsed.title || defaultInstruction,
       verificationAudioUrl: parsed.verificationAudioUrl || undefined,
       audioLabel: parsed.audioLabel || undefined,
+      followUpPrompt: parsed.followUpPrompt || undefined,
       questions
     };
   }
@@ -528,6 +531,7 @@ export function mapBlockToSelection(block: ExtractedBlock): SelectionBlock {
     instruction: parsed.instruction || 'Selecciona las opciones correctas:',
     verificationAudioUrl: parsed.verificationAudioUrl || undefined,
     audioLabel: parsed.audioLabel || undefined,
+    followUpPrompt: parsed.followUpPrompt || undefined,
     questions: []
   };
 }
@@ -552,6 +556,7 @@ export function mapBlockToSequence(block: ExtractedBlock): SequenceBlock {
     instruction: parsed.instruction || 'Ordena los elementos en la secuencia lógica correcta:',
     verificationAudioUrl: parsed.verificationAudioUrl || undefined,
     audioLabel: parsed.audioLabel || undefined,
+    followUpPrompt: parsed.followUpPrompt || undefined,
     items
   };
 }
@@ -763,8 +768,11 @@ export function mapBlockToRole(
 
   const blockImages = resolveReadingReferenceImages(block, rawRefText);
 
+  const refWords = rawRefText.split(/\s+/).filter(Boolean).length;
+  const isSpuriousModelRef = refWords < 25 && parsed.interactionType !== 'reference';
+
   const hasReadingContent = Boolean(
-    !isDuplicate && rawRefText.length > 0
+    !isDuplicate && !isSpuriousModelRef && rawRefText.length > 0
   );
 
   const hasVisualAssets = blockImages.length > 0;
@@ -993,6 +1001,7 @@ export function slideToExtractedBlock(slide: Slide): ExtractedBlock {
       instruction,
       verificationAudioUrl: inter && 'verificationAudioUrl' in inter ? inter.verificationAudioUrl : undefined,
       audioLabel: inter && 'audioLabel' in inter ? inter.audioLabel : undefined,
+      followUpPrompt: inter && 'followUpPrompt' in inter ? (inter as any).followUpPrompt : undefined,
       referenceContent,
       wordBank,
       buckets,

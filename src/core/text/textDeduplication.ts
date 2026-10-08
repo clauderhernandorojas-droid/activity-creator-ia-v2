@@ -6,7 +6,7 @@ import { normalizeAnswer } from './normalize';
  */
 export function isDuplicateReferenceContent(
   referenceText: string | null | undefined,
-  items: Array<{ prompt?: string }> | null | undefined
+  items: Array<{ prompt?: string; expectedAnswer?: string }> | null | undefined
 ): boolean {
   if (!referenceText || !referenceText.trim()) return false;
   if (!items || items.length === 0) return false;
@@ -25,7 +25,11 @@ export function isDuplicateReferenceContent(
     .map((it) => (it.prompt ? normalizeAnswer(it.prompt).replace(/^[\d.)\-_—\s]+/, '').trim() : ''))
     .filter((p) => p.length > 3);
 
-  if (normalizedItems.length === 0) return false;
+  const normalizedAnswers = items
+    .map((it) => (it.expectedAnswer ? normalizeAnswer(it.expectedAnswer).replace(/^[\d.)\-_—\s]+/, '').trim() : ''))
+    .filter((a) => a.length > 3);
+
+  if (normalizedItems.length === 0 && normalizedAnswers.length === 0) return false;
 
   let matchedLines = 0;
   let totalSubstantialLines = 0;
@@ -36,12 +40,19 @@ export function isDuplicateReferenceContent(
 
     totalSubstantialLines++;
 
-    const isMatch = normalizedItems.some(
-      (itemPrompt) =>
-        cleanLine === itemPrompt ||
-        cleanLine.includes(itemPrompt) ||
-        itemPrompt.includes(cleanLine)
-    );
+    const isMatch =
+      normalizedItems.some(
+        (itemPrompt) =>
+          cleanLine === itemPrompt ||
+          cleanLine.includes(itemPrompt) ||
+          itemPrompt.includes(cleanLine)
+      ) ||
+      normalizedAnswers.some(
+        (ans) =>
+          cleanLine === ans ||
+          cleanLine.includes(ans) ||
+          ans.includes(cleanLine)
+      );
 
     if (isMatch) {
       matchedLines++;
