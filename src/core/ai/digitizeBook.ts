@@ -296,7 +296,7 @@ const STRUCTURED_EXTRACTION_SCHEMA = {
     visualImageIndices: {
       type: 'array',
       items: { type: 'integer' },
-      description: '1-based index numbers (1, 2, 3...) of the input image clippings that contain actual photographs, illustrations, drawings, or visual realia. CRITICAL: NEVER include clippings that contain only printed text, instructions, exercise sentences, or questions. Return empty array [] if no clippings contain photos.'
+      description: '1-based index numbers (1, 2, 3...) of the input image clippings that contain actual photographs, illustrations, drawings, or visual realia. CRITICAL: NEVER include clippings that contain reading passages, texts, stories, dialogues, instructions, or exercises whose text was transcribed into referenceContent or items. Return empty array [] if no clippings contain real photos.'
     },
     referenceContent: {
       type: 'string',
@@ -310,7 +310,7 @@ const STRUCTURED_EXTRACTION_SCHEMA = {
     interactionType: {
       type: 'string',
       enum: ['fill_blanks', 'multiple_choice', 'matching', 'buckets', 'reference'],
-      description: 'The strict pedagogical archetype of the interactive exercise. Use "reference" for communicative activities, speaking cards, or discussion material where no digital answer is evaluated.'
+      description: 'The strict pedagogical archetype of the interactive exercise. Use "multiple_choice" or "matching" for tasks that match or relate two finite sets (headings to paragraphs, terms to definitions, questions to answers). Use "buckets" for category sorting. Use "reference" for communicative activities where no digital answer is evaluated.'
     },
     buckets: {
       type: 'array',
@@ -456,7 +456,17 @@ REGLAS UNIVERSALES DE BANCO DE OPCIONES Y ASIGNACIÓN BIUNÍVOCA:
   * Deja 'referenceContent' vacío o null, o si aplica incluye ÚNICAMENTE breves preguntas guía disparadoras para el debate entre alumnos (ej. "• What do you notice in the pictures?\n• What could their job be?"), SIN DAR LA RESPUESTA ni datos biográficos.
 - DISCRIMINACIÓN ESTRICTA DE RECORTES VISUALES vs RECORTES TEXTUALES:
   * En 'visualImageIndices': reporta ÚNICAMENTE los números de índice 1-based (1, 2, 3...) de los recortes de entrada que contienen fotografías, retratos, ilustraciones o escenas visuales reales.
-  * NUNCA incluyas en 'visualImageIndices' recortes que consistan únicamente en texto impreso (título, consigna, preguntas, cajas de ejercicios). Si ningún recorte contiene fotografías o ilustraciones, devuelve 'visualImageIndices': [].
+  * REGLA DE RECORTES DE LECTURA TRANSCRITOS: Si un recorte enviado contiene un pasaje de lectura, artículo, diálogo, caja de reglas o consigna cuyo texto ha sido o debe ser transcrito a 'referenceContent' o 'items', ESE RECORTE ES UN RECORTE TEXTUAL Y NUNCA DEBE INCLUIRSE EN 'visualImageIndices'.
+  * Solo deben incluirse en 'visualImageIndices' recortes con material gráfico genuino que carezcan de transcripción textual directa. Si ningún recorte contiene fotografías o ilustraciones reales, devuelve obligatoriamente 'visualImageIndices': [].
+- REGLA DIDÁCTICA UNIVERSAL DE TAREAS DE CORRESPONDENCIA / RELACIÓN (MATCHING):
+  * Cuando la consigna didáctica instruya relacionar, emparejar o conectar dos conjuntos finitos de elementos (por ejemplo: asociar párrafos/secciones 1-4 con encabezados A-D, conceptos con definiciones, premisas con conclusiones, mitades de oraciones):
+  * PROHIBICIÓN ESTRICTA DE 'fill_blanks': NUNCA clasifiques estas actividades como 'fill_blanks' generando huecos para escribir texto libre o arrastrar cadenas largas.
+  * MODELADO COMO SELECCIÓN / MATCHING:
+    1. Trata el primer conjunto (ej. Párrafos 1, 2, 3, 4; o términos/conceptos) como los enunciados base en 'items' (campo 'prompt': ej. "Paragraph 1" o el concepto a definir).
+    2. Trata el segundo conjunto (ej. Encabezados A, B, C, D; o definiciones) como las opciones cerradas de respuesta. DEBES poblar en cada ítem su array 'options' con todas las alternativas posibles del segundo conjunto (ej. ["A. A fresh approach", "B. Early days", "C. School dinners", "D. Global campaign"]).
+    3. En cada ítem, 'expectedAnswer' DEBE ser exactamente la opción correspondiente del segundo conjunto.
+    4. En 'acceptedAnswers', incluye la opción completa y cualquier variante válida (ej. solo la letra "A" o el texto completo).
+    5. 'interactionType' DEBE ser 'multiple_choice' o 'matching'.
 
 UNIVERSAL TAXONOMY & STRICT CONTRACT:
 1. "title": Concise formal activity or section title.
@@ -466,7 +476,7 @@ UNIVERSAL TAXONOMY & STRICT CONTRACT:
 5. "wordBank": If the clipping contains a vocabulary box, word box, container, or pool of options to choose from, extract ONLY the available options into "wordBank" as string[] (sean cadenas simples o compuestas por varios términos). (Empty array [] if none).
    * REGLA DE PARTICIÓN 1: NUNCA incluyas cajas de palabras (Word Banks), notas de apoyo ('TIPS!'), números de página o códigos de lección dentro de 'items'.
 6. "interactionType": Must be one of: 'fill_blanks', 'multiple_choice', 'matching', 'buckets', 'reference'.
-   - Matching/vocabulary tables (e.g. 'term | definition') are categorized as 'matching' or 'fill_blanks'.
+   - Actividades de emparejar/relacionar dos conjuntos (párrafos con títulos, términos con definiciones, preguntas con respuestas) se categorizan SIEMPRE como 'multiple_choice' o 'matching' poblando 'options' en cada ítem.
    - Ejercicios de agrupar o clasificar términos en categorías o columnas usan 'buckets' siguiendo la Regla Universal de Clasificación por Categorías.
    - Actividades comunicativas de producción oral libre, diálogo o speaking card usan 'reference', consolidando los modelos y bancos de frases de apoyo íntegros en 'referenceContent'.
 7. "items": Array of interactive items ONLY (empty [] if interactionType is 'reference'):
@@ -475,15 +485,16 @@ UNIVERSAL TAXONOMY & STRICT CONTRACT:
    - "acceptedAnswers": List of valid variations (contractions, spelling, or synonyms). Must include expectedAnswer.
    - "isExample": Booleano. Must follow the Regla Universal de Muestras Impresas: las filas o ítems que ya presentan una respuesta visible de muestra impresa en el material original deben clasificarse obligatoriamente como "isExample": true con dicho elemento en expectedAnswer, NUNCA omitirse ni dejarse en blanco.
    - "explanation": Brief 1-line pedagogical justification of the grammar rule or clue.
-   - "options": (If multiple choice) array of choices to select from.
+   - "options": (If multiple choice or matching) array of choices to select from.
 8. "tableHeaders" y "tableRows": Si el ejercicio se presenta como una cuadrícula o tabla interactiva de doble entrada, genera las columnas en "tableHeaders" y la matriz de celdas en "tableRows" siguiendo la Regla Universal de Tablas/Cuadrículas.
 9. "isGraded": Booleano. Por defecto debe ser true. Si la consigna del ejercicio corresponde a una encuesta personal, opinión o reflexión subjetiva donde no existen respuestas correctas o incorrectas absolutas (p. ej., contiene frases como "true for you", "about yourself", "your opinion", "discuss in pairs"), debe extraerse con "isGraded": false.
 
 CRITICAL NEGATIVE CONSTRAINTS:
+- NUNCA clasifiques tareas de relacionar, emparejar o correspondencia (Matching de párrafos con encabezados, términos con definiciones, preguntas con respuestas) como 'fill_blanks'. Deben modelarse obligatoriamente como 'multiple_choice' con el conjunto completo de alternativas en 'options' para cada ítem.
+- NUNCA incluyas recortes de pasajes de lectura, textos transcritos, artículos o ejercicios en 'visualImageIndices'; solo fotografías o ilustraciones genuinas sin transcripción textual directa.
 - NUNCA incluyas meta-comentarios pedagógicos, justificaciones didácticas ni notas dirigidas al profesor (ej. "This is an open-ended activity...", "This exercise is designed to encourage students..."). Todo el texto debe ser 100% material directo para el alumno.
 - NUNCA redactes descripciones en texto ni resúmenes de lo que muestran las fotos en actividades basadas en observación visual ("Look at the photos..."); la imagen real observada por el estudiante es el estímulo y no debe sustituirse por prosa descriptiva.
 - NUNCA redactes respuestas factuales, biografías ni datos enciclopédicos que resuelvan preguntas inductivas o de predicción ("Why is X famous, do you think?", "What do you think their job is?"); deja 'referenceContent' sin spoilers para que los alumnos piensen y debatan.
-- NUNCA incluyas recortes puramente textuales en 'visualImageIndices'; solo fotografías o ilustraciones reales.
 - NUNCA repitas el título principal de la actividad como primera línea o encabezado dentro de 'referenceContent'.
 - NUNCA uses párrafos descriptivos abstractos para actividades que solicitan listas o mención de elementos; usa plantillas con viñetas o líneas modelo (ej. '1. ... — Why: ...').
 - NUNCA descartes recortes complementarios de vocabulario o frases en actividades 'reference'; deben consolidarse en 'referenceContent' junto al modelo conversacional.
@@ -708,7 +719,14 @@ function buildExtractedBlockFromPayload(
     // Explicitly 0 photos in the clippings: leave visualImages empty so text clippings are not shown in gallery!
     visualImages = [];
   } else {
-    visualImages = rawImages;
+    // Fallback when visualImageIndices was omitted:
+    // If referenceContent is present with a transcribed reading text (> 80 chars),
+    // or if the clipping was the reading passage itself: do NOT treat text clippings as photos!
+    if (sanitized.referenceContent && sanitized.referenceContent.trim().length > 80) {
+      visualImages = [];
+    } else {
+      visualImages = rawImages;
+    }
   }
 
   const rawTextParts = [
@@ -817,6 +835,22 @@ export function stripLeadingDuplicateTitle(text: string, title: string): string 
  */
 function sanitizeExtractedPayload(payload: ExtractedStructuredPayload): ExtractedStructuredPayload {
   const items = Array.isArray(payload.items) ? payload.items : [];
+  const rawInstruction = payload.instruction ? String(payload.instruction).trim() : '';
+  const rawTitle = payload.title ? String(payload.title).trim() : '';
+  const isMatchingDirective = /match\b|relate\b|pair\b|emparej/i.test(`${rawTitle} ${rawInstruction}`);
+
+  // Global pool of candidate options for matching tasks (e.g. headings or definitions)
+  const matchingPool = Array.from(
+    new Set([
+      ...(Array.isArray(payload.wordBank) ? payload.wordBank.map((w) => String(w).trim()).filter(Boolean) : []),
+      ...items.flatMap((it) => {
+        if (Array.isArray(it.options) && it.options.length > 0) {
+          return it.options.map((o) => String(o).trim()).filter(Boolean);
+        }
+        return it.expectedAnswer ? [String(it.expectedAnswer).trim()] : [];
+      }),
+    ])
+  ).filter(Boolean);
 
   const sanitizedItems = items.map((it, idx) => {
     const rawPrompt = String(it.prompt || '').trim();
@@ -834,13 +868,17 @@ function sanitizeExtractedPayload(payload: ExtractedStructuredPayload): Extracte
       acceptedAnswers.unshift(expectedAnswer);
     }
 
+    const itemOptions = Array.isArray(it.options) && it.options.length > 1
+      ? it.options.map((o) => String(o).trim()).filter(Boolean)
+      : (isMatchingDirective && matchingPool.length > 1 ? matchingPool : (Array.isArray(it.options) ? it.options : undefined));
+
     return {
       prompt,
       expectedAnswer,
       acceptedAnswers,
       isExample: Boolean(it.isExample),
       explanation: String(it.explanation || '').trim(),
-      options: Array.isArray(it.options) ? it.options : undefined,
+      options: itemOptions,
     };
   });
 
@@ -875,9 +913,6 @@ function sanitizeExtractedPayload(payload: ExtractedStructuredPayload): Extracte
         });
       })
     : undefined;
-
-  const rawInstruction = payload.instruction ? String(payload.instruction).trim() : '';
-  const rawTitle = payload.title ? String(payload.title).trim() : '';
 
   let title = rawTitle;
   let instruction = rawInstruction;
@@ -941,7 +976,12 @@ function sanitizeExtractedPayload(payload: ExtractedStructuredPayload): Extracte
     wordBank: Array.isArray(payload.wordBank)
       ? payload.wordBank.map((w) => String(w).trim()).filter(Boolean)
       : [],
-    interactionType: payload.interactionType || 'fill_blanks',
+    interactionType: (() => {
+      if (isMatchingDirective && sanitizedItems.length > 0) {
+        return 'multiple_choice';
+      }
+      return payload.interactionType || 'fill_blanks';
+    })(),
     buckets: (() => {
       const explicit = Array.isArray(payload.buckets)
         ? payload.buckets.map((b) => String(b).trim()).filter(Boolean)

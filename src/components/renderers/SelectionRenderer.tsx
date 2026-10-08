@@ -1,7 +1,7 @@
 import React from 'react';
 import type { SelectionBlock, SelectionQuestion, SelectionOption } from '../../types/schema';
 import type { SessionEvaluation } from '../../store/useSessionStore';
-import { Plus, Trash2, CheckCircle2, XCircle, Check, HelpCircle } from 'lucide-react';
+import { Plus, Trash2, CheckCircle2, XCircle, Check, HelpCircle, ChevronDown } from 'lucide-react';
 
 interface Props {
   block: SelectionBlock;
@@ -116,6 +116,16 @@ export const SelectionRenderer: React.FC<Props> = ({
     if (!onChange) return;
     const updated = [...(block.questions || [])];
     updated[qIndex] = { ...updated[qIndex], prompt };
+    onChange({ ...block, questions: updated });
+  };
+
+  const handleQuestionModeChange = (
+    qIndex: number,
+    mode: 'single_choice' | 'multiple_choice' | 'dropdown'
+  ) => {
+    if (!onChange) return;
+    const updated = [...(block.questions || [])];
+    updated[qIndex] = { ...updated[qIndex], mode };
     onChange({ ...block, questions: updated });
   };
 
@@ -458,17 +468,29 @@ export const SelectionRenderer: React.FC<Props> = ({
                 {/* Question Header */}
                 <div className="flex items-start justify-between gap-2 mb-3">
                   {isEditMode ? (
-                    <div className="flex items-center gap-2 w-full">
+                    <div className="flex items-center gap-2 w-full flex-wrap sm:flex-nowrap">
                       <input
                         type="text"
                         value={q.prompt}
                         onChange={(e) => handleQuestionPromptChange(qIdx, e.target.value)}
-                        className="flex-1 text-sm font-semibold text-slate-800 bg-white border border-slate-200 rounded-lg px-3 py-1.5 outline-none focus:border-indigo-500"
+                        className="flex-1 text-sm font-semibold text-slate-800 bg-white border border-slate-200 rounded-lg px-3 py-1.5 outline-none focus:border-indigo-500 min-w-[180px]"
+                        placeholder="Enunciado o ítem a relacionar..."
                       />
+                      <select
+                        value={q.mode}
+                        onChange={(e) => handleQuestionModeChange(qIdx, e.target.value as any)}
+                        className="text-xs bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 font-semibold text-slate-700 outline-none focus:border-indigo-500 shadow-2xs cursor-pointer"
+                        title="Tipo de interacción"
+                      >
+                        <option value="single_choice">Opción única</option>
+                        <option value="multiple_choice">Opción múltiple</option>
+                        <option value="dropdown">Desplegable / Matching</option>
+                      </select>
                       <button
                         onClick={() => removeQuestion(qIdx)}
                         disabled={(block.questions || []).length <= 1}
                         className="p-1.5 text-slate-400 hover:text-rose-600 disabled:opacity-20 rounded"
+                        title="Eliminar ítem"
                       >
                         <Trash2 className="w-4 h-4" />
                       </button>
@@ -547,6 +569,70 @@ export const SelectionRenderer: React.FC<Props> = ({
                 ) : (
                   /* PREVIEW / STUDENT MODE */
                   (() => {
+                    if (q.mode === 'dropdown') {
+                      const selectedOptId = (studentAnswers[q.id] as string) || '';
+                      const selectedOpt = q.options.find((o) => o.id === selectedOptId);
+                      const correctOpt = q.options.find((o) => o.isCorrect);
+                      const isRight = selectedOpt?.isCorrect === true;
+
+                      let selectWrapClasses = 'border-slate-300 bg-white hover:border-slate-400 focus-within:border-indigo-500 focus-within:ring-2 focus-within:ring-indigo-100';
+                      if (isEvaluated) {
+                        if (!isGraded) {
+                          selectWrapClasses = selectedOptId
+                            ? 'border-indigo-400 bg-indigo-50/60 font-semibold'
+                            : 'border-slate-200 bg-slate-50 opacity-75';
+                        } else if (isRight) {
+                          selectWrapClasses = 'border-emerald-500 bg-emerald-50/90 text-emerald-950 font-bold ring-1 ring-emerald-400';
+                        } else if (selectedOptId && !isRight) {
+                          selectWrapClasses = 'border-rose-400 bg-rose-50/90 text-rose-950 ring-1 ring-rose-300';
+                        } else {
+                          selectWrapClasses = 'border-slate-300 bg-slate-50 opacity-60';
+                        }
+                      } else if (selectedOptId) {
+                        selectWrapClasses = 'border-indigo-400 bg-indigo-50/40 text-indigo-950 font-semibold shadow-2xs';
+                      }
+
+                      return (
+                        <div className="mt-2.5 flex flex-col sm:flex-row sm:items-center gap-2.5">
+                          <div className={`relative flex items-center rounded-xl border transition-all ${selectWrapClasses} w-full sm:w-auto sm:min-w-[280px]`}>
+                            <select
+                              value={selectedOptId}
+                              disabled={isEvaluated}
+                              onChange={(e) => onAnswerChange?.(q.id, e.target.value)}
+                              className="w-full py-2.5 pl-3.5 pr-10 bg-transparent text-sm font-medium text-slate-800 rounded-xl appearance-none cursor-pointer focus:outline-none disabled:cursor-default"
+                            >
+                              <option value="" disabled>
+                                -- Selecciona correspondencia --
+                              </option>
+                              {q.options.map((opt) => (
+                                <option key={opt.id} value={opt.id}>
+                                  {opt.text}
+                                </option>
+                              ))}
+                            </select>
+                            <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-3 text-slate-400">
+                              <ChevronDown className="w-4 h-4" />
+                            </div>
+                          </div>
+
+                          {isEvaluated && isGraded && (
+                            <div className="flex items-center gap-1.5 text-xs font-semibold shrink-0">
+                              {isRight ? (
+                                <span className="flex items-center gap-1 text-emerald-600 bg-emerald-50 px-2.5 py-1 rounded-md border border-emerald-200">
+                                  <CheckCircle2 className="w-4 h-4" /> Correcto
+                                </span>
+                              ) : (
+                                <span className="flex items-center gap-1 text-rose-600 bg-rose-50 px-2.5 py-1 rounded-md border border-rose-200">
+                                  <XCircle className="w-4 h-4" />
+                                  {correctOpt ? `Correcto: ${correctOpt.text}` : 'Incorrecto'}
+                                </span>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    }
+
                     const isLongOptions = q.options.some((o) => (o.text || '').length > 25) || q.options.length > 2;
                     return (
                       <div className={`grid gap-2 mt-2 ${isLongOptions ? 'grid-cols-1' : 'grid-cols-1 sm:grid-cols-2'}`}>

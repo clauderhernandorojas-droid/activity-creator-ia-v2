@@ -770,12 +770,21 @@ export const useLessonStore = create<LessonState>()(
           const isGraded = block.parsedData?.isGraded !== undefined ? Boolean(block.parsedData.isGraded) : undefined;
           const blockTitle = block.parsedData?.title;
           const blockInstruction = block.parsedData?.instruction;
+
+          const hasTranscribedReference = Boolean(
+            (typeof block.parsedData?.referenceContent === 'string' && block.parsedData.referenceContent.trim().length > 60) ||
+            (typeof block.referenceText === 'string' && block.referenceText.trim().length > 60)
+          );
+          const hasExplicitVisuals = Array.isArray(block.parsedData?.images) && block.parsedData.images.length > 0;
+
           const blockImages = (
-            Array.isArray(block.parsedData?.images)
-              ? block.parsedData.images
-              : (Array.isArray(block.sourceImages)
-                ? block.sourceImages
-                : (block.sourceImageSnippetUrl ? [block.sourceImageSnippetUrl] : []))
+            hasExplicitVisuals
+              ? block.parsedData!.images!
+              : (hasTranscribedReference
+                ? [] // Descartar recortes si el bloque es texto/lectura y ya fue transcrito íntegramente
+                : (Array.isArray(block.sourceImages)
+                  ? block.sourceImages
+                  : (block.sourceImageSnippetUrl ? [block.sourceImageSnippetUrl] : [])))
           ).filter(Boolean);
 
           set((s) => ({

@@ -416,18 +416,40 @@ export function mapBlockToSelection(block: ExtractedBlock): SelectionBlock {
   const rawItems: any[] = Array.isArray(parsed.items) ? parsed.items : [];
 
   if (rawItems.length > 0) {
+    // Global options pool from wordBank or from all items' options or expectedAnswers
+    const globalOptionsPool = Array.from(
+      new Set([
+        ...(Array.isArray(parsed.wordBank) ? parsed.wordBank.map((w: any) => String(w).trim()).filter(Boolean) : []),
+        ...rawItems.flatMap((it: any) => {
+          if (Array.isArray(it.options) && it.options.length > 0) {
+            return it.options.map((o: any) => String(o).trim()).filter(Boolean);
+          }
+          return it.expectedAnswer ? [String(it.expectedAnswer).trim()] : [];
+        }),
+      ])
+    ).filter(Boolean);
+
+    const isMatching = /match\b|relate\b|pair\b|emparej/i.test(`${parsed.title || ''} ${parsed.instruction || ''}`) ||
+      parsed.interactionType === 'matching' ||
+      globalOptionsPool.length >= 3;
+
     const questions = rawItems.map((item: any, idx: number) => {
       const prompt = String(item.prompt || item.text || `Pregunta ${idx + 1}`).trim();
       const expected = String(item.expectedAnswer || '').trim().toLowerCase();
 
-      const candidateOptions: string[] = Array.isArray(item.options) && item.options.length > 0
-        ? item.options.map((o: any) => String(o).trim())
-        : (Array.isArray(item.acceptedAnswers) && item.acceptedAnswers.length > 1
-          ? item.acceptedAnswers.map((a: any) => String(a).trim())
-          : [String(item.expectedAnswer || '').trim()]);
+      const candidateOptions: string[] = Array.isArray(item.options) && item.options.length > 1
+        ? item.options.map((o: any) => String(o).trim()).filter(Boolean)
+        : (globalOptionsPool.length > 1
+          ? globalOptionsPool
+          : (Array.isArray(item.acceptedAnswers) && item.acceptedAnswers.length > 1
+            ? item.acceptedAnswers.map((a: any) => String(a).trim()).filter(Boolean)
+            : [String(item.expectedAnswer || '').trim()]));
 
       const options: SelectionOption[] = candidateOptions.map((optText) => {
-        const isCorrect = optText.trim().toLowerCase() === expected;
+        const optLower = optText.trim().toLowerCase();
+        const isCorrect = optLower === expected ||
+          (expected.length === 1 && (optLower.startsWith(expected + '.') || optLower.startsWith(expected + ')'))) ||
+          (optLower.startsWith(expected + ' ') || optLower.startsWith(expected + ':'));
         return {
           id: generateId('opt'),
           text: optText,
@@ -438,13 +460,22 @@ export function mapBlockToSelection(block: ExtractedBlock): SelectionBlock {
 
       // Ensure at least one is resolved as correct
       if (!options.some((o) => o.isCorrect) && options.length > 0) {
-        options[0].isCorrect = true;
+        const found = options.find((o) => o.text.toLowerCase().includes(expected) || expected.includes(o.text.toLowerCase()));
+        if (found) {
+          found.isCorrect = true;
+        } else {
+          options[0].isCorrect = true;
+        }
       }
+
+      const mode: 'single_choice' | 'multiple_choice' | 'dropdown' = isMatching
+        ? 'dropdown'
+        : 'single_choice';
 
       return {
         id: generateId('q'),
         prompt,
-        mode: 'single_choice' as const,
+        mode,
         options
       };
     });
@@ -452,7 +483,7 @@ export function mapBlockToSelection(block: ExtractedBlock): SelectionBlock {
     return {
       type: 'selection',
       id: generateId('inter-sel'),
-      instruction: parsed.instruction || parsed.title || 'Elige la opción correcta para cada enunciado:',
+      instruction: parsed.instruction || parsed.title || (isMatching ? 'Elige la correspondencia correcta para cada elemento:' : 'Elige la opción correcta para cada enunciado:'),
       questions
     };
   }
@@ -563,16 +594,31 @@ export function mapBlockToReferenceText(block: ExtractedBlock): ReferenceTextBlo
   const isPureReference = parsed.interactionType === 'reference' || block.detectedType === 'paragraph';
   const title = isPureReference ? '' : (parsed.title || 'Lectura / Notas de Referencia');
 
-  // Collect all available image assets from the extracted block (strictly respecting parsed.images / block.sourceImages if filtered)
-  const blockImages: string[] = (
-    Array.isArray(parsed.images)
-      ? parsed.images
-      : (Array.isArray(block.sourceImages)
-        ? block.sourceImages
-        : (block.sourceImageSnippetUrl ? [block.sourceImageSnippetUrl] : (parsed.imageUrl ? [parsed.imageUrl] : [])))
-  ).filter(Boolean);
+  // Collect all available image assets from the extracted block (discarding text-only clippings if text was transcribed)
+  const hasTranscribedReference = Boolean(parsed.referenceContent && String(parsed.referenceContent).trim().length > 80);
+  const blockImages: string[] = (() => {
+    if (Array.isArray(parsed.images) && parsed.images.length > 0) {
+      return parsed.images;
+    }
+    if (parsed.visualImageIndices && parsed.visualImageIndices.length === 0) {
+      return [];
+    }
+    if (hasTranscribedReference) {
+      return [];
+    }
+    if (Array.isArray(block.sourceImages) && block.sourceImages.length > 0) {
+      return block.sourceImages;
+    }
+    if (block.sourceImageSnippetUrl) {
+      return [block.sourceImageSnippetUrl];
+    }
+    if (parsed.imageUrl) {
+      return [parsed.imageUrl];
+    }
+    return [];
+  })().filter(Boolean);
 
-  const primaryImageUrl = blockImages[0] || block.sourceImageSnippetUrl || parsed.imageUrl || undefined;
+  const primaryImageUrl = blockImages[0] || undefined;
 
   return {
     type: 'text',
@@ -600,13 +646,28 @@ export function mapBlockToRole(
     ? false
     : isDuplicateReferenceContent(rawRefText, items);
 
-  const blockImages: string[] = (
-    Array.isArray(parsed.images)
-      ? parsed.images
-      : (Array.isArray(block.sourceImages)
-        ? block.sourceImages
-        : (block.sourceImageSnippetUrl ? [block.sourceImageSnippetUrl] : (parsed.imageUrl ? [parsed.imageUrl] : [])))
-  ).filter(Boolean);
+  const hasTranscribedReference = Boolean(parsed.referenceContent && String(parsed.referenceContent).trim().length > 80);
+  const blockImages: string[] = (() => {
+    if (Array.isArray(parsed.images) && parsed.images.length > 0) {
+      return parsed.images;
+    }
+    if (parsed.visualImageIndices && parsed.visualImageIndices.length === 0) {
+      return [];
+    }
+    if (hasTranscribedReference) {
+      return [];
+    }
+    if (Array.isArray(block.sourceImages) && block.sourceImages.length > 0) {
+      return block.sourceImages;
+    }
+    if (block.sourceImageSnippetUrl) {
+      return [block.sourceImageSnippetUrl];
+    }
+    if (parsed.imageUrl) {
+      return [parsed.imageUrl];
+    }
+    return [];
+  })().filter(Boolean);
 
   const hasReadingContent = Boolean(
     !isDuplicate && rawRefText.length > 0

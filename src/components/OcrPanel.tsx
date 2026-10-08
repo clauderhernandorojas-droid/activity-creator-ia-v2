@@ -231,6 +231,17 @@ export const OcrPanel: React.FC = () => {
     if (hasInteractiveTable) {
       return 'interaction_inputs';
     }
+
+    if (pd.interactionType === 'multiple_choice' || pd.interactionType === 'matching') {
+      return 'interaction_selection';
+    }
+    if (pd.interactionType === 'classification' || pd.interactionType === 'drag_drop') {
+      return 'interaction_buckets';
+    }
+    if (pd.interactionType === 'reference' || activeBlock.detectedType === 'paragraph') {
+      return 'reference_text';
+    }
+
     switch (activeBlock.detectedType) {
       case 'table':
         return 'reference_table';
