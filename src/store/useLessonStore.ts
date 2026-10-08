@@ -371,6 +371,7 @@ export const useLessonStore = create<LessonState>()(
           const newId = `slide-${Date.now()}`;
           const title = block?.parsedData?.title || 'Diapositiva Digitalizada';
           const subtitle = block?.parsedData?.instruction || 'Contenido adaptado desde libro de texto';
+          const isGraded = block?.parsedData?.isGraded !== undefined ? Boolean(block.parsedData.isGraded) : true;
           const mapped = block ? mapBlockToRole(block, role) : {};
 
           let cleanRef = mapped.reference || null;
@@ -782,7 +783,7 @@ export const useLessonStore = create<LessonState>()(
           const blockTitle = block.parsedData?.title;
           const blockInstruction = block.parsedData?.instruction;
 
-          const refRaw = String(block.parsedData?.referenceContent || block.parsedData?.content || block.referenceText || '').trim();
+          const refRaw = String(block.parsedData?.referenceContent || block.parsedData?.content || (block as any).referenceText || block.rawText || '').trim();
           const wordCount = refRaw.split(/\s+/).filter(Boolean).length;
           const isTranscribedReadingArticle = wordCount >= 30;
 

@@ -249,8 +249,6 @@ export const OcrPanel: React.FC = () => {
         return 'interaction_buckets';
       case 'dialogue':
         return 'interaction_sequence';
-      case 'paragraph':
-        return 'reference_text';
       default:
         return 'interaction_inputs';
     }
