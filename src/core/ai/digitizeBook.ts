@@ -2,7 +2,7 @@ import type { ExtractedBlock, ExtractedStructuredPayload } from '../../types/sch
 import { GoogleGenAI } from '@google/genai';
 import { isDuplicateReferenceContent } from '../text/textDeduplication';
 
-export type ManualTemplateType = 'input_fields' | 'buckets' | 'selection' | 'reference_table' | 'table_grid';
+export type ManualTemplateType = 'input_fields' | 'buckets' | 'selection' | 'reference_table' | 'table_grid' | 'writing';
 
 export const MANUAL_TEMPLATES: Record<ManualTemplateType, {
   label: string;
@@ -161,6 +161,31 @@ What | Asking about things | What is your name?`,
           { text: 'What is your name?', isInput: false, isExample: false }
         ]
       ]
+    }
+  },
+  writing: {
+    label: 'Writing (Producción escrita)',
+    detectedType: 'paragraph',
+    rawText: `Writing Task: Write a short profile about someone you admire.
+Guidelines:
+- Mention their occupation and daily routine.
+- Use at least three descriptive adjectives.
+- Check punctuation and spelling.`,
+    parsedData: {
+      title: 'Writing: Profile of an Inspiring Person',
+      instruction: 'Write a short profile about someone you admire following the guidelines:',
+      prompt: 'Write a profile (40-100 words) describing their occupation, routine, and why you admire them.',
+      guidelines: [
+        'Mention their occupation and daily routine.',
+        'Use at least three descriptive adjectives.',
+        'Check punctuation and spelling.'
+      ],
+      minWords: 40,
+      maxWords: 100,
+      wordBank: [],
+      interactionType: 'writing',
+      isGraded: false,
+      items: []
     }
   }
 };
@@ -327,8 +352,21 @@ const STRUCTURED_EXTRACTION_SCHEMA = {
     },
     interactionType: {
       type: 'string',
-      enum: ['fill_blanks', 'multiple_choice', 'matching', 'buckets', 'reference'],
-      description: 'The strict pedagogical archetype of the interactive exercise. Use "multiple_choice" or "matching" for matching tasks (headings to paragraphs, terms to definitions) AND identification tasks ("underline the question words", "circle the verbs", "identify the correct form"). Use "buckets" for category sorting. Use "reference" for communicative activities where no digital answer is evaluated.'
+      enum: ['fill_blanks', 'multiple_choice', 'matching', 'buckets', 'reference', 'writing'],
+      description: 'The strict pedagogical archetype of the interactive exercise. Use "writing" for free text production (paragraphs, profiles, letters, essays, reviews). Use "multiple_choice" or "matching" for matching tasks (headings to paragraphs, terms to definitions) AND identification tasks. Use "buckets" for category sorting. Use "reference" for communicative activities where no digital answer is evaluated.'
+    },
+    guidelines: {
+      type: 'array',
+      items: { type: 'string' },
+      description: 'Guiding procedural steps, questions, or rubric points (e.g. steps a, b, c, d or checklist) for writing activities.'
+    },
+    minWords: {
+      type: 'integer',
+      description: 'Minimum required word count if specified in the exercise prompt (e.g. "at least 50 words").'
+    },
+    maxWords: {
+      type: 'integer',
+      description: 'Maximum word count if specified in the exercise prompt.'
     },
     buckets: {
       type: 'array',
@@ -456,6 +494,13 @@ REGLAS UNIVERSALES DE BANCO DE OPCIONES Y ASIGNACIÓN BIUNÍVOCA:
     3. NUNCA descartes el recorte complementario de vocabulario o frases. La regla de no duplicación aplica exclusivamente para evitar duplicar oraciones entre referenceContent y reactivos evaluables en ejercicios mecánicos ('fill_blanks'/'multiple_choice'); NUNCA debe descartar material en actividades 'reference'.
 - Regla Universal de Actividades No Calificables / Encuestas Personales:
   * isGraded: Por defecto debe ser true. Si la consigna del ejercicio corresponde a una encuesta personal, opinión o reflexión subjetiva donde no existen respuestas correctas o incorrectas absolutas (p. ej., contiene frases como "true for you", "about yourself", "your opinion", "discuss in pairs", "write ten questions using these ideas"), debe extraerse obligatoriamente con "isGraded": false.
+- REGLA ONTOLÓGICA DE PRODUCCIÓN ESCRITA LIBRE (interactionType: 'writing'):
+  * Cuando la consigna principal del ejercicio solicite explícitamente redactar un párrafo, perfil, historia, carta, reseña, resumen, email o texto continuo libre ("Write a profile / paragraph / summary / description / email / story / review..."):
+    1. Mapear a interactionType: 'writing'.
+    2. Extraer las pautas procedimentales o pasos guía (a, b, c, d) dentro de 'guidelines' como un array de strings limpios.
+    3. Asignar la consigna central a 'instruction' y el enunciado a 'prompt'.
+    4. 'referenceContent' se mantiene en null a menos que exista un texto de lectura autónomo externo que el alumno deba consultar.
+    5. 'isGraded': false (la redacción se evalúa de forma formativa con retroalimentación IA en lugar de calificación fija).
 - PRINCIPIO DIDÁCTICO DE PRODUCCIÓN ABIERTA ("Write N items using these ideas / prompts"):
   * Cuando la consigna instruya al estudiante a redactar un número específico de preguntas u oraciones a partir de una lista de tópicos/ideas sugeridas (ej. "Write ten questions. Use these ideas...", "Make eight sentences about..."):
     1. TÓPICOS DE APOYO: Mapea la lista de ideas/tópicos (ej. "personal details, family, work/study, hobbies, free time") a 'wordBank' o a la descripción/instrucción del bloque. NUNCA los extraigas como 'referenceContent' (lo que abriría un panel lateral espurio) ni como enunciados ('prompt') individuales de cada ítem de pregunta.
@@ -519,7 +564,8 @@ UNIVERSAL TAXONOMY & STRICT CONTRACT:
 4. "referenceContent": Passive consultation material. Put reading passages, articles, dialogues, speech bubbles, instructional guidance ('TIPS!'), or consolidated support phrases/vocabulary here that provide reference context and DO NOT require an interactive answer. (null if none). Preserva fielmente la estructura visual y saltos de línea del documento original ('\n\n' entre párrafos y '\n' entre turnos de diálogo o listas). NUNCA repitas el título aquí ni agregues meta-explicaciones ni descripciones de fotos ni spoilers a preguntas predictivas. CRÍTICO: Listas de ideas/tópicos, vocabulario suelto, ejemplos resueltos o consignas NUNCA son referenceContent; si no hay un texto de lectura autónomo, pon estrictamente null.
 5. "wordBank": If the clipping contains a vocabulary box, word box, container, or pool of suggested ideas/topics (e.g. ['personal details', 'family', 'work']), extract them into "wordBank" as string[]. (Empty array [] if none).
    * REGLA DE PARTICIÓN 1: NUNCA incluyas cajas de palabras (Word Banks), notas de apoyo ('TIPS!'), números de página o códigos de lección dentro de 'items'.
-6. "interactionType": Must be one of: 'fill_blanks', 'multiple_choice', 'matching', 'buckets', 'reference'.
+6. "interactionType": Must be one of: 'fill_blanks', 'multiple_choice', 'matching', 'buckets', 'reference', 'writing'.
+   - Actividades de redacción continua libre ('Write a profile / paragraph / summary / email / story...') usan 'writing' con 'guidelines' para las pautas guía y 'prompt'/'instruction' para la consigna central.
    - Actividades de emparejar/relacionar dos conjuntos (párrafos con títulos, términos con definiciones, preguntas con respuestas) se categorizan SIEMPRE como 'multiple_choice' o 'matching' poblando 'options' en cada ítem.
    - Ejercicios de agrupar o clasificar términos en categorías o columnas usan 'buckets' siguiendo la Regla Universal de Clasificación por Categorías.
    - Actividades de producción abierta guiada por ideas ('Write ten questions using these ideas') usan 'fill_blanks' con ítems numerados vacíos y wordBank para los tópicos.
@@ -807,7 +853,7 @@ function buildExtractedBlockFromPayload(
       ? 'table'
       : sanitized.interactionType === 'buckets'
       ? 'vocabulary'
-      : sanitized.interactionType === 'reference' || (Boolean(sanitized.referenceContent) && sanitized.items.length === 0)
+      : sanitized.interactionType === 'reference' || sanitized.interactionType === 'writing' || (Boolean(sanitized.referenceContent) && sanitized.items.length === 0)
       ? 'paragraph'
       : 'numbered_list';
 
@@ -828,6 +874,10 @@ function buildExtractedBlockFromPayload(
       content: sanitized.referenceContent || undefined,
       wordBank: sanitized.wordBank.length > 0 ? sanitized.wordBank : undefined,
       interactionType: sanitized.interactionType,
+      guidelines: sanitized.guidelines,
+      minWords: sanitized.minWords,
+      maxWords: sanitized.maxWords,
+      prompt: sanitized.instruction || sanitized.title,
       buckets: sanitized.buckets,
       items: sanitized.items,
       tableHeaders: sanitized.tableHeaders,
@@ -1234,8 +1284,36 @@ function sanitizeExtractedPayload(payload: ExtractedStructuredPayload): Extracte
   let finalIsGraded = payload.isGraded !== undefined ? Boolean(payload.isGraded) : true;
   let finalInteractionType = payload.interactionType || 'fill_blanks';
 
-  // 1. OPEN PRODUCTION TASKS ("Write N items using these ideas / prompts")
-  if (isOpenProductionTask) {
+  // 0. FREE WRITING TASKS ("Write a profile / paragraph / summary / description / email...")
+  const writingDirectiveRegex = /\b(?:write|draft|compose|produce)\s+(?:an?\s+)?(?:profile|paragraph|summary|description|email|letter|story|review|essay|biography|post|short\s+text|text)\b/i;
+  const isWritingTask = writingDirectiveRegex.test(`${rawTitle} ${rawInstruction}`) || payload.interactionType === 'writing';
+  let finalGuidelines: string[] = Array.isArray(payload.guidelines) && payload.guidelines.length > 0
+    ? payload.guidelines.map((g) => String(g).trim()).filter(Boolean)
+    : [];
+
+  if (isWritingTask) {
+    finalInteractionType = 'writing';
+    finalIsGraded = false; // Writing tasks receive formative feedback rather than binary scores
+
+    // Extract procedural steps / guidelines if not yet populated
+    if (finalGuidelines.length === 0) {
+      const stepMatches = `${rawInstruction}\n${cleanedRawRef || ''}`.match(/(?:^|\n|\s)(?:\*{0,2}\(?[a-fA-F][).:]\*{0,2})\s+([^\n]+)/g);
+      if (stepMatches && stepMatches.length > 1) {
+        finalGuidelines = stepMatches.map((m) => m.replace(/^[*\s(a-fA-F).:]+/, '').trim()).filter(Boolean);
+      } else if (sanitizedItems.length > 0) {
+        finalGuidelines = sanitizedItems
+          .map((it) => it.prompt.replace(/^\d+[.)]\s*/, '').trim())
+          .filter((p) => p && !/^\d+$/.test(p));
+      } else if (activeWordBank.length > 0) {
+        finalGuidelines = activeWordBank.map((w) => `Include topic/phrase: ${w}`);
+      }
+    }
+
+    finalItems = [];
+    if (!isAutonomousReadingContent(cleanedRawRef)) {
+      referenceContent = null; // Full stage width
+    }
+  } else if (isOpenProductionTask) {
     // Harvest any conceptual support topics wrongly extracted as item prompts
     // (e.g. prompt: "personal details", prompt: "family", prompt: "work/study")
     for (const it of sanitizedItems) {
@@ -1355,11 +1433,17 @@ function sanitizeExtractedPayload(payload: ExtractedStructuredPayload): Extracte
     referenceContent,
     wordBank: activeWordBank.length > 0 ? activeWordBank : [],
     interactionType: (() => {
+      if (isWritingTask) {
+        return 'writing';
+      }
       if ((isMatchingDirective || isIdentifyDirective) && finalItems.length > 0 && !isOpenProductionTask) {
         return 'multiple_choice';
       }
       return finalInteractionType;
     })(),
+    guidelines: finalGuidelines.length > 0 ? finalGuidelines : undefined,
+    minWords: typeof payload.minWords === 'number' ? payload.minWords : undefined,
+    maxWords: typeof payload.maxWords === 'number' ? payload.maxWords : undefined,
     buckets: (() => {
       const explicit = Array.isArray(payload.buckets)
         ? payload.buckets.map((b) => String(b).trim()).filter(Boolean)

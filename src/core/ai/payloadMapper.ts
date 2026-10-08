@@ -14,7 +14,8 @@ import type {
   TargetSlot,
   SourceItem,
   Slide,
-  InputFieldListItem
+  InputFieldListItem,
+  WritingBlock
 } from '../../types/schema';
 import { generateGrammarVariants } from '../evaluators/fillBlankValidator';
 import { isDuplicateReferenceContent } from '../text/textDeduplication';
@@ -25,6 +26,7 @@ export type PedagogicalRole =
   | 'interaction_selection' 
   | 'interaction_buckets' 
   | 'interaction_sequence' 
+  | 'interaction_writing' 
   | 'reference_text' 
   | 'reference_table';
 
@@ -562,6 +564,66 @@ export function mapBlockToSequence(block: ExtractedBlock): SequenceBlock {
 }
 
 /**
+ * Pure 1:1 Universal Mapper for Writing Block (Free production & formative feedback)
+ */
+export function mapBlockToWriting(block: ExtractedBlock): WritingBlock {
+  const parsed = block.parsedData || {};
+  const id = block.id ? `wri-${block.id.replace(/^[a-z]+-/, '')}` : generateId('inter-wri');
+  const instruction = parsed.instruction || 'Redacta tu texto siguiendo las pautas:';
+
+  // Extract central prompt
+  let prompt = parsed.prompt || '';
+  if (!prompt) {
+    const firstItem = Array.isArray(parsed.items) && parsed.items[0] ? parsed.items[0] : null;
+    if (firstItem && typeof firstItem === 'object' && firstItem.prompt && !/^\d+[.)]?$/.test(firstItem.prompt.trim())) {
+      prompt = firstItem.prompt.trim();
+    } else if (parsed.title) {
+      prompt = parsed.title;
+    } else {
+      prompt = instruction;
+    }
+  }
+
+  // Extract guidelines
+  let guidelines: string[] | undefined = Array.isArray(parsed.guidelines) && parsed.guidelines.length > 0
+    ? parsed.guidelines.map((g: any) => String(g).trim()).filter(Boolean)
+    : undefined;
+
+  if (!guidelines && Array.isArray(parsed.items) && parsed.items.length > 1) {
+    const itemGuides = parsed.items
+      .map((it: any) => (typeof it === 'object' ? String(it.prompt || '').trim() : String(it).trim()))
+      .filter((p: string) => p && !/^\d+[.)]?$/.test(p));
+    if (itemGuides.length > 1) {
+      guidelines = itemGuides;
+    }
+  }
+
+  if (!guidelines && Array.isArray(parsed.wordBank) && parsed.wordBank.length > 0) {
+    guidelines = parsed.wordBank.map((w: any) => `Use topic/idea: ${String(w).trim()}`);
+  }
+
+  const minWords = typeof parsed.minWords === 'number' ? parsed.minWords : undefined;
+  const maxWords = typeof parsed.maxWords === 'number' ? parsed.maxWords : undefined;
+  const placeholder = parsed.placeholder || 'Escribe tu redacción aquí...';
+  const evaluationRubric = parsed.evaluationRubric || undefined;
+
+  return {
+    type: 'writing',
+    id,
+    instruction,
+    prompt,
+    guidelines: guidelines && guidelines.length > 0 ? guidelines : undefined,
+    minWords,
+    maxWords,
+    placeholder,
+    evaluationRubric,
+    verificationAudioUrl: parsed.verificationAudioUrl || undefined,
+    audioLabel: parsed.audioLabel || undefined,
+    followUpPrompt: parsed.followUpPrompt || undefined,
+  };
+}
+
+/**
  * Pure 1:1 Universal Mapper for Reference Table
  */
 export function mapBlockToReferenceTable(block: ExtractedBlock): ReferenceTableBlock {
@@ -809,6 +871,8 @@ export function mapBlockToRole(
       return { interaction: mapBlockToBuckets(block), reference: defaultReference };
     case 'interaction_sequence':
       return { interaction: mapBlockToSequence(block), reference: defaultReference };
+    case 'interaction_writing':
+      return { interaction: mapBlockToWriting(block), reference: defaultReference };
   }
 }
 
@@ -980,6 +1044,16 @@ export function slideToExtractedBlock(slide: Slide): ExtractedBlock {
           isExample: false
         }));
         break;
+
+      case 'writing':
+        items = [{
+          prompt: inter.prompt,
+          expectedAnswer: '',
+          acceptedAnswers: [],
+          isExample: false
+        }];
+        wordBank = inter.guidelines;
+        break;
     }
   }
 
@@ -1090,7 +1164,8 @@ export function convertSlideToRole(slide: Slide, targetRole: PedagogicalRole): S
       (targetRole === 'interaction_inputs' && currentInteraction.type === 'input_fields') ||
       (targetRole === 'interaction_selection' && currentInteraction.type === 'selection') ||
       (targetRole === 'interaction_buckets' && currentInteraction.type === 'buckets_matching') ||
-      (targetRole === 'interaction_sequence' && currentInteraction.type === 'sequence')
+      (targetRole === 'interaction_sequence' && currentInteraction.type === 'sequence') ||
+      (targetRole === 'interaction_writing' && currentInteraction.type === 'writing')
     );
 
     if (isSameType) {

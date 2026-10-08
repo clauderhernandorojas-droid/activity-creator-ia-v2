@@ -6,6 +6,7 @@ import { InputFieldsRenderer } from './InputFieldsRenderer';
 import { SelectionRenderer } from './SelectionRenderer';
 import { BucketsRenderer } from './BucketsRenderer';
 import { SequenceRenderer } from './SequenceRenderer';
+import { WritingRenderer } from './WritingRenderer';
 
 export const REFERENCE_RENDERER_REGISTRY: Record<string, ComponentType<any>> = {
   table_reference: TableReferenceRenderer,
@@ -18,6 +19,7 @@ export const INTERACTION_RENDERER_REGISTRY: Record<string, ComponentType<any>> =
   selection: SelectionRenderer,
   buckets_matching: BucketsRenderer,
   sequence: SequenceRenderer,
+  writing: WritingRenderer,
 };
 
 export function getReferenceRenderer(type: string): ComponentType<any> | null {

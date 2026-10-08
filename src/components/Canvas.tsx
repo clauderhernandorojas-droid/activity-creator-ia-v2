@@ -31,6 +31,7 @@ const FORMAT_SWITCH_OPTIONS: FormatSwitchOption[] = [
   { id: 'interaction_selection', label: 'Selección', icon: '☑️' },
   { id: 'interaction_buckets', label: 'Buckets', icon: '🗂️' },
   { id: 'interaction_sequence', label: 'Secuencia', icon: '🔀' },
+  { id: 'interaction_writing', label: 'Escritura', icon: '✍️' },
   { id: 'reference_text', label: 'Referencia', icon: '📖' },
 ];
 
@@ -169,6 +170,8 @@ export const Canvas: React.FC = () => {
           return 'interaction_buckets';
         case 'sequence':
           return 'interaction_sequence';
+        case 'writing':
+          return 'interaction_writing';
       }
     }
     if (currentSlide.referenceContent) {
@@ -478,6 +481,25 @@ export const Canvas: React.FC = () => {
                     <div>
                       <div className="text-xs font-bold text-slate-800">4. Secuencia</div>
                       <div className="text-[11px] text-slate-500">Diálogos</div>
+                    </div>
+                  </button>
+
+                  <button
+                    onClick={() => updateInteractionBlock(currentSlide.id, {
+                      type: 'writing',
+                      id: `wri-${Date.now()}`,
+                      instruction: 'Redacta un texto siguiendo las pautas:',
+                      prompt: 'Write a short profile or paragraph answering the questions.',
+                      guidelines: ['Use at least 3 descriptive adjectives', 'Check punctuation and spelling'],
+                      minWords: 30,
+                      placeholder: 'Escribe tu redacción aquí...'
+                    })}
+                    className="p-3.5 rounded-xl bg-white hover:bg-slate-50 border border-slate-200 text-left flex items-center gap-3 shadow-2xs transition col-span-2"
+                  >
+                    <PenTool className="w-5 h-5 text-indigo-600" />
+                    <div>
+                      <div className="text-xs font-bold text-slate-800">5. Producción Escrita (Writing)</div>
+                      <div className="text-[11px] text-slate-500">Redacción libre con feedback formativo en tiempo real</div>
                     </div>
                   </button>
                 </div>

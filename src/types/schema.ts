@@ -212,15 +212,51 @@ export const SequenceBlockSchema = z.object({
 export type SequenceItem = z.infer<typeof SequenceItemSchema>;
 export type SequenceBlock = z.infer<typeof SequenceBlockSchema>;
 
+// BASE BLOCK & BLOCK TYPES
+export interface BaseBlock {
+  id: string;
+  instruction: string;
+  verificationAudioUrl?: string;
+  audioLabel?: string;
+  followUpPrompt?: string;
+}
+
+export type BlockType =
+  | 'input_fields'
+  | 'selection'
+  | 'buckets_matching'
+  | 'sequence'
+  | 'writing';
+
+// 5. WRITING (Producción escrita y feedback formativo)
+export const WritingBlockSchema = z.object({
+  type: z.literal('writing'),
+  id: z.string(),
+  instruction: z.string(),
+  prompt: z.string(),
+  guidelines: z.array(z.string()).optional(),
+  minWords: z.number().optional(),
+  maxWords: z.number().optional(),
+  placeholder: z.string().optional(),
+  evaluationRubric: z.string().optional(),
+  verificationAudioUrl: z.string().optional(),
+  audioLabel: z.string().optional(),
+  followUpPrompt: z.string().optional(),
+});
+
+export type WritingBlock = z.infer<typeof WritingBlockSchema>;
+
 // UNIÓN DE INTERACCIONES EVALUABLES
 export const InteractionBlockSchema = z.discriminatedUnion('type', [
   InputFieldsBlockSchema,
   SelectionBlockSchema,
   BucketsMatchingBlockSchema,
   SequenceBlockSchema,
+  WritingBlockSchema,
 ]);
 
 export type InteractionBlock = z.infer<typeof InteractionBlockSchema>;
+export type LessonBlock = InteractionBlock | ReferenceBlock;
 
 // ==========================================
 // C. ESTRUCTURA DE LA DIAPOSITIVA (SLIDE)
@@ -288,7 +324,10 @@ export const ExtractedStructuredPayloadSchema = z.object({
   followUpPrompt: z.string().optional(),
   referenceContent: z.string().nullable().optional(),
   wordBank: z.array(z.string()).default([]),
-  interactionType: z.enum(['fill_blanks', 'multiple_choice', 'matching', 'buckets', 'reference']).default('fill_blanks'),
+  interactionType: z.enum(['fill_blanks', 'multiple_choice', 'matching', 'buckets', 'reference', 'writing']).default('fill_blanks'),
+  guidelines: z.array(z.string()).optional(),
+  minWords: z.number().optional(),
+  maxWords: z.number().optional(),
   buckets: z.array(z.string()).optional(),
   items: z.array(ExtractedItemSchema).default([]),
   tableHeaders: z.array(z.string()).optional(),

@@ -31,6 +31,8 @@ export function evaluateInteraction(
       return evaluateBuckets(interaction, studentAnswers);
     case 'sequence':
       return evaluateSequence(interaction, studentAnswers);
+    case 'writing':
+      return { score: 0, maxScore: 0, details: {} };
     default:
       return { score: 0, maxScore: 0, details: {} };
   }

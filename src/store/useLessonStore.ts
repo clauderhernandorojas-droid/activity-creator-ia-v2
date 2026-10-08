@@ -103,7 +103,7 @@ interface LessonState {
   duplicateSlide: (id: string) => string;
   createSlideFromBlock: (
     blockId: string,
-    role: 'reference_text' | 'reference_table' | 'interaction_inputs' | 'interaction_selection' | 'interaction_buckets' | 'interaction_sequence'
+    role: PedagogicalRole
   ) => string;
   reorderSlides: (sourceIndex: number, destinationIndex: number) => void;
   updateSlideTitle: (id: string, title: string) => void;
@@ -136,7 +136,7 @@ interface LessonState {
   assignExtractedBlock: (
     slideId: string,
     blockId: string,
-    role: 'reference_text' | 'reference_table' | 'interaction_inputs' | 'interaction_selection' | 'interaction_buckets' | 'interaction_sequence'
+    role: PedagogicalRole
   ) => void;
 
   // Actions - Lesson Metadata & File Portability
@@ -761,7 +761,8 @@ export const useLessonStore = create<LessonState>()(
           template === 'reference_table' ? 'reference_table' :
           template === 'buckets' ? 'interaction_buckets' :
           template === 'selection' ? 'interaction_selection' :
-          template === 'sequence' ? 'interaction_sequence' : 'interaction_inputs';
+          template === 'sequence' ? 'interaction_sequence' :
+          template === 'writing' ? 'interaction_writing' : 'interaction_inputs';
 
         const mapped = mapBlockToRole(manualBlock, role);
         if (mapped.reference) {
