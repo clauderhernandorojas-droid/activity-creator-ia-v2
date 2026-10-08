@@ -584,24 +584,57 @@ export function mapBlockToReferenceText(block: ExtractedBlock): ReferenceTextBlo
   }
 
 /**
- * Detects whether reference text contains a transcribed reading article (>= 40 words).
+ * Detects whether reference text contains substantial transcribed reading content (>= 30 words).
  */
-export function isTranscribedReadingArticle(text?: string): boolean {
+export function hasSubstantialTranscribedText(text?: string): boolean {
   if (!text) return false;
   const words = text.trim().split(/\s+/).filter(Boolean);
-  return words.length >= 40;
+  return words.length >= 30;
+}
+
+/**
+ * Universal Sanitizer for any ReferenceBlock (used in mapBlockToRole, createSlide, etc.)
+ * Ensures that if referenceContent has substantial text (>= 30 words),
+ * imageUrl = undefined and images = [] unless genuine independent visual clippings exist.
+ */
+export function sanitizeReferenceBlock(
+  refBlock: ReferenceBlock | null | undefined,
+  block?: ExtractedBlock
+): ReferenceBlock | null | undefined {
+  if (!refBlock) return refBlock;
+  if (refBlock.type !== 'text') return refBlock;
+
+  const contentText = String(refBlock.content || '').trim();
+  const words = contentText.split(/\s+/).filter(Boolean);
+
+  if (words.length >= 30) {
+    const parsed = block?.parsedData;
+    const visualIndices = Array.isArray(parsed?.visualImageIndices) ? parsed!.visualImageIndices : [];
+    const sourceImages = Array.isArray(block?.sourceImages) ? block!.sourceImages : (block?.sourceImageSnippetUrl ? [block!.sourceImageSnippetUrl] : []);
+
+    const hasIndependentImages = visualIndices.length > 0 && sourceImages.length > 1;
+    if (!hasIndependentImages) {
+      return {
+        ...refBlock,
+        imageUrl: undefined,
+        images: [],
+      };
+    }
+  }
+
+  return refBlock;
 }
 
 /**
  * Filters image assets for a reference text block.
- * Excludes images that are source OCR clippings of the transcribed reading passage (>= 40 words).
+ * Excludes images that are source OCR clippings of the transcribed reading passage (>= 30 words).
  */
 export function resolveReadingReferenceImages(
   block: ExtractedBlock,
   refText: string
 ): string[] {
   const parsed = block.parsedData || {};
-  const isArticle = isTranscribedReadingArticle(refText);
+  const isSubstantial = hasSubstantialTranscribedText(refText);
 
   // Recortes que sirvieron como fuente de digitalización OCR
   const sourceSnippets = new Set(
@@ -611,33 +644,39 @@ export function resolveReadingReferenceImages(
     ].filter((s): s is string => Boolean(s))
   );
 
-  // Candidatas iniciales
-  const candidateImages = (
-    Array.isArray(parsed.images) && parsed.images.length > 0
-      ? parsed.images
-      : (Array.isArray(block.sourceImages) && block.sourceImages.length > 0
-        ? block.sourceImages
-        : (block.sourceImageSnippetUrl
-          ? [block.sourceImageSnippetUrl]
-          : (parsed.imageUrl ? [parsed.imageUrl] : [])))
-  ).filter(Boolean);
+  const rawClippings = Array.isArray(block.sourceImages)
+    ? block.sourceImages
+    : (block.sourceImageSnippetUrl ? [block.sourceImageSnippetUrl] : []);
 
-  if (isArticle) {
-    // Si el texto tiene >= 40 palabras (artículo o lectura completa),
-    // cualquier recorte de la página fuente se EXCLUYE para evitar miniaturas redundantes.
-    const totalSourceCount = (Array.isArray(block.sourceImages) ? block.sourceImages.length : (block.sourceImageSnippetUrl ? 1 : 0));
-    if (totalSourceCount <= 1) {
-      // Si sólo hubo 1 recorte en la sesión de OCR, dicho recorte fue la página del artículo: descartar 100%
+  if (isSubstantial) {
+    // Si tiene >= 30 palabras de texto transcrito:
+    // Por defecto forzar images = [] y imageUrl = undefined
+    // A MENOS que se hayan cargado explícitamente recortes marcados como visualImageIndices
+    // independientes que NO coincidan con la imagen de donde se extrajo el texto.
+    const visualIndices = Array.isArray(parsed.visualImageIndices) ? parsed.visualImageIndices : [];
+    if (visualIndices.length === 0 || rawClippings.length <= 1) {
       return [];
     }
-    // Si hubo múltiples recortes, solo permitir imágenes que NO coincidan con los recortes de la página fuente
-    return candidateImages.filter((img) => !sourceSnippets.has(img));
+
+    const independentVisuals = visualIndices
+      .map((idx) => rawClippings[idx - 1])
+      .filter((img): img is string => Boolean(img));
+
+    return independentVisuals.filter((img) => !sourceSnippets.has(img));
   }
 
-  // Si NO es un pasaje largo de lectura:
+  // Si NO es un texto sustancial (< 30 palabras):
   if (parsed.visualImageIndices && parsed.visualImageIndices.length === 0) {
     return [];
   }
+
+  const candidateImages = (
+    Array.isArray(parsed.images) && parsed.images.length > 0
+      ? parsed.images
+      : (rawClippings.length > 0
+        ? rawClippings
+        : (parsed.imageUrl ? [parsed.imageUrl] : []))
+  ).filter(Boolean);
 
   return candidateImages;
 }
@@ -655,9 +694,9 @@ export function resolveReadingReferenceImages(
 
   // Collect all available image assets from the extracted block (shielded against redundant reading clippings)
   const blockImages = resolveReadingReferenceImages(block, content || rawContent || parsed.referenceContent || '');
-  const primaryImageUrl = blockImages[0] || undefined;
+  const primaryImageUrl = blockImages.length > 0 ? blockImages[0] : undefined;
 
-  return {
+  const rawReferenceBlock: ReferenceTextBlock = {
     type: 'text',
     id: generateId('ref-txt'),
     title,
@@ -666,6 +705,8 @@ export function resolveReadingReferenceImages(
     images: blockImages.length > 0 ? blockImages : undefined,
     imageUrl: primaryImageUrl,
   };
+
+  return sanitizeReferenceBlock(rawReferenceBlock, block) as ReferenceTextBlock;
 }
 
 /**
@@ -698,14 +739,14 @@ export function mapBlockToRole(
   );
 
   const defaultReference: ReferenceBlock | undefined = (hasReadingContent || hasVisualAssets)
-    ? mapBlockToReferenceText(block)
+    ? (sanitizeReferenceBlock(mapBlockToReferenceText(block), block) as ReferenceBlock)
     : hasTableContent
     ? mapBlockToReferenceTable(block)
     : undefined;
 
   switch (role) {
     case 'reference_text':
-      return { reference: mapBlockToReferenceText(block) };
+      return { reference: sanitizeReferenceBlock(mapBlockToReferenceText(block), block) as ReferenceBlock };
     case 'reference_table':
       return { reference: mapBlockToReferenceTable(block) };
     case 'interaction_inputs':

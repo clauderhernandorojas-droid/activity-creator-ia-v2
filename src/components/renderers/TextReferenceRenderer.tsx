@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import type { ReferenceTextBlock } from '../../types/schema';
 import { Camera, Image as ImageIcon, Upload, Link as LinkIcon, X, Plus } from 'lucide-react';
 import { compressImageBase64 } from '../../core/utils/imageCompressor';
+import { useLessonStore } from '../../store/useLessonStore';
 
 const MAX_IMAGES = 4;
 
@@ -25,9 +26,40 @@ export const TextReferenceRenderer: React.FC<Props> = ({
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Unified normalization
-  const activeImages = block.images && block.images.length > 0
-    ? block.images
-    : (block.imageUrl ? [block.imageUrl] : []);
+  const activeImages = React.useMemo(() => {
+    return block.images && block.images.length > 0
+      ? block.images
+      : (block.imageUrl ? [block.imageUrl] : []);
+  }, [block.images, block.imageUrl]);
+
+  // Check if content represents substantial transcribed reading text (>= 30 words)
+  const isSubstantialReadingText = React.useMemo(() => {
+    const words = (block.content || '').trim().split(/\s+/).filter(Boolean).length;
+    return words >= 30;
+  }, [block.content]);
+
+  // Determine if an image is identical to the clipping from which the reading text originated
+  const isOriginReadingClipping = React.useMemo(() => {
+    if (!isSubstantialReadingText || activeImages.length === 0) return false;
+    const targetImg = activeImages[0];
+    if (!targetImg) return false;
+
+    // 1. Check against extractedBlocks source clippings
+    const extractedBlocks = useLessonStore.getState().extractedBlocks;
+    for (const b of extractedBlocks) {
+      if (b.sourceImageSnippetUrl && b.sourceImageSnippetUrl === targetImg) return true;
+      if (Array.isArray(b.sourceImages) && b.sourceImages.includes(targetImg)) return true;
+      if (b.parsedData?.imageUrl && b.parsedData.imageUrl === targetImg) return true;
+      if (Array.isArray(b.parsedData?.images) && b.parsedData.images.includes(targetImg)) return true;
+    }
+
+    // 2. If it is a raw captured data URL and text is substantial reading, it is a clipping of the page
+    if (targetImg.startsWith('data:image/') && targetImg.length > 500) {
+      return true;
+    }
+
+    return false;
+  }, [isSubstantialReadingText, activeImages]);
 
   const paragraphs = React.useMemo(() => {
     if (!block.content) return [];
@@ -406,7 +438,7 @@ export const TextReferenceRenderer: React.FC<Props> = ({
           /* Student / Preview Mode: Responsive Adaptive Gallery or Editorial layout */
           <div className="text-sm sm:text-base leading-relaxed text-slate-700">
             {/* Visual Stimuli / Gallery when multiple images OR when text content is short */}
-            {activeImages.length > 1 || (activeImages.length === 1 && (paragraphs.length <= 2 && (block.content || '').length < 300)) ? (
+            {!isOriginReadingClipping && (activeImages.length > 1 || (activeImages.length === 1 && (paragraphs.length <= 2 && (block.content || '').length < 300))) ? (
               <div className="w-full mb-5">
                 {activeImages.length === 1 ? (
                   <div className="bg-slate-50/80 p-2 sm:p-3 border border-slate-200/90 rounded-2xl shadow-xs max-w-2xl mx-auto h-64 sm:h-72 md:h-80 w-full flex items-center justify-center overflow-hidden">
@@ -440,8 +472,8 @@ export const TextReferenceRenderer: React.FC<Props> = ({
                   </div>
                 )}
               </div>
-            ) : activeImages.length === 1 ? (
-              /* Single image with long editorial reading text: sleek right float */
+            ) : (!isOriginReadingClipping && activeImages.length === 1) ? (
+              /* Single image with long editorial reading text: sleek right float (only for genuine independent illustrations) */
               <div className="sm:float-right sm:ml-5 sm:mb-3 mb-4 w-full sm:w-auto max-w-full sm:max-w-[46%] flex-shrink-0">
                 <div className="bg-slate-50/80 p-2 border border-slate-200/90 rounded-2xl shadow-md shadow-slate-200/50 h-56 sm:h-64 flex items-center justify-center overflow-hidden relative group transition-all">
                   <img

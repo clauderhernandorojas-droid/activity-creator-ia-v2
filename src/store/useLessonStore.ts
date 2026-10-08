@@ -371,15 +371,26 @@ export const useLessonStore = create<LessonState>()(
           const newId = `slide-${Date.now()}`;
           const title = block?.parsedData?.title || 'Diapositiva Digitalizada';
           const subtitle = block?.parsedData?.instruction || 'Contenido adaptado desde libro de texto';
-          const isGraded = block?.parsedData?.isGraded !== undefined ? Boolean(block.parsedData.isGraded) : true;
           const mapped = block ? mapBlockToRole(block, role) : {};
+
+          let cleanRef = mapped.reference || null;
+          if (cleanRef && cleanRef.type === 'text') {
+            const words = (cleanRef.content || '').trim().split(/\s+/).filter(Boolean).length;
+            if (words >= 30) {
+              cleanRef = {
+                ...cleanRef,
+                imageUrl: undefined,
+                images: [],
+              };
+            }
+          }
 
           const newSlide: Slide = {
             id: newId,
             title,
             subtitle,
             layout: 'split_50_50',
-            referenceContent: mapped.reference || null,
+            referenceContent: cleanRef,
             interaction: mapped.interaction || null,
             cachedInteraction: mapped.interaction || null,
             notes: '',
@@ -773,20 +784,13 @@ export const useLessonStore = create<LessonState>()(
 
           const refRaw = String(block.parsedData?.referenceContent || block.parsedData?.content || block.referenceText || '').trim();
           const wordCount = refRaw.split(/\s+/).filter(Boolean).length;
-          const isTranscribedReadingArticle = wordCount >= 40;
-
-          const sourceSnippets = new Set(
-            [
-              ...(Array.isArray(block.sourceImages) ? block.sourceImages : []),
-              block.sourceImageSnippetUrl,
-            ].filter((s): s is string => Boolean(s))
-          );
+          const isTranscribedReadingArticle = wordCount >= 30;
 
           const hasExplicitVisuals = Array.isArray(block.parsedData?.images) && block.parsedData.images.length > 0;
 
           const blockImages = (
             isTranscribedReadingArticle
-              ? [] // Descartar recortes si el bloque es un artículo de lectura completo transcrito (>= 40 palabras)
+              ? [] // Descartar recortes si el bloque es un artículo de lectura completo transcrito (>= 30 palabras)
               : (hasExplicitVisuals
                 ? block.parsedData!.images!
                 : (Array.isArray(block.sourceImages)
@@ -806,19 +810,24 @@ export const useLessonStore = create<LessonState>()(
                 let refContent = mapped.reference;
                 if (refContent && refContent.type === 'text') {
                   const refWords = (refContent.content || '').trim().split(/\s+/).filter(Boolean).length;
-                  if (refWords >= 40 && refContent.images && refContent.images.length > 0) {
-                    const filteredImages = refContent.images.filter((img) => !sourceSnippets.has(img));
+                  if (refWords >= 30) {
                     refContent = {
                       ...refContent,
-                      images: filteredImages.length > 0 ? filteredImages : undefined,
-                      imageUrl: filteredImages[0] || undefined,
+                      images: [],
+                      imageUrl: undefined,
                     };
                   }
                 }
 
-                if (!refContent && slide.referenceContent && slide.referenceContent.type === 'text' && blockImages.length > 0) {
+                if (!refContent && slide.referenceContent && slide.referenceContent.type === 'text') {
                   const currentWords = (slide.referenceContent.content || '').trim().split(/\s+/).filter(Boolean).length;
-                  if (currentWords < 40 && (!slide.referenceContent.images || slide.referenceContent.images.length === 0)) {
+                  if (currentWords >= 30) {
+                    refContent = {
+                      ...slide.referenceContent,
+                      images: [],
+                      imageUrl: undefined,
+                    };
+                  } else if (blockImages.length > 0 && (!slide.referenceContent.images || slide.referenceContent.images.length === 0)) {
                     refContent = {
                       ...slide.referenceContent,
                       images: blockImages,
