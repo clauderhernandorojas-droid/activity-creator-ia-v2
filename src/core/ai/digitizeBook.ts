@@ -293,11 +293,11 @@ const STRUCTURED_EXTRACTION_SCHEMA = {
     title: { type: 'string', description: 'Concise formal activity title (e.g. "Speaking: Tell other students about yourself")' },
     instruction: {
       type: 'string',
-      description: 'The explicit pedagogical directive, task instruction, or rubric prompt present in the clipping (e.g. "Work in groups. Tell other students about yourself. Use the phrases from 1 or your own ideas"). MUST NEVER BE EMPTY if the image contains an instructional order or directive.'
+      description: 'The explicit pedagogical directive, task instruction, or rubric prompt present in the clipping (e.g. "Work in groups. Tell other students about yourself. Use the phrases from 1 or your own ideas"). MUST NEVER BE EMPTY if the image contains an instructional order or directive. For multi-stage directives (phases a, b, c, d), preserve clean structured formatting with double linebreaks and bold headers: "**a)** ... \n\n **b)** ..."'
     },
     isGraded: {
       type: 'boolean',
-      description: 'Default true. If the exercise instruction corresponds to a personal survey, opinion, self-reflection, or discussion task where there are no absolute correct/wrong answers (e.g. contains phrases like "true for you", "about yourself", "your opinion", "discuss in pairs"), extract as false.'
+      description: 'Default true. If the exercise instruction corresponds to a personal survey, opinion, self-reflection, or discussion task where there are no absolute correct/wrong answers (e.g. contains phrases like "true for you", "about yourself", "your opinion", "discuss in pairs", "write ten questions using these ideas"), extract as false.'
     },
     verificationAudioUrl: {
       type: 'string',
@@ -318,12 +318,12 @@ const STRUCTURED_EXTRACTION_SCHEMA = {
     },
     referenceContent: {
       type: 'string',
-      description: 'Passive consultation material: autonomous reading passage, article, dialogue, or grammar guidance box that students consult. Null or empty string if none. CRITICAL: NEVER extract model answers, solved example sentences (e.g. "1 do / What / do / you ? What do you do?"), or single example prompts here. Model sentences belong STRICTLY in the items array as the first item with isExample: true. Creating referenceContent triggers a two-column reading layout; do NOT create it unless an actual autonomous reading text exists.'
+      description: 'Passive consultation material: autonomous reading passage, article, dialogue, or grammar guidance box that students consult. Null or empty string if none. CRITICAL: NEVER extract vocabulary lists, topic/idea banks (e.g. "personal details, family, work..."), solved examples, or task instructions here. referenceContent is strictly for autonomous reading passages. If no autonomous reading text exists, referenceContent MUST be null/omitted so the activity takes full stage width. Setting referenceContent triggers a two-column reading layout.'
     },
     wordBank: {
       type: 'array',
       items: { type: 'string' },
-      description: 'List of vocabulary words if an explicit word box / bank is present in the image, otherwise empty array []'
+      description: 'List of vocabulary words, or conceptual support topics / idea prompts (e.g. "personal details", "family", "work/study") if an explicit word box, topic box, or idea bank is present in the image. Otherwise empty array [].'
     },
     interactionType: {
       type: 'string',
@@ -366,16 +366,16 @@ const STRUCTURED_EXTRACTION_SCHEMA = {
         properties: {
           prompt: {
             type: 'string',
-            description: 'Visible definition, sentence with blank, or informative premise read by the student. MUST contain the actual text/definition, NEVER just a sequential number.'
+            description: 'Visible definition, sentence with blank, or numbered line read by the student. For open production tasks ("Write ten questions using these ideas..."), generate the N numbered items ("1.", "2."...) with open response and map suggested idea topics to wordBank.'
           },
           expectedAnswer: {
             type: 'string',
-            description: 'Canonical resolved solution deduced by you as teacher. NEVER EMPTY.'
+            description: 'Canonical resolved solution deduced by you as teacher, or empty string "" for open personalized production tasks.'
           },
           acceptedAnswers: {
             type: 'array',
             items: { type: 'string' },
-            description: 'List of all valid variations (contractions, spelling). Must contain expectedAnswer.'
+            description: 'List of all valid variations (contractions, spelling). Must contain expectedAnswer if non-empty.'
           },
           isExample: {
             type: 'boolean',
@@ -455,13 +455,23 @@ REGLAS UNIVERSALES DE BANCO DE OPCIONES Y ASIGNACIÓN BIUNÍVOCA:
        - Segundo: El modelo conversacional o diálogo de ejemplo (los bocadillos/globos de diálogo o modelo provisto).
     3. NUNCA descartes el recorte complementario de vocabulario o frases. La regla de no duplicación aplica exclusivamente para evitar duplicar oraciones entre referenceContent y reactivos evaluables en ejercicios mecánicos ('fill_blanks'/'multiple_choice'); NUNCA debe descartar material en actividades 'reference'.
 - Regla Universal de Actividades No Calificables / Encuestas Personales:
-  * isGraded: Por defecto debe ser true. Si la consigna del ejercicio corresponde a una encuesta personal, opinión o reflexión subjetiva donde no existen respuestas correctas o incorrectas absolutas (p. ej., contiene frases como "true for you", "about yourself", "your opinion", "discuss in pairs"), debe extraerse obligatoriamente con "isGraded": false.
-- REGLA DE DELIMITACIÓN SEMÁNTICA DE referenceContent vs EJEMPLOS RESUELTOS (PROHIBICIÓN DE LAYOUTS ESPURIOS):
-  * 'referenceContent' (material de lectura o consulta) SOLO debe crearse cuando existe un texto, artículo, diálogo o tabla autónomo para consulta independiente.
-  * Las oraciones de ejemplo resueltas (ej. '1 do / What / do / you ? What do you do?' o 'What do you do?') pertenecen estrictamente al bloque interactivo como el primer ítem marcado como ejemplo ('isExample: true' o con su respuesta precargada). NUNCA deben extraerse como un bloque de lectura independiente ('referenceContent'). Extraer oraciones de ejemplo o respuestas modelo en 'referenceContent' genera erróneamente un layout de dos columnas con un panel de consulta vacío o espurio.
-  * Si no hay un pasaje de lectura, artículo, diálogo o tabla de referencia autónomo, 'referenceContent' DEBE ser estrictamente null o "".
+  * isGraded: Por defecto debe ser true. Si la consigna del ejercicio corresponde a una encuesta personal, opinión o reflexión subjetiva donde no existen respuestas correctas o incorrectas absolutas (p. ej., contiene frases como "true for you", "about yourself", "your opinion", "discuss in pairs", "write ten questions using these ideas"), debe extraerse obligatoriamente con "isGraded": false.
+- PRINCIPIO DIDÁCTICO DE PRODUCCIÓN ABIERTA ("Write N items using these ideas / prompts"):
+  * Cuando la consigna instruya al estudiante a redactar un número específico de preguntas u oraciones a partir de una lista de tópicos/ideas sugeridas (ej. "Write ten questions. Use these ideas...", "Make eight sentences about..."):
+    1. TÓPICOS DE APOYO: Mapea la lista de ideas/tópicos (ej. "personal details, family, work/study, hobbies, free time") a 'wordBank' o a la descripción/instrucción del bloque. NUNCA los extraigas como 'referenceContent' (lo que abriría un panel lateral espurio) ni como enunciados ('prompt') individuales de cada ítem de pregunta.
+    2. ÍTEMS DEL EJERCICIO: Genera exactamente los N ítems interactivos requeridos como líneas de respuesta abierta numeradas (ej. prompt: "1.", prompt: "2." ... prompt: "10."), con expectedAnswer: "" (o la pregunta modelo resuelta si el libro provee un ejemplo impreso en el ítem 1) y acceptedAnswers: [].
+    3. Al ser producción comunicativa personalizada, asigna isGraded: false e interactionType: 'fill_blanks'.
+- DELIMITACIÓN RIGUROSA DE referenceContent (ANCHO COMPLETO vs DOBLE PANEL):
+  * 'referenceContent' (material de lectura o consulta) es EXCLUSIVAMENTE para textos autónomos de comprensión (artículos, narraciones, diálogos extensos de consulta o tablas completas de reglas gramaticales).
+  * PROHIBICIÓN TAXATIVA: Listas de vocabulario, bancos de ideas/tópicos (ej. 'personal details, family, work...'), ejemplos resueltos, respuestas modelo o instrucciones NUNCA son 'referenceContent'.
+  * Si no hay un pasaje de lectura o texto autónomo real e independiente, 'referenceContent' DEBE SER ESTRICTAMENTE null o "". Esto garantiza que la actividad ocupe el ancho completo de la diapositiva en un diseño limpio y enfocado, sin paneles laterales espurios.
+- FORMATEO ESTRUCTURADO DE DIRECTIVAS MULTIETAPA (a, b, c, d):
+  * Cuando una actividad comunicativa, de speaking o procedimental contenga una secuencia de fases o pasos (a, b, c, d):
+    - Preserva la estructura en viñetas limpias con saltos de línea dobles y negritas para cada paso:
+      '**a)** Read the instructions and choose... \n\n **b)** Work in pairs and ask... \n\n **c)** Tell the class about your partner.'
+    - NUNCA compactes ni concatenes múltiples fases alfabéticas en un único párrafo continuo sin formato ni saltos de línea.
 - REGLA UNIVERSAL DE PARTICIÓN DE DIRECTIVAS SUBDIVIDIDAS (a, b, c):
-  * Cuando una actividad contenga directivas divididas en letras o fases (a, b, c):
+  * Cuando una actividad contenga directivas divididas en letras o fases donde (b) sea audio de verificación:
     - La tarea principal (a) (ej. "Make questions from the prompts"): define el 'title' y la consigna ('instruction') del bloque interactivo.
     - La directiva de verificación con audio (b) (ej. "Listen and check [R1.2]"): define 'audioLabel' (ej. "R1.2") y la activación de 'verificationAudioUrl'. NUNCA la concatenes en el título ni en la instrucción principal.
     - La instrucción de producción oral o cierre (c) (ej. "Ask each other the questions"): corresponde estrictamente al campo de instrucción secundaria / 'followUpPrompt'.
@@ -504,33 +514,36 @@ REGLAS UNIVERSALES DE BANCO DE OPCIONES Y ASIGNACIÓN BIUNÍVOCA:
 
 UNIVERSAL TAXONOMY & STRICT CONTRACT:
 1. "title": Concise formal activity or section title.
-2. "instruction": The explicit pedagogical directive, task instruction, or rubric prompt present in the clipping (e.g. "Work in groups. Tell other students about yourself. Use the phrases from 1 or your own ideas"). MUST NEVER BE EMPTY if the clipping contains an instructional directive.
+2. "instruction": The explicit pedagogical directive, task instruction, or rubric prompt present in the clipping (e.g. "Work in groups. Tell other students about yourself. Use the phrases from 1 or your own ideas"). MUST NEVER BE EMPTY if the clipping contains an instructional directive. En secuencias procedimentales multietapa (a, b, c, d), formatea cada paso con saltos de línea y negrita: '**a)** ... \n\n **b)** ...'.
 3. "visualImageIndices": Array of 1-based indices (1, 2, 3...) of clippings containing actual photos/illustrations. Empty array [] if none. Exclude text-only clippings.
-4. "referenceContent": Passive consultation material. Put reading passages, articles, dialogues, speech bubbles, instructional guidance ('TIPS!'), or consolidated support phrases/vocabulary here that provide reference context and DO NOT require an interactive answer. (null if none). Preserva fielmente la estructura visual y saltos de línea del documento original ('\n\n' entre párrafos y '\n' entre turnos de diálogo o listas). NUNCA repitas el título aquí ni agregues meta-explicaciones ni descripciones de fotos ni spoilers a preguntas predictivas.
-5. "wordBank": If the clipping contains a vocabulary box, word box, container, or pool of options to choose from, extract ONLY the available options into "wordBank" as string[] (sean cadenas simples o compuestas por varios términos). (Empty array [] if none).
+4. "referenceContent": Passive consultation material. Put reading passages, articles, dialogues, speech bubbles, instructional guidance ('TIPS!'), or consolidated support phrases/vocabulary here that provide reference context and DO NOT require an interactive answer. (null if none). Preserva fielmente la estructura visual y saltos de línea del documento original ('\n\n' entre párrafos y '\n' entre turnos de diálogo o listas). NUNCA repitas el título aquí ni agregues meta-explicaciones ni descripciones de fotos ni spoilers a preguntas predictivas. CRÍTICO: Listas de ideas/tópicos, vocabulario suelto, ejemplos resueltos o consignas NUNCA son referenceContent; si no hay un texto de lectura autónomo, pon estrictamente null.
+5. "wordBank": If the clipping contains a vocabulary box, word box, container, or pool of suggested ideas/topics (e.g. ['personal details', 'family', 'work']), extract them into "wordBank" as string[]. (Empty array [] if none).
    * REGLA DE PARTICIÓN 1: NUNCA incluyas cajas de palabras (Word Banks), notas de apoyo ('TIPS!'), números de página o códigos de lección dentro de 'items'.
 6. "interactionType": Must be one of: 'fill_blanks', 'multiple_choice', 'matching', 'buckets', 'reference'.
    - Actividades de emparejar/relacionar dos conjuntos (párrafos con títulos, términos con definiciones, preguntas con respuestas) se categorizan SIEMPRE como 'multiple_choice' o 'matching' poblando 'options' en cada ítem.
    - Ejercicios de agrupar o clasificar términos en categorías o columnas usan 'buckets' siguiendo la Regla Universal de Clasificación por Categorías.
+   - Actividades de producción abierta guiada por ideas ('Write ten questions using these ideas') usan 'fill_blanks' con ítems numerados vacíos y wordBank para los tópicos.
    - Actividades comunicativas de producción oral libre, diálogo o speaking card usan 'reference', consolidando los modelos y bancos de frases de apoyo íntegros en 'referenceContent'.
 7. "items": Array of interactive items ONLY (empty [] if interactionType is 'reference'):
-   - "prompt": The visible text, sentence with blank, or clue/definition that the student reads. Sigue la Regla Universal de Contenido de Ítem: DEBE contener el texto informativo, premisa o definición; NUNCA únicamente el número secuencial del ítem.
-   - "expectedAnswer": The canonical resolved solution deduced by you as an expert teacher. MUST NEVER BE EMPTY. Must follow the Regla Universal de Banco de Opciones whenever a wordBank is present.
-   - "acceptedAnswers": List of valid variations (contractions, spelling, or synonyms). Must include expectedAnswer.
-   - "isExample": Booleano. Must follow the Regla Universal de Muestras Impresas: las filas o ítems que ya presentan una respuesta visible de muestra impresa en el material original deben clasificarse obligatoriamente como "isExample": true con dicho elemento en expectedAnswer, NUNCA omitirse ni dejarse en blanco.
+   - "prompt": The visible text, sentence with blank, or numbered item line ("1.", "2."...) that the student reads. Para tareas de producción abierta ("Write ten questions..."), genera los N ítems ("1.", "2."...).
+   - "expectedAnswer": The canonical resolved solution deduced by you as an expert teacher, or empty string "" for open-formulation personalized production items.
+   - "acceptedAnswers": List of valid variations (contractions, spelling, or synonyms).
+   - "isExample": Booleano. Must follow the Regla Universal de Muestras Impresas: las filas o ítems que ya presentan una respuesta visible de muestra impresa en el material original deben clasificarse obligatoriamente como "isExample": true con dicho elemento en expectedAnswer.
    - "explanation": Brief 1-line pedagogical justification of the grammar rule or clue.
    - "options": (If multiple choice or matching) array of choices to select from.
 8. "tableHeaders" y "tableRows": Si el ejercicio se presenta como una cuadrícula o tabla interactiva de doble entrada, genera las columnas en "tableHeaders" y la matriz de celdas en "tableRows" siguiendo la Regla Universal de Tablas/Cuadrículas.
-9. "isGraded": Booleano. Por defecto debe ser true. Si la consigna del ejercicio corresponde a una encuesta personal, opinión o reflexión subjetiva donde no existen respuestas correctas o incorrectas absolutas (p. ej., contiene frases como "true for you", "about yourself", "your opinion", "discuss in pairs"), debe extraerse con "isGraded": false.
+9. "isGraded": Booleano. Por defecto debe ser true. Si la consigna del ejercicio corresponde a una encuesta personal, opinión, reflexión subjetiva o producción abierta libre (p. ej., contiene frases como "true for you", "about yourself", "your opinion", "discuss in pairs", "write ten questions using these ideas"), debe extraerse con "isGraded": false.
 10. "verificationAudioUrl" y "audioLabel": Si la consigna o el recorte contiene referencias a audio de verificación (ej. "Listen and check", "Listen and check your answers", pistas tipo "R1.2", "CD1 Track X", "1.24"):
     - Mapea el identificador o pista a 'audioLabel' (ej. "R1.2", "CD1 Track 5").
     - Reserva 'verificationAudioUrl' con una ruta local o placeholder (ej. "/audio/R1.2.mp3").
     - Si no contiene referencias a audio de verificación, omite estos campos.
-11. "followUpPrompt": Si la actividad contiene directivas subdivididas en fases (a, b, c), asigna la instrucción de producción oral o cierre (c) (ej. "Ask each other the questions", "Compare in pairs", "Work in pairs. Ask and answer") estrictamente a este campo. NUNCA concatenes a, b y c en el título o en la instrucción principal.
+11. "followUpPrompt": Si la actividad contiene directivas subdivididas en fases (a, b, c) con audio en b, asigna la instrucción de producción oral o cierre (c) (ej. "Ask each other the questions", "Compare in pairs", "Work in pairs. Ask and answer") estrictamente a este campo. NUNCA concatenes a, b y c en el título o en la instrucción principal.
 
 CRITICAL NEGATIVE CONSTRAINTS:
-- NUNCA extraigas oraciones de ejemplo resueltas (ej. '1 do / What / do / you ? What do you do?' o 'What do you do?') como un bloque de lectura independiente ('referenceContent'). Pertenecen estrictamente a 'items' como el primer ítem con isExample: true. Extraerlas en referenceContent genera erróneamente un layout de dos columnas con un panel de consulta espurio.
-- NUNCA concatenes directivas divididas en letras (a, b, c) en una sola cadena en el título ni en la instrucción. La tarea principal (a) es el 'title'/'instruction', la directiva de verificación auditiva (b) define 'audioLabel'/'verificationAudioUrl', y el cierre oral (c) define 'followUpPrompt'.
+- NUNCA extraigas tópicos de apoyo conceptual (ideas/bullets como "personal details", "family", "work/study") como enunciados individuales de preguntas ni los envíes a 'referenceContent'. Mapea los tópicos a 'wordBank' y genera N ítems interactivos de respuesta abierta numerados ("1.", "2."...).
+- NUNCA extraigas listas de vocabulario, bancos de ideas, ejemplos resueltos (ej. '1 do / What / do / you ? What do you do?' o 'What do you do?') o consignas como 'referenceContent'. 'referenceContent' es exclusivamente para pasajes de lectura autónomos (artículos, historias o tablas gramaticales). Si no hay un texto de lectura real, 'referenceContent' DEBE ser estrictamente null para que la actividad ocupe el ancho completo de la diapositiva.
+- NUNCA concatenes directivas procedimentales multietapa (a, b, c, d) en un único párrafo continuo sin formato; debes estructurarlas en viñetas limpias con saltos de línea dobles y negritas ('**a)** ... \n\n **b)** ...').
+- NUNCA concatenes directivas divididas en letras (a, b, c) en una sola cadena en el título ni en la instrucción cuando (b) es audio de verificación. La tarea principal (a) es el 'title'/'instruction', la directiva de verificación auditiva (b) define 'audioLabel'/'verificationAudioUrl', y el cierre oral (c) define 'followUpPrompt'.
 - NUNCA clasifiques tareas de relacionar, emparejar o correspondencia (Matching de párrafos con encabezados, términos con definiciones, preguntas con respuestas) como 'fill_blanks'. Deben modelarse obligatoriamente como 'multiple_choice' con el conjunto completo de alternativas en 'options' para cada ítem.
 - NUNCA clasifiques tareas de identificación o marcado ("Underline...", "Circle...", "Highlight...", "Identify the...") como 'fill_blanks' borrando palabras ni creando huecos artificiales en las oraciones; deben modelarse como 'multiple_choice' conservando la oración completa intacta en 'prompt' y presentando las palabras candidatas en 'options'.
 - NUNCA incluyas recortes de pasajes de lectura, textos transcritos, artículos o ejercicios en 'visualImageIndices'; solo fotografías o ilustraciones genuinas sin transcripción textual directa.
@@ -914,9 +927,108 @@ export function extractSentenceDistractors(sentence: string, targetAnswer: strin
 }
 
 /**
+ * Number word mapping for open production directives (e.g. "ten questions" -> 10)
+ */
+export const NUMBER_WORDS: Record<string, number> = {
+  one: 1, two: 2, three: 3, four: 4, five: 5,
+  six: 6, seven: 7, eight: 8, nine: 9, ten: 10,
+  eleven: 11, twelve: 12, thirteen: 13, fourteen: 14, fifteen: 15,
+  sixteen: 16, seventeen: 17, eighteen: 18, nineteen: 19, twenty: 20
+};
+
+/**
+ * Formats multi-stage directives (phases a, b, c, d) with clean double-newlines and bold markers:
+ * e.g., "**a)** ... \n\n **b)** ..."
+ * Prevents collapsing sequential procedural steps into an unformatted run-on paragraph.
+ */
+export function formatMultiStageDirectives(text: string): string {
+  if (!text) return '';
+  const trimmed = text.trim();
+
+  // Check if text contains multi-stage directive indicators (e.g. 'a)', 'b)' or '(a)', '(b)' or 'a.', 'b.')
+  const hasStepA = /(?:^|\s|\n)(?:\*{0,2}\(?a[).:]\*{0,2})\s+/i.test(trimmed);
+  const hasStepB = /(?:^|\s|\n)(?:\*{0,2}\(?b[).:]\*{0,2})\s+/i.test(trimmed);
+
+  if (!hasStepA && !hasStepB) {
+    return text;
+  }
+
+  // Normalize markers to double newlines with bold tags: \n\n**letter)**
+  let formatted = trimmed.replace(
+    /(?:^|\n|(?<=[.!?;\s]))\s*(?:\*{0,2}\(?([a-fA-F])[).:]\*{0,2})\s+/g,
+    (_match, letter, offset) => {
+      const lowerLetter = letter.toLowerCase();
+      const prefix = offset === 0 ? '' : '\n\n';
+      return `${prefix}**${lowerLetter})** `;
+    }
+  );
+
+  return formatted.replace(/\n{3,}/g, '\n\n').trim();
+}
+
+/**
+ * Evaluates whether text is a genuine autonomous reading passage
+ * (article, narrative story, multi-turn dialogue, or full grammar reference table)
+ * rather than a vocabulary list, idea bank, solved example, or instruction.
+ */
+export function isAutonomousReadingContent(text: string | null): boolean {
+  if (!text) return false;
+  const trimmed = text.trim();
+  if (trimmed.length < 20) return false;
+
+  // Check if it's explicitly an idea bank, topic list, or word bank
+  const isIdeaOrTopicList = /^(?:(?:useful\s+)?(?:ideas|topics|prompts|vocabulary|words|categories|phrases)|use these ideas|ideas to use)[:\s]/i.test(trimmed);
+  if (isIdeaOrTopicList) return false;
+
+  // Check if it's an example sentence or model answer
+  if (/^(?:example|model|sample|e\.g\.)[:\s]/i.test(trimmed)) return false;
+  if (/^\(?1[.)]?\s+[A-Z][^.?!]+[.?]\s*(?:—|-|–)\s*/i.test(trimmed) && trimmed.length < 80) return false;
+
+  // If text is composed mostly of bulleted short lines (topic tags or vocabulary)
+  const lines = trimmed.split(/\n+/).map((l) => l.trim()).filter(Boolean);
+  const bulletLines = lines.filter((l) => /^[•\-–*·]\s*/.test(l) || /^\d+[.)]\s*/.test(l));
+  if (bulletLines.length > 0 && bulletLines.length >= lines.length * 0.6) {
+    const avgLen = bulletLines.reduce((acc, l) => acc + l.length, 0) / bulletLines.length;
+    if (avgLen < 40 && !bulletLines.some((l) => l.includes('?'))) {
+      return false; // It's a topic or vocabulary list, not an autonomous reading passage
+    }
+  }
+
+  // Count words
+  const words = trimmed.split(/\s+/).filter(Boolean);
+  if (words.length < 25) {
+    const isDialogue = /(?:Speaker\s+[A-Z]|A:|B:|John:|Mary:)/i.test(trimmed);
+    const isTable = trimmed.includes('|') && trimmed.includes('\n');
+    if (!isDialogue && !isTable) {
+      return false; // Under 25 words and not dialogue/table => not an autonomous reading passage
+    }
+  }
+
+  return true;
+}
+
+/**
+ * Extracts support topic ideas from a text block or bulleted list
+ * (e.g. "Ideas: personal details, family, work and studies" -> ["personal details", "family", "work and studies"])
+ */
+export function extractTopicIdeas(text: string): string[] {
+  if (!text) return [];
+  const cleaned = text
+    .replace(/^(?:(?:useful\s+)?(?:ideas|topics|prompts|vocabulary|words|categories|phrases)|use these ideas|ideas to use)[:\s]*/gi, '')
+    .trim();
+
+  const parts = cleaned
+    .split(/[\n,;•·\-–—*]+/)
+    .map((s) => s.replace(/^\d+[.)]\s*/, '').trim())
+    .filter((s) => s.length >= 2 && s.length <= 45 && !/[?_]{2,}/.test(s));
+
+  return Array.from(new Set(parts));
+}
+
+/**
  * Pure, defensive normalization of structured payload:
  * Guarantees that every item has expectedAnswer, acceptedAnswers, and isExample boolean.
- * ZERO ad-hoc heuristics, zero arbitrary word counts, zero string patching.
+ * Enforces open production modeling, strict referenceContent delimitation, and structured multi-stage directives.
  */
 function sanitizeExtractedPayload(payload: ExtractedStructuredPayload): ExtractedStructuredPayload {
   const items = Array.isArray(payload.items) ? payload.items : [];
@@ -924,6 +1036,14 @@ function sanitizeExtractedPayload(payload: ExtractedStructuredPayload): Extracte
   const rawTitle = payload.title ? String(payload.title).trim() : '';
   const isMatchingDirective = /match\b|relate\b|pair\b|emparej/i.test(`${rawTitle} ${rawInstruction}`);
   const isIdentifyDirective = /underline\b|circle\b|highlight\b|identify\b|subraya\b|encierra\b|marca\b/i.test(`${rawTitle} ${rawInstruction}`);
+
+  // Detect open production directive ("Write ten questions. Use these ideas...")
+  const openProductionRegex = /\b(?:write|make|ask|create|formulate|produce)\s+(?:(?:at\s+least|about|approx\w*)\s+)?(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|\d{1,2})\s+(questions|sentences|phrases|things|items)\b/i;
+  const openProductionMatch = `${rawTitle} ${rawInstruction}`.match(openProductionRegex);
+  const targetItemCount = openProductionMatch
+    ? (NUMBER_WORDS[openProductionMatch[1].toLowerCase()] ?? parseInt(openProductionMatch[1], 10))
+    : 0;
+  const isOpenProductionTask = targetItemCount >= 2 && targetItemCount <= 25;
 
   // Global pool of candidate options for matching tasks (e.g. headings or definitions)
   const matchingPool = Array.from(
@@ -945,7 +1065,7 @@ function sanitizeExtractedPayload(payload: ExtractedStructuredPayload): Extracte
     let prompt = isPureNumber && explanation
       ? (rawPrompt ? `${rawPrompt} _______ : ${explanation}` : `${idx + 1}. _______ : ${explanation}`)
       : (rawPrompt || `Item ${idx + 1}`);
-    const expectedAnswer = String(it.expectedAnswer || '').trim() || `Respuesta ${idx + 1}`;
+    const expectedAnswer = String(it.expectedAnswer || '').trim() || (isOpenProductionTask ? '' : `Respuesta ${idx + 1}`);
 
     // If this is an identification task ("Underline / Circle / Identify"), restore full intact sentence if blank was created
     if (isIdentifyDirective && /_{2,}/.test(prompt) && expectedAnswer) {
@@ -954,9 +1074,9 @@ function sanitizeExtractedPayload(payload: ExtractedStructuredPayload): Extracte
 
     let acceptedAnswers = Array.isArray(it.acceptedAnswers) && it.acceptedAnswers.length > 0
       ? it.acceptedAnswers.map((a) => String(a).trim()).filter(Boolean)
-      : [expectedAnswer];
+      : (expectedAnswer ? [expectedAnswer] : []);
 
-    if (!acceptedAnswers.includes(expectedAnswer)) {
+    if (expectedAnswer && !acceptedAnswers.includes(expectedAnswer)) {
       acceptedAnswers.unshift(expectedAnswer);
     }
 
@@ -1015,48 +1135,52 @@ function sanitizeExtractedPayload(payload: ExtractedStructuredPayload): Extracte
     : undefined;
 
   let followUpPrompt = payload.followUpPrompt ? String(payload.followUpPrompt).trim() : undefined;
-
-  // Defensive partitioning of subsections (a, b, c) if vision model concatenated them in title or instruction
   const combinedHeader = `${rawTitle}\n${rawInstruction}`;
 
-  // 1. Detect subsection (c) - communicative closing / oral follow-up
-  if (!followUpPrompt) {
-    const cMatch = combinedHeader.match(/(?:^|\n|[;.]\s*)(?:[cC][.)]\s+|(?:\([cC]\)\s+))([^\n]+)/);
-    if (cMatch && cMatch[1]?.trim()) {
-      followUpPrompt = cMatch[1].trim();
-    }
-  }
+  // Check if subsection (b) is explicitly an audio verification step ("Listen and check")
+  const bMatch = combinedHeader.match(/(?:^|\n|[;.]\s*)(?:[bB][.)]\s+|(?:\([bB]\)\s+))(listen\s+(?:and|&|to)\s+check[^\n]*)/i);
+  const isAudioVerificationFlow = Boolean(bMatch);
 
-  // 2. Detect subsection (b) - audio verification
   let audioLabel = payload.audioLabel ? String(payload.audioLabel).trim() : undefined;
   let verificationAudioUrl = payload.verificationAudioUrl ? String(payload.verificationAudioUrl).trim() : undefined;
 
-  const bMatch = combinedHeader.match(/(?:^|\n|[;.]\s*)(?:[bB][.)]\s+|(?:\([bB]\)\s+))(listen\s+(?:and|&|to)\s+check[^\n]*)/i);
-  if (bMatch) {
-    const bDirective = bMatch[1].trim();
+  if (isAudioVerificationFlow) {
+    const bDirective = bMatch![1].trim();
     if (!audioLabel) {
       const trackInB = bDirective.match(/\b(?:(?:CD\s*\d+\s*)?Track\s*(\d+(?:\.\d+)?)|(R\d+\.\d+)|(?:Audio\s*(\d+(?:\.\d+)?))|([1-9]\.\d{1,2}))\b/i);
       if (trackInB) {
         audioLabel = trackInB[0].trim();
       }
     }
+    // Partition subsection (c) - communicative closing / oral follow-up if present
+    if (!followUpPrompt) {
+      const cMatch = combinedHeader.match(/(?:^|\n|[;.]\s*)(?:[cC][.)]\s+|(?:\([cC]\)\s+))([^\n]+)/);
+      if (cMatch && cMatch[1]?.trim()) {
+        followUpPrompt = cMatch[1].trim();
+      }
+    }
   }
 
-  // 3. Clean title and instruction by removing leaked (b) and (c) directives, and stripping leading (a) marker
-  const cleanDirectiveText = (text: string): string => {
-    return text
-      // remove subsection c
-      .replace(/(?:^|\n|[;.]\s*)(?:[cC][.)]\s+|(?:\([cC]\)\s+))[^\n]+/g, '')
-      // remove subsection b if it mentions listening/checking
-      .replace(/(?:^|\n|[;.]\s*)(?:[bB][.)]\s+|(?:\([bB]\)\s+))(?:listen\s+[^\n]+)/gi, '')
-      // remove leading subsection a marker e.g. "a ", "a) ", "(a) ", "1a. "
-      .replace(/^(?:\(?\d+\)?\s*)?(?:[aA][.)]\s+|(?:\([aA]\)\s+))/g, '')
-      .replace(/\s{2,}/g, ' ')
-      .trim();
-  };
+  // Title and Instruction cleaning & multi-stage formatting
+  let title = rawTitle;
+  let instruction = rawInstruction;
 
-  let title = cleanDirectiveText(rawTitle);
-  let instruction = cleanDirectiveText(rawInstruction);
+  if (isAudioVerificationFlow) {
+    const cleanDirectiveText = (text: string): string => {
+      return text
+        .replace(/(?:^|\n|[;.]\s*)(?:[cC][.)]\s+|(?:\([cC]\)\s+))[^\n]+/g, '')
+        .replace(/(?:^|\n|[;.]\s*)(?:[bB][.)]\s+|(?:\([bB]\)\s+))(?:listen\s+[^\n]+)/gi, '')
+        .replace(/^(?:\(?\d+\)?\s*)?(?:[aA][.)]\s+|(?:\([aA]\)\s+))/g, '')
+        .replace(/\s{2,}/g, ' ')
+        .trim();
+    };
+    title = cleanDirectiveText(rawTitle);
+    instruction = cleanDirectiveText(rawInstruction);
+  } else {
+    // Multi-stage procedural directives (a, b, c, d): preserve structured format with double-linebreaks and bold headers
+    instruction = formatMultiStageDirectives(rawInstruction);
+    title = rawTitle.replace(/^(?:\(?\d+\)?\s*)?(?:[aA][.)]\s+|(?:\([aA]\)\s+))/g, '').trim();
+  }
 
   if (!instruction && title.length > 50) {
     instruction = title;
@@ -1077,31 +1201,103 @@ function sanitizeExtractedPayload(payload: ExtractedStructuredPayload): Extracte
     : null;
 
   // Strict Delimitation of referenceContent:
-  // Autonomous reading material (article, dialogue, reference table) has substantial text (>= 25 words).
-  // Model answers, solved example sentences (e.g. "1 do / What / do / you ? What do you do?"), or isolated prompts
-  // belong strictly in items with isExample: true and MUST NEVER trigger a dual-column layout.
-  const refWords = cleanedRawRef ? cleanedRawRef.trim().split(/\s+/).filter(Boolean).length : 0;
-  const isSpuriousModelOrShortRef = Boolean(
-    cleanedRawRef &&
-    payload.interactionType !== 'reference' &&
-    refWords < 25
+  // Lists of vocabulary, banks of ideas/topics, solved examples, or instructions NEVER belong in referenceContent.
+  // referenceContent is strictly for autonomous reading passages (articles, dialogues, reference tables).
+  let referenceContent: string | null = null;
+  const wordBankTopics: string[] = [];
+
+  if (cleanedRawRef) {
+    if (payload.interactionType === 'reference' && !isOpenProductionTask) {
+      // In speaking cards without open production, preserve referenceContent and format multi-stage directives if present
+      referenceContent = formatMultiStageDirectives(cleanedRawRef);
+    } else if (isAutonomousReadingContent(cleanedRawRef) && !isDuplicateReferenceContent(cleanedRawRef, sanitizedItems)) {
+      // Genuine autonomous reading passage
+      referenceContent = cleanedRawRef;
+    } else {
+      // Not an autonomous reading text: extract any topics, ideas, or vocabulary into wordBankTopics,
+      // and keep referenceContent = null so the activity spans the full stage width!
+      const extracted = extractTopicIdeas(cleanedRawRef);
+      wordBankTopics.push(...extracted);
+      referenceContent = null;
+    }
+  }
+
+  // Consolidate wordBank: include words from payload plus topics harvested from spurious referenceContent
+  const activeWordBank: string[] = Array.from(
+    new Set([
+      ...(Array.isArray(payload.wordBank) ? payload.wordBank.map((w) => String(w).trim()).filter(Boolean) : []),
+      ...wordBankTopics,
+    ])
   );
 
-  // In 'reference' activities, ALWAYS preserve referenceContent (never drop as duplicate)
-  // and consolidate complementary support phrases/vocabulary into referenceContent
-  let referenceContent = payload.interactionType === 'reference'
-    ? cleanedRawRef
-    : (isSpuriousModelOrShortRef || isDuplicateReferenceContent(cleanedRawRef, sanitizedItems) ? null : cleanedRawRef);
+  let finalItems = sanitizedItems;
+  let finalIsGraded = payload.isGraded !== undefined ? Boolean(payload.isGraded) : true;
+  let finalInteractionType = payload.interactionType || 'fill_blanks';
 
-  if (payload.interactionType === 'reference') {
+  // 1. OPEN PRODUCTION TASKS ("Write N items using these ideas / prompts")
+  if (isOpenProductionTask) {
+    // Harvest any conceptual support topics wrongly extracted as item prompts
+    // (e.g. prompt: "personal details", prompt: "family", prompt: "work/study")
+    for (const it of sanitizedItems) {
+      const cleanP = it.prompt.replace(/^\d+[.)]\s*/, '').trim();
+      const isQuestion = cleanP.includes('?') || /^(?:what|where|when|who|why|how|do|did|is|are|can|have|has)\b/i.test(cleanP);
+      if (!isQuestion && cleanP.length <= 40 && !cleanP.includes('___')) {
+        if (!activeWordBank.includes(cleanP) && cleanP.length > 1) {
+          activeWordBank.push(cleanP);
+        }
+      }
+    }
+
+    // Check if an item provides a model solved question (e.g. "Where are you from?")
+    const sampleItem = sanitizedItems.find((it) => {
+      const fullText = `${it.prompt} ${it.expectedAnswer}`;
+      return it.isExample || fullText.includes('?') || /^(?:what|where|when|who|why|how|do|did|is|are|can|have|has)\b/i.test(it.expectedAnswer || '');
+    });
+
+    const sampleQuestion = sampleItem
+      ? (sampleItem.expectedAnswer?.includes('?')
+          ? sampleItem.expectedAnswer.trim()
+          : (sampleItem.prompt.includes('?')
+              ? sampleItem.prompt.replace(/^\d+[.)]\s*/, '').trim()
+              : (sampleItem.expectedAnswer?.trim() || '')))
+      : '';
+
+    // Generate exactly the targetItemCount (N) numbered open items
+    const openItems: typeof sanitizedItems = [];
+    for (let i = 1; i <= targetItemCount; i++) {
+      if (i === 1 && sampleQuestion) {
+        openItems.push({
+          prompt: `1. (e.g. ${sampleQuestion})`,
+          expectedAnswer: sampleQuestion,
+          acceptedAnswers: [sampleQuestion],
+          isExample: true,
+          explanation: '',
+          options: undefined,
+        });
+      } else {
+        openItems.push({
+          prompt: `${i}.`,
+          expectedAnswer: '',
+          acceptedAnswers: [],
+          isExample: false,
+          explanation: '',
+          options: undefined,
+        });
+      }
+    }
+
+    finalItems = openItems;
+    finalIsGraded = false; // Personalized open production is not graded
+    finalInteractionType = 'fill_blanks';
+    referenceContent = null; // Strictly full width
+  } else if (payload.interactionType === 'reference') {
+    // Consolidate complementary support phrases or vocabulary into referenceContent for speaking cards
     const existingRef = referenceContent || '';
     const supportPhrases = sanitizedItems
       .map((it) => it.prompt.replace(/_{2,}/g, '').trim())
       .filter((p) => p && p.length > 3 && !existingRef.includes(p));
 
-    const extraWords = (payload.wordBank || [])
-      .map((w) => String(w).trim())
-      .filter((w) => w && w.length > 1 && !existingRef.includes(w));
+    const extraWords = activeWordBank.filter((w) => w && w.length > 1 && !existingRef.includes(w));
 
     const parts: string[] = [];
     if (existingRef) {
@@ -1122,7 +1318,7 @@ function sanitizeExtractedPayload(payload: ExtractedStructuredPayload): Extracte
   }
 
   // Detection and sanitization of verification audio ("Listen and check", "R1.2", "CD1 Track X")
-  const combinedSearchText = `${title} ${instruction} ${followUpPrompt || ''} ${referenceContent || ''} ${sanitizedItems.map((i) => i.prompt).join(' ')}`;
+  const combinedSearchText = `${title} ${instruction} ${followUpPrompt || ''} ${referenceContent || ''} ${finalItems.map((i) => i.prompt).join(' ')}`;
 
   if (!audioLabel) {
     const trackPattern = /\b(?:(?:CD\s*\d+\s*)?Track\s*(\d+(?:\.\d+)?)|(R\d+\.\d+)|(?:Audio\s*(\d+(?:\.\d+)?)))\b/i;
@@ -1157,14 +1353,12 @@ function sanitizeExtractedPayload(payload: ExtractedStructuredPayload): Extracte
     instruction: instruction || undefined,
     followUpPrompt: followUpPrompt || undefined,
     referenceContent,
-    wordBank: Array.isArray(payload.wordBank)
-      ? payload.wordBank.map((w) => String(w).trim()).filter(Boolean)
-      : [],
+    wordBank: activeWordBank.length > 0 ? activeWordBank : [],
     interactionType: (() => {
-      if ((isMatchingDirective || isIdentifyDirective) && sanitizedItems.length > 0) {
+      if ((isMatchingDirective || isIdentifyDirective) && finalItems.length > 0 && !isOpenProductionTask) {
         return 'multiple_choice';
       }
-      return payload.interactionType || 'fill_blanks';
+      return finalInteractionType;
     })(),
     buckets: (() => {
       const explicit = Array.isArray(payload.buckets)
@@ -1179,14 +1373,10 @@ function sanitizeExtractedPayload(payload: ExtractedStructuredPayload): Extracte
       }
       return undefined;
     })(),
-    items: sanitizedItems,
+    items: finalItems,
     tableHeaders,
     tableRows,
-    isGraded: payload.isGraded !== undefined
-      ? Boolean(payload.isGraded)
-      : !(/true for you|about yourself|your opinion|discuss in pairs|personal reflection/i.test(
-          `${title} ${instruction} ${referenceContent || ''} ${sanitizedItems.map((i) => i.prompt).join(' ')}`
-        )),
+    isGraded: finalIsGraded,
     verificationAudioUrl: verificationAudioUrl || undefined,
     audioLabel: audioLabel || undefined,
     visualImageIndices: Array.isArray(payload.visualImageIndices)
