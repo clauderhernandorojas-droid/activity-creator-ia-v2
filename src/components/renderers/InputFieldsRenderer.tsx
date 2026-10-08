@@ -23,45 +23,77 @@ const parseMatchingPrompt = (
   rawPrompt: string,
   fallbackIdx: number,
   hasWordBank = false,
-  fallbackClue?: string
+  fallbackClue?: string,
+  isSentenceOrQuestionTask = false
 ): ParsedMatchingPrompt => {
   const trimmed = (rawPrompt || '').trim();
+
+  // Pure numbers (e.g. "1.", "2", "Item 3") or empty strings are NEVER matching clue rows
+  const isPureNumber = /^(?:item\s*)?\d+[.)]?$/i.test(trimmed) || !trimmed;
+  if (isPureNumber || isSentenceOrQuestionTask) {
+    return {
+      isMatching: false,
+      itemNumber: (trimmed.match(/\d+/) || [String(fallbackIdx + 1)])[0],
+      clue: '',
+    };
+  }
+
+  // Model examples or open questions (e.g. "1. (e.g. Where are you from?)") are not matching clue rows
+  if (trimmed.includes('?') || /^\(?\d+[.)]?\s*\([eE]\.[gG]\./i.test(trimmed)) {
+    return {
+      isMatching: false,
+      itemNumber: (trimmed.match(/\d+/) || [String(fallbackIdx + 1)])[0],
+      clue: trimmed,
+    };
+  }
 
   // Pattern 1: e.g. "2. _______ : a time", "2) _______ : a time", "2. : a time", "_______ : a time", ": a time"
   const colonMatch = trimmed.match(/^(?:(\d+)[.)]\s*)?(?:_+|\.{3,}|—+)?\s*:\s*(.+)$/);
   if (colonMatch && colonMatch[2].trim()) {
-    return {
-      isMatching: true,
-      itemNumber: colonMatch[1] || String(fallbackIdx + 1),
-      clue: colonMatch[2].trim(),
-    };
+    const candidate = colonMatch[2].trim();
+    if (/[a-zA-Z]{2,}/.test(candidate) && !candidate.includes('?')) {
+      return {
+        isMatching: true,
+        itemNumber: colonMatch[1] || String(fallbackIdx + 1),
+        clue: candidate,
+      };
+    }
   }
 
   // Pattern 2: e.g. "2. _______ - a time", "2. — a time", "2. -> a time"
   const dashMatch = trimmed.match(/^(?:(\d+)[.)]\s*)?(?:_+|\.{3,}|—+)?\s*(?:[-—–]|->|=>)\s*(.+)$/);
   if (dashMatch && dashMatch[2].trim()) {
-    return {
-      isMatching: true,
-      itemNumber: dashMatch[1] || String(fallbackIdx + 1),
-      clue: dashMatch[2].trim(),
-    };
+    const candidate = dashMatch[2].trim();
+    if (/[a-zA-Z]{2,}/.test(candidate) && !candidate.includes('?')) {
+      return {
+        isMatching: true,
+        itemNumber: dashMatch[1] || String(fallbackIdx + 1),
+        clue: candidate,
+      };
+    }
   }
 
   // Pattern 3: e.g. "2. _______ a time" (missing colon/dash but blank at start)
   const blankMatch = trimmed.match(/^(?:(\d+)[.)]\s*)?(?:_+|\.{3,}|—+)\s*(.+)$/);
   if (blankMatch && blankMatch[2].trim() && (hasWordBank || blankMatch[2].length < 80)) {
-    return {
-      isMatching: true,
-      itemNumber: blankMatch[1] || String(fallbackIdx + 1),
-      clue: blankMatch[2].replace(/^:\s*/, '').trim(),
-    };
+    const candidate = blankMatch[2].replace(/^:\s*/, '').trim();
+    if (/[a-zA-Z]{2,}/.test(candidate) && !candidate.includes('?')) {
+      return {
+        isMatching: true,
+        itemNumber: blankMatch[1] || String(fallbackIdx + 1),
+        clue: candidate,
+      };
+    }
   }
 
   // Pattern 4: Number followed by definition/clue phrase: "2. a time", "2) a time"
   const numClueMatch = trimmed.match(/^(\d+)[.)]\s+(.+)$/);
   if (numClueMatch && numClueMatch[2].trim()) {
     const candidateClue = numClueMatch[2].trim();
-    if ((hasWordBank || candidateClue.length < 80) && !candidateClue.includes('?')) {
+    const isDefinitionClue = /[a-zA-Z]{2,}/.test(candidateClue) &&
+      !candidateClue.includes('?') &&
+      !/^\([eE]\.[gG]\./i.test(candidateClue);
+    if ((hasWordBank || candidateClue.length < 80) && isDefinitionClue) {
       return {
         isMatching: true,
         itemNumber: numClueMatch[1],
@@ -70,8 +102,11 @@ const parseMatchingPrompt = (
     }
   }
 
-  // Pattern 5: When hasWordBank is true and rawPrompt is just a definition phrase without number: "a time", "a person"
-  if (hasWordBank && trimmed && !trimmed.includes('?') && trimmed.length < 80 && !trimmed.includes('___')) {
+  // Pattern 5: When hasWordBank is true and rawPrompt is an actual definition phrase without number: "a time", "a person"
+  const isDefinitionPhrase = /[a-zA-Z]{2,}/.test(trimmed) &&
+    trimmed.length >= 3 &&
+    !/^(?:item\s*)?\d+[.)]?$/i.test(trimmed);
+  if (hasWordBank && isDefinitionPhrase && !trimmed.includes('?') && trimmed.length < 80 && !trimmed.includes('___')) {
     return {
       isMatching: true,
       itemNumber: String(fallbackIdx + 1),
@@ -80,13 +115,15 @@ const parseMatchingPrompt = (
   }
 
   // Pattern 6: If rawPrompt is just a number (e.g. "2" or "2.") but we have a fallback clue from hint/explanation
-  const isPureNumber = /^(?:item\s*)?(\d+)[.)]?$/i.exec(trimmed);
-  if (isPureNumber && fallbackClue && fallbackClue.trim()) {
-    return {
-      isMatching: true,
-      itemNumber: isPureNumber[1] || String(fallbackIdx + 1),
-      clue: fallbackClue.trim(),
-    };
+  if (isPureNumber && fallbackClue && fallbackClue.trim() && !isSentenceOrQuestionTask) {
+    const isRealClue = fallbackClue.trim().length > 3 && !/open|formulation|respuesta/i.test(fallbackClue);
+    if (isRealClue) {
+      return {
+        isMatching: true,
+        itemNumber: (trimmed.match(/\d+/) || [String(fallbackIdx + 1)])[0],
+        clue: fallbackClue.trim(),
+      };
+    }
   }
 
   return {
@@ -696,7 +733,35 @@ export const InputFieldsRenderer: React.FC<Props> = ({
             item.explanation?.trim() ||
             item.hint?.trim();
 
-          const parsedPrompt = parseMatchingPrompt(item.prompt, idx, hasWordBank, explanationOrHint);
+          const isSentenceOrQuestionDirective = Boolean(
+            block.instruction &&
+            /\b(?:write|make|ask|produce|create)\s+(?:(?:\w+)\s+)?(?:questions|sentences|phrases)\b/i.test(block.instruction)
+          );
+
+          const parsedPrompt = parseMatchingPrompt(
+            item.prompt,
+            idx,
+            hasWordBank,
+            explanationOrHint,
+            isSentenceOrQuestionDirective
+          );
+
+          const rawPromptTrimmed = (item.prompt || '').trim();
+          const isPureNumPrompt = /^(?:item\s*)?\d+[.)]?$/i.test(rawPromptTrimmed) || !rawPromptTrimmed;
+          const isQuestionTask = Boolean(
+            /question/i.test(`${block.instruction || ''} ${block.followUpPrompt || ''}`) ||
+            rawPromptTrimmed.includes('?') ||
+            (item.expectedAnswer && item.expectedAnswer.includes('?'))
+          );
+          const openPlaceholder = isQuestionTask ? 'Escribe tu pregunta aquí...' : 'Escribe tu respuesta aquí...';
+
+          const hasRealClueOnRight = Boolean(
+            parsedPrompt.isMatching &&
+            parsedPrompt.clue &&
+            parsedPrompt.clue.trim() &&
+            !/^(?:item\s*)?\d+[.)]?$/i.test(parsedPrompt.clue.trim()) &&
+            parsedPrompt.clue.trim() !== parsedPrompt.itemNumber
+          );
 
           return (
             <div
@@ -793,18 +858,18 @@ export const InputFieldsRenderer: React.FC<Props> = ({
                   {parsedPrompt.isMatching ? (
                     /* MATCHING / VOCABULARY ROW FORMAT */
                     <div className="flex flex-col sm:flex-row sm:items-center gap-2.5">
-                      <div className="flex items-center gap-2 shrink-0">
+                      <div className={`flex items-center gap-2 ${hasRealClueOnRight ? 'shrink-0' : 'flex-1'}`}>
                         <span className="text-sm font-bold text-slate-600 w-6 shrink-0 text-right">
                           {parsedPrompt.itemNumber}.
                         </span>
-                        <div className="relative w-36 sm:w-44 shrink-0">
+                        <div className={`relative ${hasRealClueOnRight ? 'w-36 sm:w-44 shrink-0' : 'flex-1'}`}>
                           <input
                             type="text"
                             value={item.isExample ? (item.expectedAnswer || userVal) : userVal}
                             disabled={isEvaluated || item.isExample}
-                            placeholder={item.isExample ? '' : 'Palabra...'}
+                            placeholder={item.isExample ? '' : (hasRealClueOnRight ? 'Palabra...' : openPlaceholder)}
                             onChange={(e) => onAnswerChange?.(item.id, e.target.value)}
-                            className={`w-full text-sm rounded-xl px-3.5 py-2 outline-none font-semibold transition ${
+                            className={`w-full text-sm rounded-xl ${hasRealClueOnRight ? 'px-3.5 py-2' : 'px-4 py-2.5'} outline-none font-semibold transition ${
                               item.isExample
                                 ? 'bg-slate-100 text-slate-800 border border-slate-300 font-bold select-none cursor-not-allowed shadow-2xs'
                                 : isEvaluated
@@ -837,28 +902,97 @@ export const InputFieldsRenderer: React.FC<Props> = ({
                         </div>
                       </div>
 
-                      <div className="flex items-center gap-2 flex-1 pl-8 sm:pl-0">
-                        <span className="text-sm font-semibold text-slate-700">
-                          {parsedPrompt.clue.startsWith(':') || parsedPrompt.clue.startsWith('-')
-                            ? parsedPrompt.clue
-                            : `: ${parsedPrompt.clue}`}
-                        </span>
-
-                        {item.isExample && (
-                          <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-slate-200 text-slate-600 border border-slate-300 select-none">
-                            ✓ Ejemplo
+                      {hasRealClueOnRight && (
+                        <div className="flex items-center gap-2 flex-1 pl-8 sm:pl-0">
+                          <span className="text-sm font-semibold text-slate-700">
+                            {parsedPrompt.clue.startsWith(':') || parsedPrompt.clue.startsWith('-')
+                              ? parsedPrompt.clue
+                              : `: ${parsedPrompt.clue}`}
                           </span>
-                        )}
 
-                        {item.hint && !isEvaluated && !item.isExample && (
-                          <span
-                            title={`Pista: ${item.hint}`}
-                            className="p-1 text-amber-600 hover:text-amber-700 cursor-help"
-                          >
-                            <HelpCircle className="w-4 h-4" />
+                          {item.isExample && (
+                            <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-slate-200 text-slate-600 border border-slate-300 select-none">
+                              ✓ Ejemplo
+                            </span>
+                          )}
+
+                          {item.hint && !isEvaluated && !item.isExample && (
+                            <span
+                              title={`Pista: ${item.hint}`}
+                              className="p-1 text-amber-600 hover:text-amber-700 cursor-help"
+                            >
+                              <HelpCircle className="w-4 h-4" />
+                            </span>
+                          )}
+                        </div>
+                      )}
+
+                      {!hasRealClueOnRight && item.isExample && (
+                        <span className="text-[10px] font-bold uppercase tracking-wider px-2.5 py-1 rounded-full bg-slate-200 text-slate-600 border border-slate-300 select-none shrink-0 self-center">
+                          ✓ Ejemplo
+                        </span>
+                      )}
+                    </div>
+                  ) : isPureNumPrompt ? (
+                    /* PURE NUMBERED ROW: OPEN COMPLETE SENTENCE / QUESTION FORMAT */
+                    <div className="flex items-center gap-2.5">
+                      <span className="text-sm font-bold text-slate-600 w-6 shrink-0 text-right">
+                        {parsedPrompt.itemNumber || idx + 1}.
+                      </span>
+
+                      <div className="relative flex-1">
+                        <input
+                          type="text"
+                          value={item.isExample ? (item.expectedAnswer || userVal) : userVal}
+                          disabled={isEvaluated || item.isExample}
+                          placeholder={item.isExample ? '' : openPlaceholder}
+                          onChange={(e) => onAnswerChange?.(item.id, e.target.value)}
+                          className={`w-full text-sm rounded-xl px-4 py-2.5 outline-none font-medium transition ${
+                            item.isExample
+                              ? 'bg-slate-100 text-slate-800 border border-slate-300 font-bold select-none cursor-not-allowed shadow-2xs'
+                              : isEvaluated
+                                ? !isGraded
+                                  ? 'bg-indigo-50/30 text-slate-900 border border-indigo-300 font-semibold pr-10 shadow-xs'
+                                  : isCorrect
+                                    ? isTypoWarning
+                                      ? 'bg-white text-amber-950 border border-amber-400 font-bold pr-10 shadow-xs'
+                                      : 'bg-white text-emerald-950 border border-emerald-400 font-bold pr-10 shadow-xs'
+                                    : 'bg-white text-rose-950 border border-rose-400 font-bold pr-10 shadow-xs'
+                                : 'bg-white text-slate-900 border border-slate-300 focus:border-indigo-600 focus:ring-2 focus:ring-indigo-100 shadow-2xs'
+                          }`}
+                        />
+
+                        {isEvaluated && !item.isExample && (
+                          <span className="absolute right-3 top-1/2 -translate-y-1/2">
+                            {!isGraded ? (
+                              <CheckCircle2 className="w-5 h-5 text-indigo-600" />
+                            ) : isCorrect ? (
+                              isTypoWarning ? (
+                                <AlertCircle className="w-5 h-5 text-amber-600" />
+                              ) : (
+                                <CheckCircle2 className="w-5 h-5 text-emerald-600" />
+                              )
+                            ) : (
+                              <XCircle className="w-5 h-5 text-rose-600" />
+                            )}
                           </span>
                         )}
                       </div>
+
+                      {item.isExample && (
+                        <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-slate-200 text-slate-600 border border-slate-300 select-none shrink-0">
+                          ✓ Ejemplo
+                        </span>
+                      )}
+
+                      {item.hint && !isEvaluated && !item.isExample && (
+                        <span
+                          title={`Pista: ${item.hint}`}
+                          className="p-1.5 text-amber-600 hover:text-amber-700 cursor-help"
+                        >
+                          <HelpCircle className="w-5 h-5" />
+                        </span>
+                      )}
                     </div>
                   ) : (
                     /* STANDARD SENTENCE / FILL-IN-BLANK FORMAT */
@@ -866,7 +1000,7 @@ export const InputFieldsRenderer: React.FC<Props> = ({
                       <div className="flex items-center justify-between gap-2">
                         <p className="text-sm font-semibold text-slate-800 leading-relaxed">
                           {(() => {
-                            const p = (item.prompt || '').trim();
+                            const p = rawPromptTrimmed;
                             const isPureNum = /^(?:item\s*)?\d+[.)]?$/i.test(p);
                             const fallback = explanationOrHint?.trim();
                             if (isPureNum && fallback) {
@@ -895,17 +1029,19 @@ export const InputFieldsRenderer: React.FC<Props> = ({
                             type="text"
                             value={item.isExample ? (item.expectedAnswer || userVal) : userVal}
                             disabled={isEvaluated || item.isExample}
-                            placeholder={item.isExample ? '' : 'Escribe tu respuesta aquí...'}
+                            placeholder={item.isExample ? '' : openPlaceholder}
                             onChange={(e) => onAnswerChange?.(item.id, e.target.value)}
                             className={`w-full text-sm rounded-xl px-4 py-2.5 outline-none font-medium transition ${
                               item.isExample
                                 ? 'bg-slate-100 text-slate-800 border border-slate-300 font-bold select-none cursor-not-allowed shadow-2xs'
                                 : isEvaluated
-                                  ? isCorrect
-                                    ? isTypoWarning
-                                      ? 'bg-white text-amber-950 border border-amber-400 font-bold pr-10 shadow-xs'
-                                      : 'bg-white text-emerald-950 border border-emerald-400 font-bold pr-10 shadow-xs'
-                                    : 'bg-white text-rose-950 border border-rose-400 font-bold pr-10 shadow-xs'
+                                  ? !isGraded
+                                    ? 'bg-indigo-50/30 text-slate-900 border border-indigo-300 font-semibold pr-10 shadow-xs'
+                                    : isCorrect
+                                      ? isTypoWarning
+                                        ? 'bg-white text-amber-950 border border-amber-400 font-bold pr-10 shadow-xs'
+                                        : 'bg-white text-emerald-950 border border-emerald-400 font-bold pr-10 shadow-xs'
+                                      : 'bg-white text-rose-950 border border-rose-400 font-bold pr-10 shadow-xs'
                                   : 'bg-white text-slate-900 border border-slate-300 focus:border-indigo-600 focus:ring-2 focus:ring-indigo-100 shadow-2xs'
                             }`}
                           />
@@ -926,6 +1062,10 @@ export const InputFieldsRenderer: React.FC<Props> = ({
                             </span>
                           )}
                         </div>
+
+                        {item.suffix && (
+                          <span className="text-sm font-bold text-slate-500">{item.suffix}</span>
+                        )}
 
                         {item.hint && !isEvaluated && !item.isExample && (
                           <span

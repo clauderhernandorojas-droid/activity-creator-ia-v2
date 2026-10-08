@@ -23,6 +23,8 @@ export const VerificationAudioPlayer: React.FC<VerificationAudioPlayerProps> = (
   onRemoveAudio,
   onActivateVerification,
 }) => {
+  const currentSlideId = useSessionStore((s) => s.currentSlideId);
+  const sessionMode = useSessionStore((s) => s.mode);
   const verificationAudioTrigger = useSessionStore((s) => s.verificationAudioTrigger);
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -42,13 +44,54 @@ export const VerificationAudioPlayer: React.FC<VerificationAudioPlayerProps> = (
   const activeVerification = isVerificationActive || storeVerificationAudioActive;
   const isAudioLocked = !isEditMode && !activeVerification && !isEvaluated;
 
+  // 1. Strict unmount cleanup to avoid zombie / orphaned background audio
+  useEffect(() => {
+    const audioElement = audioRef.current;
+    return () => {
+      if (audioElement) {
+        audioElement.pause();
+        audioElement.currentTime = 0;
+      }
+    };
+  }, []);
+
+  // 2. Stop playback immediately when switching slide, toggling edit/preview mode, or changing track
+  useEffect(() => {
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.currentTime = 0;
+    }
+    const timer = setTimeout(() => {
+      setIsPlaying(false);
+      setIsSimulating(false);
+      setCurrentTime(0);
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [currentSlideId, sessionMode, isEditMode, audioUrl]);
+
+  // 3. Stop playback if verification audio becomes locked/inactive
+  useEffect(() => {
+    if (isAudioLocked) {
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current.currentTime = 0;
+      }
+      const timer = setTimeout(() => {
+        setIsPlaying(false);
+        setIsSimulating(false);
+        setCurrentTime(0);
+      }, 0);
+      return () => clearTimeout(timer);
+    }
+  }, [isAudioLocked]);
+
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     // Detect track code from filename if editLabel is empty (e.g. "R1.2.mp3" -> "R1.2")
     const fileNameWithoutExt = file.name.replace(/\.[^/.]+$/, '');
-    const trackMatch = fileNameWithoutExt.match(/(?:(?:CD\s*\d+\s*)?Track\s*\d+(?:\.\d+)?|R\d+\.\d+|Audio\s*\d+)/i);
+    const trackMatch = fileNameWithoutExt.match(/(?:(?:CD\s*\d+\s*)?Track\s*(\d+(?:\.\d+)?)|(R\d+\.\d+|Audio\s*\d+))/i);
     const candidateLabel = trackMatch ? trackMatch[0].trim() : fileNameWithoutExt;
 
     if (!editLabel.trim() && candidateLabel) {
@@ -130,6 +173,7 @@ export const VerificationAudioPlayer: React.FC<VerificationAudioPlayerProps> = (
           const maxSimTime = duration || 45;
           if (next >= maxSimTime) {
             setIsPlaying(false);
+            setIsSimulating(false);
             return 0;
           }
           return next;
@@ -166,8 +210,16 @@ export const VerificationAudioPlayer: React.FC<VerificationAudioPlayerProps> = (
     }
   };
 
+  const handleEnded = () => {
+    setIsPlaying(false);
+    setIsSimulating(false);
+    setCurrentTime(0);
+  };
+
   const handleAudioError = () => {
     setHasError(true);
+    setIsPlaying(false);
+    setIsSimulating(false);
     // If duration not set, simulate 45s track
     if (!duration) setDuration(45);
   };
@@ -217,7 +269,7 @@ export const VerificationAudioPlayer: React.FC<VerificationAudioPlayerProps> = (
   return (
     <div
       className={`w-full mb-6 rounded-2xl border transition-all duration-300 shadow-xs ${
-        isVerificationActive && !isEvaluated
+        activeVerification && !isEvaluated
           ? 'bg-gradient-to-r from-indigo-50/90 via-sky-50/80 to-indigo-50/90 border-indigo-300 ring-2 ring-indigo-200/50'
           : isEvaluated
           ? 'bg-slate-50/90 border-slate-200'
@@ -227,9 +279,11 @@ export const VerificationAudioPlayer: React.FC<VerificationAudioPlayerProps> = (
       <audio
         ref={audioRef}
         src={audioUrl}
+        onPlay={() => setIsPlaying(true)}
+        onPause={() => setIsPlaying(false)}
         onTimeUpdate={handleTimeUpdate}
         onLoadedMetadata={handleLoadedMetadata}
-        onEnded={() => setIsPlaying(false)}
+        onEnded={handleEnded}
         onError={handleAudioError}
         preload="metadata"
       />
