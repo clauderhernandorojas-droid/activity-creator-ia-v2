@@ -771,17 +771,24 @@ export const useLessonStore = create<LessonState>()(
           const blockTitle = block.parsedData?.title;
           const blockInstruction = block.parsedData?.instruction;
 
-          const hasTranscribedReference = Boolean(
-            (typeof block.parsedData?.referenceContent === 'string' && block.parsedData.referenceContent.trim().length > 60) ||
-            (typeof block.referenceText === 'string' && block.referenceText.trim().length > 60)
+          const refRaw = String(block.parsedData?.referenceContent || block.parsedData?.content || block.referenceText || '').trim();
+          const wordCount = refRaw.split(/\s+/).filter(Boolean).length;
+          const isTranscribedReadingArticle = wordCount >= 40;
+
+          const sourceSnippets = new Set(
+            [
+              ...(Array.isArray(block.sourceImages) ? block.sourceImages : []),
+              block.sourceImageSnippetUrl,
+            ].filter((s): s is string => Boolean(s))
           );
+
           const hasExplicitVisuals = Array.isArray(block.parsedData?.images) && block.parsedData.images.length > 0;
 
           const blockImages = (
-            hasExplicitVisuals
-              ? block.parsedData!.images!
-              : (hasTranscribedReference
-                ? [] // Descartar recortes si el bloque es texto/lectura y ya fue transcrito íntegramente
+            isTranscribedReadingArticle
+              ? [] // Descartar recortes si el bloque es un artículo de lectura completo transcrito (>= 40 palabras)
+              : (hasExplicitVisuals
+                ? block.parsedData!.images!
                 : (Array.isArray(block.sourceImages)
                   ? block.sourceImages
                   : (block.sourceImageSnippetUrl ? [block.sourceImageSnippetUrl] : [])))
@@ -797,8 +804,21 @@ export const useLessonStore = create<LessonState>()(
                 const shouldUpdateSubtitle = blockInstruction && (!slide.subtitle || slide.subtitle === 'Instrucción o contexto breve' || slide.subtitle === 'Contenido adaptado desde libro de texto');
                 
                 let refContent = mapped.reference;
+                if (refContent && refContent.type === 'text') {
+                  const refWords = (refContent.content || '').trim().split(/\s+/).filter(Boolean).length;
+                  if (refWords >= 40 && refContent.images && refContent.images.length > 0) {
+                    const filteredImages = refContent.images.filter((img) => !sourceSnippets.has(img));
+                    refContent = {
+                      ...refContent,
+                      images: filteredImages.length > 0 ? filteredImages : undefined,
+                      imageUrl: filteredImages[0] || undefined,
+                    };
+                  }
+                }
+
                 if (!refContent && slide.referenceContent && slide.referenceContent.type === 'text' && blockImages.length > 0) {
-                  if (!slide.referenceContent.images || slide.referenceContent.images.length === 0) {
+                  const currentWords = (slide.referenceContent.content || '').trim().split(/\s+/).filter(Boolean).length;
+                  if (currentWords < 40 && (!slide.referenceContent.images || slide.referenceContent.images.length === 0)) {
                     refContent = {
                       ...slide.referenceContent,
                       images: blockImages,

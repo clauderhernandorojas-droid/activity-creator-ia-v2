@@ -456,8 +456,8 @@ REGLAS UNIVERSALES DE BANCO DE OPCIONES Y ASIGNACIÓN BIUNÍVOCA:
   * Deja 'referenceContent' vacío o null, o si aplica incluye ÚNICAMENTE breves preguntas guía disparadoras para el debate entre alumnos (ej. "• What do you notice in the pictures?\n• What could their job be?"), SIN DAR LA RESPUESTA ni datos biográficos.
 - DISCRIMINACIÓN ESTRICTA DE RECORTES VISUALES vs RECORTES TEXTUALES:
   * En 'visualImageIndices': reporta ÚNICAMENTE los números de índice 1-based (1, 2, 3...) de los recortes de entrada que contienen fotografías, retratos, ilustraciones o escenas visuales reales.
-  * REGLA DE RECORTES DE LECTURA TRANSCRITOS: Si un recorte enviado contiene un pasaje de lectura, artículo, diálogo, caja de reglas o consigna cuyo texto ha sido o debe ser transcrito a 'referenceContent' o 'items', ESE RECORTE ES UN RECORTE TEXTUAL Y NUNCA DEBE INCLUIRSE EN 'visualImageIndices'.
-  * Solo deben incluirse en 'visualImageIndices' recortes con material gráfico genuino que carezcan de transcripción textual directa. Si ningún recorte contiene fotografías o ilustraciones reales, devuelve obligatoriamente 'visualImageIndices': [].
+  * REGLA DE RECORTES DE LECTURA TRANSCRITOS: Si un recorte enviado contiene un pasaje de lectura, artículo, diálogo, caja de reglas o consigna cuyo texto ha sido transcrito a 'referenceContent' (especialmente lecturas de más de 40 palabras), ESE RECORTE ES UN RECORTE FUENTE TEXTUAL Y NUNCA DEBE INCLUIRSE EN 'visualImageIndices', incluso si el recorte contiene fotos, retratos o rostros de fondo. Conservar el recorte de un artículo transcrito genera una miniatura flotante redundante e ilegible del mismo texto que el alumno ya está leyendo digitalmente.
+  * Solo deben incluirse en 'visualImageIndices' recortes con material gráfico genuino que carezcan de transcripción textual directa (p. ej. fotografías o ilustraciones aisladas sin texto). Si ningún recorte contiene fotografías o ilustraciones aisladas, devuelve obligatoriamente 'visualImageIndices': [].
 - REGLA DIDÁCTICA UNIVERSAL DE TAREAS DE CORRESPONDENCIA / RELACIÓN (MATCHING):
   * Cuando la consigna didáctica instruya relacionar, emparejar o conectar dos conjuntos finitos de elementos (por ejemplo: asociar párrafos/secciones 1-4 con encabezados A-D, conceptos con definiciones, premisas con conclusiones, mitades de oraciones):
   * PROHIBICIÓN ESTRICTA DE 'fill_blanks': NUNCA clasifiques estas actividades como 'fill_blanks' generando huecos para escribir texto libre o arrastrar cadenas largas.
@@ -710,8 +710,18 @@ function buildExtractedBlockFromPayload(
     : (sourceUrl ? [sourceUrl] : []);
 
   // Filter genuine visual assets (photos, illustrations) using visualImageIndices
+  const refWords = String(sanitized.referenceContent || '').trim().split(/\s+/).filter(Boolean).length;
+  const isTranscribedReadingArticle = refWords >= 40;
+
   let visualImages: string[] = [];
-  if (Array.isArray(sanitized.visualImageIndices) && sanitized.visualImageIndices.length > 0) {
+  if (isTranscribedReadingArticle && rawImages.length <= 1) {
+    // Si sólo hay un recorte y se transcribió un artículo completo (>= 40 palabras),
+    // ese recorte es la captura de la página del texto: NUNCA tratarlo como foto o estímulo visual
+    visualImages = [];
+  } else if (isTranscribedReadingArticle && rawImages.length <= 2) {
+    // En tareas de comprensión lectora (texto + preguntas), ningún recorte es una foto aislada
+    visualImages = [];
+  } else if (Array.isArray(sanitized.visualImageIndices) && sanitized.visualImageIndices.length > 0) {
     visualImages = sanitized.visualImageIndices
       .map((idx) => rawImages[idx - 1])
       .filter((img): img is string => Boolean(img));
@@ -720,9 +730,9 @@ function buildExtractedBlockFromPayload(
     visualImages = [];
   } else {
     // Fallback when visualImageIndices was omitted:
-    // If referenceContent is present with a transcribed reading text (> 80 chars),
-    // or if the clipping was the reading passage itself: do NOT treat text clippings as photos!
-    if (sanitized.referenceContent && sanitized.referenceContent.trim().length > 80) {
+    // If referenceContent is present with a transcribed reading text (>= 40 words or > 80 chars),
+    // do NOT treat text clippings as photos!
+    if (isTranscribedReadingArticle || (sanitized.referenceContent && sanitized.referenceContent.trim().length > 80)) {
       visualImages = [];
     } else {
       visualImages = rawImages;

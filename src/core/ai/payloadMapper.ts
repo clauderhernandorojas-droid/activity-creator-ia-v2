@@ -583,6 +583,65 @@ export function mapBlockToReferenceText(block: ExtractedBlock): ReferenceTextBlo
     }
   }
 
+/**
+ * Detects whether reference text contains a transcribed reading article (>= 40 words).
+ */
+export function isTranscribedReadingArticle(text?: string): boolean {
+  if (!text) return false;
+  const words = text.trim().split(/\s+/).filter(Boolean);
+  return words.length >= 40;
+}
+
+/**
+ * Filters image assets for a reference text block.
+ * Excludes images that are source OCR clippings of the transcribed reading passage (>= 40 words).
+ */
+export function resolveReadingReferenceImages(
+  block: ExtractedBlock,
+  refText: string
+): string[] {
+  const parsed = block.parsedData || {};
+  const isArticle = isTranscribedReadingArticle(refText);
+
+  // Recortes que sirvieron como fuente de digitalización OCR
+  const sourceSnippets = new Set(
+    [
+      ...(Array.isArray(block.sourceImages) ? block.sourceImages : []),
+      block.sourceImageSnippetUrl,
+    ].filter((s): s is string => Boolean(s))
+  );
+
+  // Candidatas iniciales
+  const candidateImages = (
+    Array.isArray(parsed.images) && parsed.images.length > 0
+      ? parsed.images
+      : (Array.isArray(block.sourceImages) && block.sourceImages.length > 0
+        ? block.sourceImages
+        : (block.sourceImageSnippetUrl
+          ? [block.sourceImageSnippetUrl]
+          : (parsed.imageUrl ? [parsed.imageUrl] : [])))
+  ).filter(Boolean);
+
+  if (isArticle) {
+    // Si el texto tiene >= 40 palabras (artículo o lectura completa),
+    // cualquier recorte de la página fuente se EXCLUYE para evitar miniaturas redundantes.
+    const totalSourceCount = (Array.isArray(block.sourceImages) ? block.sourceImages.length : (block.sourceImageSnippetUrl ? 1 : 0));
+    if (totalSourceCount <= 1) {
+      // Si sólo hubo 1 recorte en la sesión de OCR, dicho recorte fue la página del artículo: descartar 100%
+      return [];
+    }
+    // Si hubo múltiples recortes, solo permitir imágenes que NO coincidan con los recortes de la página fuente
+    return candidateImages.filter((img) => !sourceSnippets.has(img));
+  }
+
+  // Si NO es un pasaje largo de lectura:
+  if (parsed.visualImageIndices && parsed.visualImageIndices.length === 0) {
+    return [];
+  }
+
+  return candidateImages;
+}
+
   const slideTitle = String(parsed.title || '').trim();
   const contextInstruction = `${parsed.title || ''} ${parsed.instruction || ''}`;
   const content = stripPredictiveSpoilers(
@@ -594,30 +653,8 @@ export function mapBlockToReferenceText(block: ExtractedBlock): ReferenceTextBlo
   const isPureReference = parsed.interactionType === 'reference' || block.detectedType === 'paragraph';
   const title = isPureReference ? '' : (parsed.title || 'Lectura / Notas de Referencia');
 
-  // Collect all available image assets from the extracted block (discarding text-only clippings if text was transcribed)
-  const hasTranscribedReference = Boolean(parsed.referenceContent && String(parsed.referenceContent).trim().length > 80);
-  const blockImages: string[] = (() => {
-    if (Array.isArray(parsed.images) && parsed.images.length > 0) {
-      return parsed.images;
-    }
-    if (parsed.visualImageIndices && parsed.visualImageIndices.length === 0) {
-      return [];
-    }
-    if (hasTranscribedReference) {
-      return [];
-    }
-    if (Array.isArray(block.sourceImages) && block.sourceImages.length > 0) {
-      return block.sourceImages;
-    }
-    if (block.sourceImageSnippetUrl) {
-      return [block.sourceImageSnippetUrl];
-    }
-    if (parsed.imageUrl) {
-      return [parsed.imageUrl];
-    }
-    return [];
-  })().filter(Boolean);
-
+  // Collect all available image assets from the extracted block (shielded against redundant reading clippings)
+  const blockImages = resolveReadingReferenceImages(block, content || rawContent || parsed.referenceContent || '');
   const primaryImageUrl = blockImages[0] || undefined;
 
   return {
@@ -646,28 +683,7 @@ export function mapBlockToRole(
     ? false
     : isDuplicateReferenceContent(rawRefText, items);
 
-  const hasTranscribedReference = Boolean(parsed.referenceContent && String(parsed.referenceContent).trim().length > 80);
-  const blockImages: string[] = (() => {
-    if (Array.isArray(parsed.images) && parsed.images.length > 0) {
-      return parsed.images;
-    }
-    if (parsed.visualImageIndices && parsed.visualImageIndices.length === 0) {
-      return [];
-    }
-    if (hasTranscribedReference) {
-      return [];
-    }
-    if (Array.isArray(block.sourceImages) && block.sourceImages.length > 0) {
-      return block.sourceImages;
-    }
-    if (block.sourceImageSnippetUrl) {
-      return [block.sourceImageSnippetUrl];
-    }
-    if (parsed.imageUrl) {
-      return [parsed.imageUrl];
-    }
-    return [];
-  })().filter(Boolean);
+  const blockImages = resolveReadingReferenceImages(block, rawRefText);
 
   const hasReadingContent = Boolean(
     !isDuplicate && rawRefText.length > 0
