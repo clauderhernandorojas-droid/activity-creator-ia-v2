@@ -18,7 +18,7 @@ import type {
 } from '../../types/schema';
 import { generateGrammarVariants } from '../evaluators/fillBlankValidator';
 import { isDuplicateReferenceContent } from '../text/textDeduplication';
-import { stripMetaComments, stripLeadingDuplicateTitle, stripPredictiveSpoilers } from './digitizeBook';
+import { stripMetaComments, stripLeadingDuplicateTitle, stripPredictiveSpoilers, extractSentenceDistractors } from './digitizeBook';
 
 export type PedagogicalRole = 
   | 'interaction_inputs' 
@@ -433,17 +433,36 @@ export function mapBlockToSelection(block: ExtractedBlock): SelectionBlock {
       parsed.interactionType === 'matching' ||
       globalOptionsPool.length >= 3;
 
-    const questions = rawItems.map((item: any, idx: number) => {
-      const prompt = String(item.prompt || item.text || `Pregunta ${idx + 1}`).trim();
-      const expected = String(item.expectedAnswer || '').trim().toLowerCase();
+    const isIdentifyTask = /underline\b|circle\b|highlight\b|identify\b|subraya\b|encierra\b|marca\b/i.test(`${parsed.title || ''} ${parsed.instruction || ''}`);
 
-      const candidateOptions: string[] = Array.isArray(item.options) && item.options.length > 1
+    const questions = rawItems.map((item: any, idx: number) => {
+      let prompt = String(item.prompt || item.text || `Pregunta ${idx + 1}`).trim();
+      const rawExpected = String(item.expectedAnswer || '').trim();
+      const expected = rawExpected.toLowerCase();
+
+      // If identification task ("Underline / Circle / Identify"), restore full sentence intact if blanks were generated
+      if (isIdentifyTask && /_{2,}/.test(prompt) && rawExpected) {
+        prompt = prompt.replace(/_{2,}/g, rawExpected);
+      }
+
+      let candidateOptions: string[] = Array.isArray(item.options) && item.options.length > 1
         ? item.options.map((o: any) => String(o).trim()).filter(Boolean)
-        : (globalOptionsPool.length > 1
-          ? globalOptionsPool
-          : (Array.isArray(item.acceptedAnswers) && item.acceptedAnswers.length > 1
-            ? item.acceptedAnswers.map((a: any) => String(a).trim()).filter(Boolean)
-            : [String(item.expectedAnswer || '').trim()]));
+        : (isIdentifyTask
+          ? []
+          : (globalOptionsPool.length > 1
+            ? globalOptionsPool
+            : (Array.isArray(item.acceptedAnswers) && item.acceptedAnswers.length > 1
+              ? item.acceptedAnswers.map((a: any) => String(a).trim()).filter(Boolean)
+              : [rawExpected])));
+
+      // For identification tasks, extract 2-3 key words from the sentence as distractors if options are missing/insufficient
+      if (isIdentifyTask && candidateOptions.length <= 1) {
+        const distractors = extractSentenceDistractors(prompt, rawExpected);
+        candidateOptions = Array.from(new Set([rawExpected, ...distractors])).filter(Boolean);
+      }
+      if (candidateOptions.length === 0 && rawExpected) {
+        candidateOptions = [rawExpected];
+      }
 
       const options: SelectionOption[] = candidateOptions.map((optText) => {
         const optLower = optText.trim().toLowerCase();
@@ -480,10 +499,16 @@ export function mapBlockToSelection(block: ExtractedBlock): SelectionBlock {
       };
     });
 
+    const defaultInstruction = isMatching
+      ? 'Elige la correspondencia correcta para cada elemento:'
+      : (isIdentifyTask
+        ? 'Selecciona la opción correcta identificada en cada oración:'
+        : 'Elige la opción correcta para cada enunciado:');
+
     return {
       type: 'selection',
       id: generateId('inter-sel'),
-      instruction: parsed.instruction || parsed.title || (isMatching ? 'Elige la correspondencia correcta para cada elemento:' : 'Elige la opción correcta para cada enunciado:'),
+      instruction: parsed.instruction || parsed.title || defaultInstruction,
       questions
     };
   }
@@ -749,8 +774,15 @@ export function mapBlockToRole(
       return { reference: sanitizeReferenceBlock(mapBlockToReferenceText(block), block) as ReferenceBlock };
     case 'reference_table':
       return { reference: mapBlockToReferenceTable(block) };
-    case 'interaction_inputs':
+    case 'interaction_inputs': {
+      const isIdentifyTask = /underline\b|circle\b|highlight\b|identify\b|subraya\b|encierra\b|marca\b/i.test(
+        `${parsed.title || ''} ${parsed.instruction || ''}`
+      );
+      if (isIdentifyTask) {
+        return { interaction: mapBlockToSelection(block), reference: defaultReference };
+      }
       return { interaction: mapBlockToInputFields(block), reference: defaultReference };
+    }
     case 'interaction_selection':
       return { interaction: mapBlockToSelection(block), reference: defaultReference };
     case 'interaction_buckets':

@@ -310,7 +310,7 @@ const STRUCTURED_EXTRACTION_SCHEMA = {
     interactionType: {
       type: 'string',
       enum: ['fill_blanks', 'multiple_choice', 'matching', 'buckets', 'reference'],
-      description: 'The strict pedagogical archetype of the interactive exercise. Use "multiple_choice" or "matching" for tasks that match or relate two finite sets (headings to paragraphs, terms to definitions, questions to answers). Use "buckets" for category sorting. Use "reference" for communicative activities where no digital answer is evaluated.'
+      description: 'The strict pedagogical archetype of the interactive exercise. Use "multiple_choice" or "matching" for matching tasks (headings to paragraphs, terms to definitions) AND identification tasks ("underline the question words", "circle the verbs", "identify the correct form"). Use "buckets" for category sorting. Use "reference" for communicative activities where no digital answer is evaluated.'
     },
     buckets: {
       type: 'array',
@@ -467,6 +467,15 @@ REGLAS UNIVERSALES DE BANCO DE OPCIONES Y ASIGNACIÓN BIUNÍVOCA:
     3. En cada ítem, 'expectedAnswer' DEBE ser exactamente la opción correspondiente del segundo conjunto.
     4. En 'acceptedAnswers', incluye la opción completa y cualquier variante válida (ej. solo la letra "A" o el texto completo).
     5. 'interactionType' DEBE ser 'multiple_choice' o 'matching'.
+- REGLA DIDÁCTICA UNIVERSAL PARA TAREAS DE IDENTIFICACIÓN / MARCADO ("Underline / Circle / Highlight / Identify"):
+  * Cuando la consigna instruya identificar, subrayar, encerrar en un círculo o resaltar elementos lingüísticos sobre oraciones o preguntas existentes (ej. "Underline the question words", "Circle the correct verbs", "Identify the past forms", "Highlight the adjectives"):
+  * PROHIBICIÓN ESTRICTA DE 'fill_blanks': NUNCA clasifiques estas actividades como 'fill_blanks', NUNCA borres palabras de las oraciones y NUNCA generes huecos artificiales con '___'.
+  * MODELADO COMO SELECCIÓN / MULTIPLE CHOICE:
+    1. 'interactionType' DEBE ser 'multiple_choice'.
+    2. 'prompt': Conserva la oración o pregunta completa INTACTA, con todas sus palabras, sin ningún hueco ni guiones bajos (ej. "2. When did he get married?").
+    3. 'options': Presenta las palabras candidatas a identificar. Incluye la palabra o estructura objetivo correcta junto a 2 o 3 palabras clave extraídas de la misma oración como distractores (ej. ["When", "did", "he", "married"]).
+    4. 'expectedAnswer': La palabra, partícula o estructura gramatical objetivo a identificar (ej. "When").
+    5. 'acceptedAnswers': [expectedAnswer].
 
 UNIVERSAL TAXONOMY & STRICT CONTRACT:
 1. "title": Concise formal activity or section title.
@@ -491,6 +500,7 @@ UNIVERSAL TAXONOMY & STRICT CONTRACT:
 
 CRITICAL NEGATIVE CONSTRAINTS:
 - NUNCA clasifiques tareas de relacionar, emparejar o correspondencia (Matching de párrafos con encabezados, términos con definiciones, preguntas con respuestas) como 'fill_blanks'. Deben modelarse obligatoriamente como 'multiple_choice' con el conjunto completo de alternativas en 'options' para cada ítem.
+- NUNCA clasifiques tareas de identificación o marcado ("Underline...", "Circle...", "Highlight...", "Identify the...") como 'fill_blanks' borrando palabras ni creando huecos artificiales en las oraciones; deben modelarse como 'multiple_choice' conservando la oración completa intacta en 'prompt' y presentando las palabras candidatas en 'options'.
 - NUNCA incluyas recortes de pasajes de lectura, textos transcritos, artículos o ejercicios en 'visualImageIndices'; solo fotografías o ilustraciones genuinas sin transcripción textual directa.
 - NUNCA incluyas meta-comentarios pedagógicos, justificaciones didácticas ni notas dirigidas al profesor (ej. "This is an open-ended activity...", "This exercise is designed to encourage students..."). Todo el texto debe ser 100% material directo para el alumno.
 - NUNCA redactes descripciones en texto ni resúmenes de lo que muestran las fotos en actividades basadas en observación visual ("Look at the photos..."); la imagen real observada por el estudiante es el estímulo y no debe sustituirse por prosa descriptiva.
@@ -839,6 +849,35 @@ export function stripLeadingDuplicateTitle(text: string, title: string): string 
 }
 
 /**
+ * Extracts candidate word distractors from a sentence for identification tasks
+ * (e.g. "Underline the question words", "Circle the verbs")
+ */
+export function extractSentenceDistractors(sentence: string, targetAnswer: string): string[] {
+  if (!sentence) return [];
+  const cleaned = sentence.replace(/^(?:\(?\d+[.)]?|[a-zA-Z][.)])\s+/, '');
+  const words = cleaned
+    .replace(/[.,!?:;()¿¡"“”'’_—–[\]{}]/g, ' ')
+    .split(/\s+/)
+    .map((w) => w.trim())
+    .filter((w) => w.length >= 2 && !/^\d+$/.test(w));
+
+  const targetLower = targetAnswer.trim().toLowerCase();
+  const seen = new Set<string>();
+  const distractors: string[] = [];
+
+  for (const word of words) {
+    const wLower = word.toLowerCase();
+    if (wLower !== targetLower && !seen.has(wLower)) {
+      seen.add(wLower);
+      distractors.push(word);
+      if (distractors.length >= 3) break;
+    }
+  }
+
+  return distractors;
+}
+
+/**
  * Pure, defensive normalization of structured payload:
  * Guarantees that every item has expectedAnswer, acceptedAnswers, and isExample boolean.
  * ZERO ad-hoc heuristics, zero arbitrary word counts, zero string patching.
@@ -848,6 +887,7 @@ function sanitizeExtractedPayload(payload: ExtractedStructuredPayload): Extracte
   const rawInstruction = payload.instruction ? String(payload.instruction).trim() : '';
   const rawTitle = payload.title ? String(payload.title).trim() : '';
   const isMatchingDirective = /match\b|relate\b|pair\b|emparej/i.test(`${rawTitle} ${rawInstruction}`);
+  const isIdentifyDirective = /underline\b|circle\b|highlight\b|identify\b|subraya\b|encierra\b|marca\b/i.test(`${rawTitle} ${rawInstruction}`);
 
   // Global pool of candidate options for matching tasks (e.g. headings or definitions)
   const matchingPool = Array.from(
@@ -866,10 +906,16 @@ function sanitizeExtractedPayload(payload: ExtractedStructuredPayload): Extracte
     const rawPrompt = String(it.prompt || '').trim();
     const explanation = String(it.explanation || '').trim();
     const isPureNumber = /^(?:item\s*)?\d+[.)]?$/i.test(rawPrompt) || rawPrompt === '';
-    const prompt = isPureNumber && explanation
+    let prompt = isPureNumber && explanation
       ? (rawPrompt ? `${rawPrompt} _______ : ${explanation}` : `${idx + 1}. _______ : ${explanation}`)
       : (rawPrompt || `Item ${idx + 1}`);
     const expectedAnswer = String(it.expectedAnswer || '').trim() || `Respuesta ${idx + 1}`;
+
+    // If this is an identification task ("Underline / Circle / Identify"), restore full intact sentence if blank was created
+    if (isIdentifyDirective && /_{2,}/.test(prompt) && expectedAnswer) {
+      prompt = prompt.replace(/_{2,}/g, expectedAnswer);
+    }
+
     let acceptedAnswers = Array.isArray(it.acceptedAnswers) && it.acceptedAnswers.length > 0
       ? it.acceptedAnswers.map((a) => String(a).trim()).filter(Boolean)
       : [expectedAnswer];
@@ -878,9 +924,17 @@ function sanitizeExtractedPayload(payload: ExtractedStructuredPayload): Extracte
       acceptedAnswers.unshift(expectedAnswer);
     }
 
-    const itemOptions = Array.isArray(it.options) && it.options.length > 1
+    let itemOptions: string[] | undefined = Array.isArray(it.options) && it.options.length > 1
       ? it.options.map((o) => String(o).trim()).filter(Boolean)
       : (isMatchingDirective && matchingPool.length > 1 ? matchingPool : (Array.isArray(it.options) ? it.options : undefined));
+
+    // If identification task and options are missing or insufficient, extract sentence words as distractors
+    if (isIdentifyDirective && (!itemOptions || itemOptions.length <= 1)) {
+      const distractors = extractSentenceDistractors(prompt, expectedAnswer);
+      if (distractors.length > 0) {
+        itemOptions = Array.from(new Set([expectedAnswer, ...distractors]));
+      }
+    }
 
     return {
       prompt,
@@ -987,7 +1041,7 @@ function sanitizeExtractedPayload(payload: ExtractedStructuredPayload): Extracte
       ? payload.wordBank.map((w) => String(w).trim()).filter(Boolean)
       : [],
     interactionType: (() => {
-      if (isMatchingDirective && sanitizedItems.length > 0) {
+      if ((isMatchingDirective || isIdentifyDirective) && sanitizedItems.length > 0) {
         return 'multiple_choice';
       }
       return payload.interactionType || 'fill_blanks';

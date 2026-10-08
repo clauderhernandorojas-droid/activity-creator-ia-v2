@@ -232,7 +232,10 @@ export const OcrPanel: React.FC = () => {
       return 'interaction_inputs';
     }
 
-    if (pd.interactionType === 'multiple_choice' || pd.interactionType === 'matching') {
+    const isIdentifyDirective = /underline\b|circle\b|highlight\b|identify\b|subraya\b|encierra\b|marca\b/i.test(
+      `${pd.title || ''} ${pd.instruction || ''}`
+    );
+    if (pd.interactionType === 'multiple_choice' || pd.interactionType === 'matching' || isIdentifyDirective) {
       return 'interaction_selection';
     }
     if (pd.interactionType === 'classification' || pd.interactionType === 'drag_drop') {
