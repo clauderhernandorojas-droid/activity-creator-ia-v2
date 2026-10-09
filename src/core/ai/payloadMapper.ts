@@ -626,6 +626,65 @@ export function mapBlockToWriting(block: ExtractedBlock): WritingBlock {
 }
 
 /**
+ * Universal Grouping Heuristic: If reference content is not continuous prose,
+ * but a series of categories with subordinated items (e.g. headers followed by bulleted/item lines,
+ * or blocks separated by double linebreaks, or colons), parse it into structured columns.
+ */
+export function parseStructuredReferenceColumns(text: string | null | undefined): StructuredReferenceColumn[] {
+  if (!text || !text.trim()) return [];
+  const clean = text.trim();
+
+  // Pattern 1: Double linebreak separated category blocks (e.g. "Work:\n• do\n• make" or "In / At:\n...")
+  const blocks = clean.split(/\n{2,}/).map((b) => b.trim()).filter(Boolean);
+  const candidateCols: StructuredReferenceColumn[] = [];
+
+  for (const block of blocks) {
+    const lines = block.split('\n').map((l) => l.trim()).filter(Boolean);
+    if (lines.length >= 2) {
+      // First line acts as category header
+      const rawHeader = lines[0]
+        .replace(/^[*#\s—\-:]+|[:*#\s—-]+$/g, '')
+        .trim();
+      const items = lines.slice(1).map((l) =>
+        l.replace(/^[•*\-\s\d.)]+/, '').trim()
+      ).filter(Boolean);
+
+      if (rawHeader && items.length > 0 && rawHeader.length <= 40) {
+        candidateCols.push({ header: rawHeader, items });
+      }
+    }
+  }
+
+  // If we found at least 2 categories, or 1 category with multiple items and not continuous prose
+  if (candidateCols.length >= 2 || (candidateCols.length === 1 && candidateCols[0].items.length >= 2 && candidateCols[0].items.every((it) => it.length < 50))) {
+    return candidateCols;
+  }
+
+  // Pattern 2: Colon-separated lines (e.g. "Take: a break, a photo, a shower\nHave: lunch, dinner")
+  const colonLines = clean.split('\n').map((l) => l.trim()).filter(Boolean);
+  const colonCols: StructuredReferenceColumn[] = [];
+  for (const line of colonLines) {
+    const colonMatch = line.match(/^([^:]{2,30}):\s*(.+)$/);
+    if (colonMatch) {
+      const header = colonMatch[1].replace(/^[*#\s—-]+|[:*#\s—-]+$/g, '').trim();
+      const items = colonMatch[2]
+        .split(/[,;/•|]+/)
+        .map((it) => it.trim())
+        .filter(Boolean);
+      if (header && items.length > 0) {
+        colonCols.push({ header, items });
+      }
+    }
+  }
+
+  if (colonCols.length >= 2) {
+    return colonCols;
+  }
+
+  return [];
+}
+
+/**
  * Pure 1:1 Universal Mapper for Structured Reference Block (Columns of Vocabulary / Grammar)
  */
 export function mapBlockToStructuredReference(block: ExtractedBlock): StructuredReferenceBlock {
@@ -651,6 +710,13 @@ export function mapBlockToStructuredReference(block: ExtractedBlock): Structured
         .map((r: any) => (Array.isArray(r) ? String(r[cIdx] || '').trim() : ''))
         .filter(Boolean),
     }));
+  } else {
+    // Heurística Universal de Agrupación: deserializar texto de referencia con categorías y listas
+    const textToAnalyze = String(parsed.referenceContent || parsed.content || block.rawText || '').trim();
+    const parsedCols = parseStructuredReferenceColumns(textToAnalyze);
+    if (parsedCols.length > 0) {
+      columns = parsedCols;
+    }
   }
 
   if (columns.length === 0) {
@@ -889,12 +955,16 @@ export function mapBlockToRole(
     !isDuplicate && !isSynthetic && isAutonomous && refWords >= 30 && rawRefText.length > 0
   );
 
+  const textToAnalyze = String(parsed.referenceContent || parsed.content || block.rawText || '').trim();
+  const parsedCols = parseStructuredReferenceColumns(textToAnalyze);
+
   const hasTableContent = Boolean(
     (Array.isArray(parsed.tableData) && parsed.tableData.length > 0) ||
     (Array.isArray(parsed.columns) && parsed.columns.length > 0) ||
     (Array.isArray(parsed.headers) &&
       Array.isArray(parsed.rows) &&
-      parsed.rows.length > 0)
+      parsed.rows.length > 0) ||
+    parsedCols.length > 0
   );
 
   // For interactive roles, reference content is strictly prohibited from opening unless genuine reading text or grammar table exists

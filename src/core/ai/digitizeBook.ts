@@ -517,10 +517,11 @@ REGLAS UNIVERSALES DE BANCO DE OPCIONES Y ASIGNACIÓN BIUNÍVOCA:
 - REGLA ONTOLÓGICA DE PRODUCCIÓN ESCRITA LIBRE (interactionType: 'writing'):
   * Cuando la consigna principal del ejercicio solicite explícitamente redactar un párrafo, perfil, historia, carta, reseña, resumen, email o texto continuo libre ("Write a profile / paragraph / summary / description / email / story / review..."):
     1. Mapear a interactionType: 'writing'.
-    2. Extraer las pautas procedimentales o pasos guía (a, b, c, d) dentro de 'guidelines' como un array de strings limpios.
-    3. Asignar la consigna central a 'instruction' y el enunciado a 'prompt'.
-    4. 'referenceContent' se mantiene en null a menos que exista un texto de lectura autónomo externo que el alumno deba consultar.
-    5. 'isGraded': false (la redacción se evalúa de forma formativa con retroalimentación IA en lugar de calificación fija).
+    2. PRESERVACIÓN UNIVERSAL DE PASOS: NUNCA descartes ningún inciso o paso procedimental secundario (a, b, c, 1, 2, 3). Extrae las pautas y preguntas guía dentro de 'guidelines' como un array de strings limpios.
+    3. Si el ejercicio contiene una fase complementaria (como discusión en parejas, preguntas de seguimiento o puesta en común: ej. "Work in pairs. Read your partner's profile and ask two questions", "Share with the class"): asígnala explícitamente al campo 'followUpPrompt'.
+    4. Asignar la consigna central a 'instruction' y el enunciado a 'prompt'.
+    5. 'referenceContent' se mantiene en null a menos que exista un texto de lectura autónomo externo que el alumno deba consultar.
+    6. 'isGraded': false (la redacción se evalúa de forma formativa con retroalimentación IA en lugar de calificación fija).
 - PRINCIPIO DIDÁCTICO DE PRODUCCIÓN ABIERTA ("Write N items using these ideas / prompts"):
   * Cuando la consigna instruya al estudiante a redactar un número específico de preguntas u oraciones a partir de una lista de tópicos/ideas sugeridas (ej. "Write ten questions. Use these ideas...", "Make eight sentences about..."):
     1. TÓPICOS DE APOYO: Mapea la lista de ideas/tópicos (ej. "personal details, family, work/study, hobbies, free time") a 'wordBank' o a la descripción/instrucción del bloque. NUNCA los extraigas como 'referenceContent' (lo que abriría un panel lateral espurio) ni como enunciados ('prompt') individuales de cada ítem de pregunta.
@@ -1350,6 +1351,21 @@ function sanitizeExtractedPayload(payload: ExtractedStructuredPayload): Extracte
           .filter((p) => p && !/^\d+$/.test(p));
       } else if (activeWordBank.length > 0) {
         finalGuidelines = activeWordBank.map((w) => `Include topic/phrase: ${w}`);
+      }
+    }
+
+    // If there is a pair work, speaking discussion or follow-up step among guidelines or instruction, populate followUpPrompt
+    if (!followUpPrompt) {
+      const followUpRegex = /\b(?:work in pairs|discuss in pairs|ask each other|share (?:with|your)|read your partner|compare with|tell your partner)\b/i;
+      const followUpIndex = finalGuidelines.findIndex((g) => followUpRegex.test(g));
+      if (followUpIndex !== -1) {
+        followUpPrompt = finalGuidelines[followUpIndex];
+        // Retain in guidelines if guidelines are few, or let followUpPrompt display it distinctly
+      } else {
+        const promptFollowUpMatch = `${rawInstruction}\n${cleanedRawRef || ''}`.match(/(?:^|\n|[;.]\s*)(?:\*{0,2}\(?[c-fC-F][).:]\*{0,2}\s*)([^\n]+(?:pair|discuss|partner|class|share|ask)[^\n]*)/i);
+        if (promptFollowUpMatch && promptFollowUpMatch[1]?.trim()) {
+          followUpPrompt = promptFollowUpMatch[1].trim();
+        }
       }
     }
 

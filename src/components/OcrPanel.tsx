@@ -25,7 +25,7 @@ import {
 } from 'lucide-react';
 import type { ExtractedBlock } from '../types/schema';
 import type { ManualTemplateType } from '../core/ai/digitizeBook';
-import { mapBlockToRole, type PedagogicalRole } from '../core/ai/payloadMapper';
+import { mapBlockToRole, parseStructuredReferenceColumns, type PedagogicalRole } from '../core/ai/payloadMapper';
 import { compressImageBase64 } from '../core/utils/imageCompressor';
 
 export const OcrPanel: React.FC = () => {
@@ -253,7 +253,8 @@ export const OcrPanel: React.FC = () => {
 
     if (
       (Array.isArray(pd.tableData) && pd.tableData.length > 0) ||
-      (Array.isArray(pd.columns) && pd.columns.length > 0)
+      (Array.isArray(pd.columns) && pd.columns.length > 0) ||
+      (parseStructuredReferenceColumns(pd.referenceContent || pd.content || activeBlock.rawText).length > 0)
     ) {
       return 'reference_table';
     }
@@ -1548,6 +1549,27 @@ export const OcrPanel: React.FC = () => {
                               ) : (
                                 <p className="text-xs text-slate-400 italic">No hay pautas específicas. El estudiante redactará libremente a partir de la consigna.</p>
                               )}
+                            </div>
+
+                            {/* Follow-up Prompt / Actividad Complementaria */}
+                            <div className="p-3.5 rounded-xl bg-purple-50/50 border border-purple-200/80 shadow-2xs space-y-1.5">
+                              <label className="text-[11px] font-bold text-purple-900 flex items-center gap-1.5">
+                                <span>👥 Actividad Complementaria / Follow-up (Opcional):</span>
+                              </label>
+                              <input
+                                type="text"
+                                value={activeBlock.parsedData?.followUpPrompt || writingInter.followUpPrompt || ''}
+                                onChange={(e) => {
+                                  updateExtractedBlock(activeBlock.id, {
+                                    parsedData: {
+                                      ...activeBlock.parsedData,
+                                      followUpPrompt: e.target.value,
+                                    },
+                                  });
+                                }}
+                                placeholder="Ej. Work in pairs. Ask your partner two questions about their text..."
+                                className="w-full text-xs text-slate-800 bg-white border border-purple-200 focus:border-purple-500 rounded-lg px-2.5 py-1.5 outline-none font-medium"
+                              />
                             </div>
                           </div>
                         );

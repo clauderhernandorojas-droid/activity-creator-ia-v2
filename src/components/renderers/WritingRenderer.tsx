@@ -16,7 +16,8 @@ import {
   FileText, 
   Lightbulb, 
   TrendingUp,
-  Award
+  Award,
+  Users
 } from 'lucide-react';
 
 interface Props {
@@ -406,6 +407,39 @@ export const WritingRenderer: React.FC<Props> = ({
             )}
           </button>
         </div>
+
+        {/* Complementary Follow-Up / Pair Work Activity Section */}
+        {((block.followUpPrompt && block.followUpPrompt.trim().length > 0) || isEditMode) && (
+          <div className="mt-4 pt-3.5 border-t border-slate-100">
+            <div className="bg-gradient-to-r from-purple-50/70 to-indigo-50/50 border border-purple-200/80 rounded-xl p-3.5 space-y-2 shadow-2xs">
+              <div className="flex items-center justify-between">
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-purple-100 text-purple-800 text-[11px] font-bold shadow-2xs">
+                  <Users className="w-3.5 h-3.5 text-purple-600" />
+                  <span>Follow-up / Pair Work (Actividad Complementaria)</span>
+                </span>
+                {isEditMode && (
+                  <span className="text-[10px] text-slate-400">
+                    Paso complementario (discusión oral / puesta en común)
+                  </span>
+                )}
+              </div>
+
+              {isEditMode ? (
+                <textarea
+                  value={block.followUpPrompt || ''}
+                  placeholder="Ej. Work in pairs. Read your partner's profile and ask two follow-up questions..."
+                  onChange={(e) => handleFieldChange('followUpPrompt', e.target.value)}
+                  rows={2}
+                  className="w-full text-xs text-slate-800 bg-white border border-purple-200 rounded-lg p-2 focus:border-purple-500 outline-none resize-y"
+                />
+              ) : (
+                <div className="text-xs sm:text-sm text-slate-700 leading-relaxed font-medium pl-1">
+                  {renderFormattedMarkdown(block.followUpPrompt || '')}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Formative Feedback Presentation Card */}
