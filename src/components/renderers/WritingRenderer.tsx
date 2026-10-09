@@ -4,8 +4,8 @@ import type { SessionEvaluation } from '../../store/useSessionStore';
 import { evaluateWriting, type WritingFeedback } from '../../core/ai/evaluateWriting';
 import { VerificationAudioPlayer } from '../common/VerificationAudioPlayer';
 import { renderFormattedMarkdown } from '../../core/text/markdownRenderer';
-import { isSubstantialTextOverlap, isConcatenationOfItems } from '../../core/text/textDeduplication';
-import { partitionWritingInstruction } from '../../core/ai/payloadMapper';
+import { isSubstantialTextOverlap, isConcatenationOfItems, stripOrphanTypographicalMarkers } from '../../core/text/textDeduplication';
+import { partitionWritingInstruction, generateDeterministicGuidelines } from '../../core/ai/payloadMapper';
 import { 
   Sparkles, 
   CheckCircle2, 
@@ -65,6 +65,14 @@ export const WritingRenderer: React.FC<Props> = ({
     return partitioned.followUpPrompt || undefined;
   }, [block.followUpPrompt, block.instruction]);
 
+  // Deterministic Cognitive Scaffolding:
+  const effectiveGuidelines = useMemo(() => {
+    if (block.guidelines && block.guidelines.length > 0) {
+      return block.guidelines.map(stripOrphanTypographicalMarkers).filter(Boolean);
+    }
+    return generateDeterministicGuidelines(block.instruction, block.prompt);
+  }, [block.guidelines, block.instruction, block.prompt]);
+
   // Clean up instruction so that if followUpPrompt exists, the main header instruction NEVER contains the follow-up text
   const displayInstruction = useMemo(() => {
     let raw = block.instruction?.trim() || 'Escribe tu redacción';
@@ -83,11 +91,11 @@ export const WritingRenderer: React.FC<Props> = ({
       raw = raw.replace(/(?:(?:\r?\n)+\s*|\s+)(?:\*{0,2}(?:\([b-dB-D2-4]\)[.:]?|[b-dB-D2-4][).:])\*{0,2})\s*$/i, '').trim();
     }
 
-    if (block.guidelines && block.guidelines.length > 0 && isConcatenationOfItems(raw, block.guidelines, 0.6)) {
+    if (effectiveGuidelines.length > 0 && isConcatenationOfItems(raw, effectiveGuidelines, 0.6)) {
       return 'Redacta tu texto siguiendo las pautas indicadas:';
     }
     return raw || 'Escribe tu redacción';
-  }, [block.instruction, block.guidelines, effectiveFollowUpPrompt]);
+  }, [block.instruction, effectiveGuidelines, effectiveFollowUpPrompt]);
 
   // Clean prompt so it doesn't contain follow-up text or overlap with instruction
   const displayPrompt = useMemo(() => {
@@ -97,7 +105,7 @@ export const WritingRenderer: React.FC<Props> = ({
     if (followUp && p.includes(followUp)) {
       p = p.replace(followUp, '').trim();
     }
-    return p;
+    return stripOrphanTypographicalMarkers(p);
   }, [block.prompt, effectiveFollowUpPrompt]);
 
   // Check if prompt is redundant with instruction or is merely concatenating guidelines
@@ -106,13 +114,13 @@ export const WritingRenderer: React.FC<Props> = ({
     if (displayInstruction && isSubstantialTextOverlap(displayPrompt, displayInstruction, 0.65)) {
       return true;
     }
-    if (block.guidelines && block.guidelines.length > 0) {
-      if (isConcatenationOfItems(displayPrompt, block.guidelines, 0.55)) {
+    if (effectiveGuidelines.length > 0) {
+      if (isConcatenationOfItems(displayPrompt, effectiveGuidelines, 0.55)) {
         return true;
       }
     }
     return false;
-  }, [displayPrompt, displayInstruction, block.guidelines]);
+  }, [displayPrompt, displayInstruction, effectiveGuidelines]);
 
   // Handle student text typing
   const handleTextChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -128,7 +136,7 @@ export const WritingRenderer: React.FC<Props> = ({
       const res = await evaluateWriting({
         studentText: currentText,
         prompt: block.prompt || block.instruction,
-        guidelines: block.guidelines,
+        guidelines: effectiveGuidelines.length > 0 ? effectiveGuidelines : block.guidelines,
         evaluationRubric: block.evaluationRubric,
         minWords: block.minWords,
         maxWords: block.maxWords,
@@ -163,7 +171,8 @@ export const WritingRenderer: React.FC<Props> = ({
 
   const handleAddGuideline = () => {
     if (!onChange) return;
-    const current = block.guidelines || [];
+    const base = block.guidelines && block.guidelines.length > 0 ? block.guidelines : effectiveGuidelines;
+    const current = [...base];
     onChange({
       ...block,
       guidelines: [...current, `Nueva pauta ${current.length + 1}`],
@@ -172,14 +181,16 @@ export const WritingRenderer: React.FC<Props> = ({
 
   const handleUpdateGuideline = (idx: number, val: string) => {
     if (!onChange) return;
-    const current = [...(block.guidelines || [])];
+    const base = block.guidelines && block.guidelines.length > 0 ? block.guidelines : effectiveGuidelines;
+    const current = [...base];
     current[idx] = val;
     onChange({ ...block, guidelines: current });
   };
 
   const handleRemoveGuideline = (idx: number) => {
     if (!onChange) return;
-    const current = (block.guidelines || []).filter((_, i) => i !== idx);
+    const base = block.guidelines && block.guidelines.length > 0 ? block.guidelines : effectiveGuidelines;
+    const current = base.filter((_, i) => i !== idx);
     onChange({ ...block, guidelines: current });
   };
 
@@ -278,7 +289,7 @@ export const WritingRenderer: React.FC<Props> = ({
         </div>
 
         {/* Guidelines / Procedural Steps */}
-        {((block.guidelines && block.guidelines.length > 0) || isEditMode) && (
+        {(effectiveGuidelines.length > 0 || isEditMode) && (
           <div className="bg-slate-50/80 border border-slate-200/80 rounded-xl p-4 space-y-2.5">
             <div className="flex items-center justify-between">
               <span className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
@@ -299,7 +310,7 @@ export const WritingRenderer: React.FC<Props> = ({
 
             {isEditMode ? (
               <div className="space-y-2">
-                {(block.guidelines || []).map((guide, gIdx) => (
+                {(block.guidelines && block.guidelines.length > 0 ? block.guidelines : effectiveGuidelines).map((guide, gIdx) => (
                   <div key={gIdx} className="flex items-center gap-2">
                     <span className="text-xs font-bold text-slate-400 w-5 text-right">{gIdx + 1}.</span>
                     <input
@@ -318,13 +329,13 @@ export const WritingRenderer: React.FC<Props> = ({
                     </button>
                   </div>
                 ))}
-                {(!block.guidelines || block.guidelines.length === 0) && (
+                {((!block.guidelines || block.guidelines.length === 0) && effectiveGuidelines.length === 0) && (
                   <p className="text-xs text-slate-400 italic">No hay pautas configuradas. Haz clic en 'Añadir Pauta'.</p>
                 )}
               </div>
             ) : (
               <ul className="space-y-1.5 text-xs sm:text-sm text-slate-600 list-disc list-inside">
-                {(block.guidelines || []).map((guide, gIdx) => (
+                {effectiveGuidelines.map((guide, gIdx) => (
                   <li key={gIdx} className="leading-relaxed">
                     {renderFormattedMarkdown(guide)}
                   </li>

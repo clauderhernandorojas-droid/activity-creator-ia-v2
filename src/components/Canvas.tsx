@@ -13,7 +13,7 @@ import {
 } from '../core/ai/payloadMapper';
 import type { ReferenceBlock, ReferenceMediaBlock, StructuredReferenceBlock } from '../types/schema';
 import { renderFormattedMarkdown } from '../core/text/markdownRenderer';
-import { isSubstantialTextOverlap, isConcatenationOfItems } from '../core/text/textDeduplication';
+import { isSubstantialTextOverlap, isConcatenationOfItems, stripEditorialPrefix } from '../core/text/textDeduplication';
 import { ReferenceImageModal } from './modals/ReferenceImageModal';
 import { 
   CheckCircle2, 
@@ -363,7 +363,7 @@ export const Canvas: React.FC = () => {
             ) : (
               <div>
                 <h2 className="text-xl md:text-3xl font-bold text-slate-900 tracking-tight">
-                  {currentSlide.title}
+                  {stripEditorialPrefix(currentSlide.title)}
                 </h2>
                 {currentSlide.subtitle && !isSubtitleRedundant && (
                   <p className="text-sm text-slate-500 font-medium mt-1 leading-relaxed">

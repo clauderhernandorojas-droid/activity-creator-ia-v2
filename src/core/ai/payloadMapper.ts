@@ -20,7 +20,13 @@ import type {
   WritingBlock
 } from '../../types/schema';
 import { generateGrammarVariants } from '../evaluators/fillBlankValidator';
-import { isDuplicateReferenceContent, isSyntheticPedagogicalText, isConcatenationOfItems } from '../text/textDeduplication';
+import {
+  isDuplicateReferenceContent,
+  isSyntheticPedagogicalText,
+  isConcatenationOfItems,
+  stripEditorialPrefix,
+  stripOrphanTypographicalMarkers,
+} from '../text/textDeduplication';
 import { 
   stripMetaComments, 
   stripLeadingDuplicateTitle, 
@@ -28,10 +34,11 @@ import {
   extractSentenceDistractors, 
   isAutonomousReadingContent,
   partitionWritingInstruction,
+  generateDeterministicGuidelines,
   type PartitionedWritingInstruction
 } from './digitizeBook';
 
-export { partitionWritingInstruction, type PartitionedWritingInstruction };
+export { partitionWritingInstruction, generateDeterministicGuidelines, type PartitionedWritingInstruction };
 
 export type PedagogicalRole = 
   | 'interaction_inputs' 
@@ -74,7 +81,7 @@ export function mapBlockToInputFields(block: ExtractedBlock): InputFieldsBlock {
 
   // Pure 1:1 extraction of Word Bank
   const wordBank: string[] | undefined = Array.isArray(parsed.wordBank) && parsed.wordBank.length > 0
-    ? parsed.wordBank.map((w: any) => String(w).trim()).filter(Boolean)
+    ? parsed.wordBank.map((w: any) => stripOrphanTypographicalMarkers(String(w).trim())).filter(Boolean)
     : undefined;
 
   const rawTableHeaders = Array.isArray(parsed.tableHeaders)
@@ -94,7 +101,7 @@ export function mapBlockToInputFields(block: ExtractedBlock): InputFieldsBlock {
   let tableRows: InputFieldTableCell[][] = [];
 
   if (hasTableRows) {
-    tableHeaders = rawTableHeaders.map((h: any) => String(h).trim()).filter(Boolean);
+    tableHeaders = rawTableHeaders.map((h: any) => stripEditorialPrefix(stripOrphanTypographicalMarkers(String(h).trim()))).filter(Boolean);
 
     // If headers are missing, auto-create generic Column headers based on max row length
     if (tableHeaders.length === 0) {
@@ -108,11 +115,11 @@ export function mapBlockToInputFields(block: ExtractedBlock): InputFieldsBlock {
       if (!Array.isArray(row)) return [];
       return row.map((cell: any, cIdx: number) => {
         const isInput = Boolean(cell?.isInput);
-        const text = String(cell?.text || '').trim();
-        const expectedAnswer = String(cell?.expectedAnswer || (isInput && text ? text : '')).trim();
+        const text = stripOrphanTypographicalMarkers(String(cell?.text || '').trim());
+        const expectedAnswer = stripOrphanTypographicalMarkers(String(cell?.expectedAnswer || (isInput && text ? text : '')).trim());
         let acceptedAnswers: string[] = [];
         if (Array.isArray(cell?.acceptedAnswers) && cell.acceptedAnswers.length > 0) {
-          acceptedAnswers = cell.acceptedAnswers.map((a: any) => String(a).trim()).filter(Boolean);
+          acceptedAnswers = cell.acceptedAnswers.map((a: any) => stripOrphanTypographicalMarkers(String(a).trim())).filter(Boolean);
         } else if (expectedAnswer) {
           acceptedAnswers = [expectedAnswer];
         }
@@ -148,10 +155,10 @@ export function mapBlockToInputFields(block: ExtractedBlock): InputFieldsBlock {
   // Pure 1:1 transformation of items
   const listItems: InputFieldListItem[] = rawItems.map((item: any, idx: number) => {
     const rawPrompt = typeof item === 'object' && item !== null
-      ? String(item.prompt || item.text || '').trim()
-      : String(item).trim();
+      ? stripOrphanTypographicalMarkers(String(item.prompt || item.text || '').trim())
+      : stripOrphanTypographicalMarkers(String(item).trim());
     const explanationText = typeof item === 'object' && item !== null
-      ? String(item.explanation || item.hint || '').trim()
+      ? stripOrphanTypographicalMarkers(String(item.explanation || item.hint || '').trim())
       : '';
     const isPureNumber = /^(?:item\s*)?\d+[.)]?$/i.test(rawPrompt) || rawPrompt === '';
     const prompt = isPureNumber && explanationText
@@ -159,12 +166,12 @@ export function mapBlockToInputFields(block: ExtractedBlock): InputFieldsBlock {
       : (rawPrompt || `Item ${idx + 1}`);
 
     const expectedAnswer = typeof item === 'object' && item !== null
-      ? String(item.expectedAnswer || item.answer || '').trim()
+      ? stripOrphanTypographicalMarkers(String(item.expectedAnswer || item.answer || '').trim())
       : '';
 
     let acceptedAnswers: string[] = [];
     if (typeof item === 'object' && item !== null && Array.isArray(item.acceptedAnswers) && item.acceptedAnswers.length > 0) {
-      acceptedAnswers = item.acceptedAnswers.map((a: any) => String(a).trim()).filter(Boolean);
+      acceptedAnswers = item.acceptedAnswers.map((a: any) => stripOrphanTypographicalMarkers(String(a).trim())).filter(Boolean);
     } else if (expectedAnswer) {
       acceptedAnswers = [expectedAnswer];
     }
@@ -277,7 +284,8 @@ export function mapBlockToBuckets(block: ExtractedBlock): BucketsMatchingBlock {
   }
 
   const targetSlots: TargetSlot[] = rawBuckets.map((cat: any, idx: number) => {
-    const label = typeof cat === 'string' ? cat.trim() : String(cat.label || cat.name || `Categoría ${idx + 1}`).trim();
+    const rawLabel = typeof cat === 'string' ? cat.trim() : String(cat.label || cat.name || `Categoría ${idx + 1}`).trim();
+    const label = stripEditorialPrefix(stripOrphanTypographicalMarkers(rawLabel));
     return {
       id: `slot-${slugify(label)}-${idx}`,
       label,
@@ -304,14 +312,15 @@ export function mapBlockToBuckets(block: ExtractedBlock): BucketsMatchingBlock {
 
   // 1. Map tokens directly 1:1 from items
   rawItems.forEach((item: any, idx: number) => {
-    const text = typeof item === 'object' && item !== null
+    const rawText = typeof item === 'object' && item !== null
       ? String(item.prompt || item.text || `Elemento ${idx + 1}`).trim()
       : String(item).trim();
+    const text = stripOrphanTypographicalMarkers(rawText);
 
     if (!text) return;
 
     const targetLabel = typeof item === 'object' && item !== null
-      ? String(item.expectedAnswer || item.target || '').trim()
+      ? stripEditorialPrefix(stripOrphanTypographicalMarkers(String(item.expectedAnswer || item.target || '').trim()))
       : '';
 
     const isExample = typeof item === 'object' && item !== null ? Boolean(item.isExample) : false;
@@ -406,7 +415,8 @@ export function mapBlockToSelection(block: ExtractedBlock): SelectionBlock {
   if (Array.isArray(parsed.questions) && parsed.questions.length > 0) {
     const questions = parsed.questions.map((q: any) => {
       const options: SelectionOption[] = (q.options || []).map((opt: any) => {
-        const text = typeof opt === 'string' ? opt.trim() : String(opt.text || opt.label || '').trim();
+        const rawOpt = typeof opt === 'string' ? opt.trim() : String(opt.text || opt.label || '').trim();
+        const text = stripOrphanTypographicalMarkers(rawOpt);
         const isCorrect = typeof opt === 'object' && opt !== null ? Boolean(opt.isCorrect) : false;
         return {
           id: generateId('opt'),
@@ -418,7 +428,7 @@ export function mapBlockToSelection(block: ExtractedBlock): SelectionBlock {
 
       return {
         id: generateId('q'),
-        prompt: String(q.prompt || q.question || '').trim(),
+        prompt: stripOrphanTypographicalMarkers(String(q.prompt || q.question || '').trim()),
         mode: (q.mode || 'single_choice') as 'single_choice' | 'multiple_choice' | 'dropdown',
         options
       };
@@ -559,7 +569,7 @@ export function mapBlockToSequence(block: ExtractedBlock): SequenceBlock {
 
   const items = rawItems.map((it: any, i: number) => ({
     id: generateId('seq'),
-    text: String(it.prompt || it.text || it.line || '').trim(),
+    text: stripOrphanTypographicalMarkers(String(it.prompt || it.text || it.line || '').trim()),
     correctOrder: typeof it.order === 'number' ? it.order : i + 1,
     speaker: it.speaker
   }));
@@ -597,22 +607,38 @@ export function mapBlockToWriting(block: ExtractedBlock): WritingBlock {
     if (firstItem && typeof firstItem === 'object' && firstItem.prompt && !/^\d+[.)]?$/.test(firstItem.prompt.trim())) {
       prompt = firstItem.prompt.trim();
     } else if (parsed.title) {
-      prompt = parsed.title;
+      prompt = stripEditorialPrefix(parsed.title);
     } else {
       prompt = instruction;
     }
   } else if (followUpPrompt && prompt.includes(followUpPrompt)) {
     prompt = prompt.replace(followUpPrompt, '').trim();
   }
+  prompt = stripOrphanTypographicalMarkers(prompt);
 
   // Extract guidelines
   let guidelines: string[] | undefined = Array.isArray(parsed.guidelines) && parsed.guidelines.length > 0
-    ? parsed.guidelines.map((g: any) => String(g).trim()).filter(Boolean)
+    ? parsed.guidelines.map((g: any) => stripOrphanTypographicalMarkers(String(g).trim())).filter(Boolean)
     : undefined;
+
+  // If guidelines are missing, generate them deterministically (cardinal patterns, requirement lists, or scaffolding)
+  if (!guidelines || guidelines.length === 0) {
+    const rawWordBank = Array.isArray(parsed.wordBank)
+      ? parsed.wordBank.map((w: any) => stripOrphanTypographicalMarkers(String(w).trim())).filter(Boolean)
+      : [];
+    const generated = generateDeterministicGuidelines(
+      instruction,
+      prompt,
+      rawWordBank
+    );
+    if (generated.length > 0) {
+      guidelines = generated;
+    }
+  }
 
   if (!guidelines && Array.isArray(parsed.items) && parsed.items.length > 1) {
     const itemGuides = parsed.items
-      .map((it: any) => (typeof it === 'object' ? String(it.prompt || '').trim() : String(it).trim()))
+      .map((it: any) => (typeof it === 'object' ? stripOrphanTypographicalMarkers(String(it.prompt || '').trim()) : stripOrphanTypographicalMarkers(String(it).trim())))
       .filter((p: string) => p && !/^\d+[.)]?$/.test(p));
     if (itemGuides.length > 1) {
       guidelines = itemGuides;
@@ -620,7 +646,7 @@ export function mapBlockToWriting(block: ExtractedBlock): WritingBlock {
   }
 
   if (!guidelines && Array.isArray(parsed.wordBank) && parsed.wordBank.length > 0) {
-    guidelines = parsed.wordBank.map((w: any) => `Use topic/idea: ${String(w).trim()}`);
+    guidelines = parsed.wordBank.map((w: any) => `Use topic/idea: ${stripOrphanTypographicalMarkers(String(w).trim())}`);
   }
 
   const minWords = typeof parsed.minWords === 'number' ? parsed.minWords : undefined;
@@ -685,7 +711,7 @@ export function parseHierarchicalReference(text: string | null | undefined): Hie
     rawBlocks.length >= 2;
 
   if (isFirstBlockHeading) {
-    potentialTitle = firstBlockLines[0].replace(/^[*#\s—-]+|[:*#\s—-]+$/g, '').trim();
+    potentialTitle = stripEditorialPrefix(firstBlockLines[0].replace(/^[*#\s—-]+|[:*#\s—-]+$/g, '').trim());
     blocksToProcess = rawBlocks.slice(1);
   }
 
@@ -696,9 +722,9 @@ export function parseHierarchicalReference(text: string | null | undefined): Hie
     const lines = block.split('\n').map((l) => l.trim()).filter(Boolean);
     if (lines.length >= 2) {
       // First line of the block is the category header
-      const header = lines[0].replace(/^[*#\s—\-:]+|[:*#\s—-]+$/g, '').trim();
+      const header = stripEditorialPrefix(stripOrphanTypographicalMarkers(lines[0].replace(/^[*#\s—\-:]+|[:*#\s—-]+$/g, '').trim()));
       const items = lines.slice(1).map((l) =>
-        l.replace(/^[•*\-\s\d.)]+/, '').trim()
+        stripOrphanTypographicalMarkers(l.replace(/^[•*\-\s\d.)]+/, '').trim())
       ).filter(Boolean);
 
       if (header && items.length > 0) {
@@ -708,10 +734,10 @@ export function parseHierarchicalReference(text: string | null | undefined): Hie
       // Check for inline colon list (e.g. "Work: a job, overtime, part-time")
       const colonMatch = lines[0].match(/^([^:]{2,40}):\s*(.+)$/);
       if (colonMatch) {
-        const header = colonMatch[1].replace(/^[*#\s—-]+|[:*#\s—-]+$/g, '').trim();
+        const header = stripEditorialPrefix(stripOrphanTypographicalMarkers(colonMatch[1].replace(/^[*#\s—-]+|[:*#\s—-]+$/g, '').trim()));
         const items = colonMatch[2]
           .split(/[,;/•|]+/)
-          .map((it) => it.trim())
+          .map((it) => stripOrphanTypographicalMarkers(it.trim()))
           .filter(Boolean);
         if (header && items.length > 0) {
           candidateCols.push({ header, items });
@@ -742,18 +768,18 @@ export function parseHierarchicalReference(text: string | null | undefined): Hie
         if (currentHeader && currentItems.length > 0) {
           statefulCols.push({ header: currentHeader, items: currentItems });
         }
-        currentHeader = colonHeaderMatch[1].replace(/^[*#\s—-]+|[:*#\s—-]+$/g, '').trim();
+        currentHeader = stripEditorialPrefix(stripOrphanTypographicalMarkers(colonHeaderMatch[1].replace(/^[*#\s—-]+|[:*#\s—-]+$/g, '').trim()));
         currentItems = [];
       } else if (!isBulletOrIndent && line.length <= 35 && !line.includes('.') && !line.includes('?') && !line.includes(',')) {
         // Short unindented line without punctuation acts as candidate category header
         if (currentHeader && currentItems.length > 0) {
           statefulCols.push({ header: currentHeader, items: currentItems });
         }
-        currentHeader = line.replace(/^[*#\s—-]+|[:*#\s—-]+$/g, '').trim();
+        currentHeader = stripEditorialPrefix(stripOrphanTypographicalMarkers(line.replace(/^[*#\s—-]+|[:*#\s—-]+$/g, '').trim()));
         currentItems = [];
       } else {
         // Dependent item line
-        const cleanedItem = line.replace(/^[•*\-\s\d.)]+/, '').trim();
+        const cleanedItem = stripOrphanTypographicalMarkers(line.replace(/^[•*\-\s\d.)]+/, '').trim());
         if (cleanedItem) {
           if (!currentHeader) {
             currentHeader = 'Items';
@@ -805,20 +831,20 @@ export function mapBlockToStructuredReference(block: ExtractedBlock): Structured
   let columns: StructuredReferenceColumn[] = [];
   if (Array.isArray(parsed.tableData) && parsed.tableData.length > 0) {
     columns = parsed.tableData.map((c: any) => ({
-      header: String(c.header || '').trim(),
-      items: Array.isArray(c.items) ? c.items.map((it: any) => String(it).trim()).filter(Boolean) : [],
+      header: stripEditorialPrefix(stripOrphanTypographicalMarkers(String(c.header || '').trim())),
+      items: Array.isArray(c.items) ? c.items.map((it: any) => stripOrphanTypographicalMarkers(String(it).trim())).filter(Boolean) : [],
     }));
   } else if (Array.isArray(parsed.columns) && parsed.columns.length > 0) {
     columns = parsed.columns.map((c: any) => ({
-      header: String(c.header || '').trim(),
-      items: Array.isArray(c.items) ? c.items.map((it: any) => String(it).trim()).filter(Boolean) : [],
+      header: stripEditorialPrefix(stripOrphanTypographicalMarkers(String(c.header || '').trim())),
+      items: Array.isArray(c.items) ? c.items.map((it: any) => stripOrphanTypographicalMarkers(String(it).trim())).filter(Boolean) : [],
     }));
   } else if (Array.isArray(parsed.headers) && Array.isArray(parsed.rows) && parsed.headers.length > 0) {
     // Transform headers and rows matrix into columns
     columns = parsed.headers.map((hdr: string, cIdx: number) => ({
-      header: String(hdr || '').trim(),
+      header: stripEditorialPrefix(stripOrphanTypographicalMarkers(String(hdr || '').trim())),
       items: parsed.rows
-        .map((r: any) => (Array.isArray(r) ? String(r[cIdx] || '').trim() : ''))
+        .map((r: any) => (Array.isArray(r) ? stripOrphanTypographicalMarkers(String(r[cIdx] || '').trim()) : ''))
         .filter(Boolean),
     }));
   } else {
@@ -843,7 +869,7 @@ export function mapBlockToStructuredReference(block: ExtractedBlock): Structured
   return {
     type: 'reference_table',
     id: generateId('ref-tbl'),
-    title: extractedTitle || parsed.title || 'Cuadro de Vocabulario / Referencia',
+    title: stripEditorialPrefix(extractedTitle || parsed.title || 'Cuadro de Vocabulario / Referencia'),
     instruction: parsed.instruction || '',
     columns,
     caption: parsed.caption || parsed.referenceContent || undefined,

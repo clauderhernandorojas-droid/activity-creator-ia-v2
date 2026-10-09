@@ -1,6 +1,12 @@
 import type { ExtractedBlock, ExtractedStructuredPayload } from '../../types/schema';
 import { GoogleGenAI } from '@google/genai';
-import { isDuplicateReferenceContent, isSyntheticPedagogicalText, isConcatenationOfItems } from '../text/textDeduplication';
+import {
+  isDuplicateReferenceContent,
+  isSyntheticPedagogicalText,
+  isConcatenationOfItems,
+  stripEditorialPrefix,
+  stripOrphanTypographicalMarkers,
+} from '../text/textDeduplication';
 
 export type ManualTemplateType = 'input_fields' | 'buckets' | 'selection' | 'reference_table' | 'table_grid' | 'writing';
 
@@ -1145,6 +1151,161 @@ export function partitionWritingInstruction(
 }
 
 /**
+ * Deterministically generates cognitive scaffolding / guidelines (1..N steps or templates)
+ * for open production / writing tasks when quantified elements or requirement lists are present in the instruction.
+ */
+export function generateDeterministicGuidelines(
+  instruction?: string | null,
+  prompt?: string | null,
+  wordBank?: string[] | null,
+  existingGuidelines?: string[] | null
+): string[] {
+  // 1. If explicit guidelines already exist and have items, sanitize them and return
+  if (Array.isArray(existingGuidelines) && existingGuidelines.length > 0) {
+    const cleaned = existingGuidelines
+      .map((g) => stripOrphanTypographicalMarkers(String(g || '').trim()))
+      .filter(Boolean);
+    if (cleaned.length > 0) {
+      return cleaned;
+    }
+  }
+
+  const combined = `${instruction || ''}\n${prompt || ''}`.trim();
+  if (!combined) {
+    return [];
+  }
+
+  // Detect language: English if English production keywords are present
+  const isEnglish = /\b(?:write|sentence|question|paragraph|about|use|include|these|your|partner|class|describe|draft|compose|formulate)\b/i.test(combined);
+
+  // Extract candidate topics/ideas from wordBank or inline clauses ("Use these ideas: ...", "Include: ...")
+  const extractedTopics: string[] = [];
+  if (Array.isArray(wordBank) && wordBank.length > 0) {
+    for (const w of wordBank) {
+      const cleanW = stripOrphanTypographicalMarkers(String(w || '').trim());
+      if (cleanW && !extractedTopics.includes(cleanW)) {
+        extractedTopics.push(cleanW);
+      }
+    }
+  }
+
+  // Check inline requirements: "Use these ideas: traffic, noise...", "Include: a, b, c", "Think about: ..."
+  const ideasMatch = combined.match(/(?:use these (?:ideas|topics|words)|include|think about|ideas?:|incluye|usa estas ideas)[:\s]+([^.\n;]+)/i);
+  if (ideasMatch && ideasMatch[1]) {
+    const parts = ideasMatch[1]
+      .split(/[,;/•\n]+/)
+      .map((p) => stripOrphanTypographicalMarkers(p.trim()))
+      .filter((p) => p.length >= 2 && p.length <= 40);
+    for (const p of parts) {
+      if (!extractedTopics.includes(p)) {
+        extractedTopics.push(p);
+      }
+    }
+  }
+
+  // 2. Cardinal detection: e.g. "Write ten questions", "Write 5 sentences", "Escribe diez preguntas"
+  const cardinalRegex = /\b(?:write|make|ask|create|formulate|produce|compose|draft|list|escribe|redacta|haz|formula|plantea|elabora|enumera)\s+(?:(?:at\s+least|about|approx\w*|al\s+menos|unos?|unas?)\s+)?(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|un[oa]?|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez|once|doce|quince|veinte|\d{1,2})\s+(questions?|sentences?|paragraphs?|reasons?|ideas?|items?|things?|examples?|statements?|rules?|points?|preguntas?|oraciones?|frases?|p[aá]rrafos?|razones?|ejemplos?|afirmaciones?|reglas?|puntos?)\b/i;
+
+  const cardinalMatch = combined.match(cardinalRegex);
+
+  const countLookup: Record<string, number> = {
+    one: 1, uno: 1, una: 1, un: 1,
+    two: 2, dos: 2,
+    three: 3, tres: 3,
+    four: 4, cuatro: 4,
+    five: 5, cinco: 5,
+    six: 6, seis: 6,
+    seven: 7, siete: 7,
+    eight: 8, ocho: 8,
+    nine: 9, nueve: 9,
+    ten: 10, diez: 10,
+    eleven: 11, once: 11,
+    twelve: 12, doce: 12,
+    thirteen: 13,
+    fourteen: 14,
+    fifteen: 15, quince: 15,
+    sixteen: 16,
+    seventeen: 17,
+    eighteen: 18,
+    nineteen: 19,
+    twenty: 20, veinte: 20
+  };
+
+  if (cardinalMatch) {
+    const numRaw = cardinalMatch[1].toLowerCase();
+    const targetCount = countLookup[numRaw] ?? parseInt(numRaw, 10);
+    const unitRaw = cardinalMatch[2].toLowerCase();
+
+    if (targetCount >= 2 && targetCount <= 25) {
+      const isQuestion = /question|pregunta/i.test(unitRaw);
+      const isSentence = /sentence|oraci|frase/i.test(unitRaw);
+      const isParagraph = /paragraph|p[aá]rrafo/i.test(unitRaw);
+      const isReason = /reason|raz[oó]n/i.test(unitRaw);
+
+      const guidelines: string[] = [];
+      for (let i = 1; i <= targetCount; i++) {
+        const topic = extractedTopics[i - 1];
+        if (isEnglish) {
+          if (isQuestion) {
+            guidelines.push(topic ? `Question ${i}: Formulate a question about "${topic}"` : `Question ${i}: Draft your question (${i} of ${targetCount})`);
+          } else if (isSentence) {
+            guidelines.push(topic ? `Sentence ${i}: Write a complete sentence about "${topic}"` : `Sentence ${i}: Draft your sentence (${i} of ${targetCount})`);
+          } else if (isParagraph) {
+            guidelines.push(topic ? `Paragraph ${i}: Develop your paragraph focusing on "${topic}"` : `Paragraph ${i}: Draft paragraph ${i} (${i} of ${targetCount})`);
+          } else if (isReason) {
+            guidelines.push(topic ? `Reason ${i}: State and justify "${topic}"` : `Reason ${i}: Explain reason ${i} (${i} of ${targetCount})`);
+          } else {
+            guidelines.push(topic ? `Item ${i}: Focus on "${topic}"` : `Item ${i}: Draft entry ${i} (${i} of ${targetCount})`);
+          }
+        } else {
+          if (isQuestion) {
+            guidelines.push(topic ? `Pregunta ${i}: Formula una pregunta sobre "${topic}"` : `Pregunta ${i}: Plantea tu pregunta (${i} de ${targetCount})`);
+          } else if (isSentence) {
+            guidelines.push(topic ? `Oración ${i}: Redacta una oración completa sobre "${topic}"` : `Oración ${i}: Plantea tu oración (${i} de ${targetCount})`);
+          } else if (isParagraph) {
+            guidelines.push(topic ? `Párrafo ${i}: Desarrolla tu párrafo enfocado en "${topic}"` : `Párrafo ${i}: Redacta el párrafo ${i} (${i} de ${targetCount})`);
+          } else if (isReason) {
+            guidelines.push(topic ? `Razón ${i}: Explica y justifica "${topic}"` : `Razón ${i}: Desarrolla la razón ${i} (${i} de ${targetCount})`);
+          } else {
+            guidelines.push(topic ? `Punto ${i}: Desarrolla "${topic}"` : `Punto ${i}: Elabora el elemento ${i} (${i} de ${targetCount})`);
+          }
+        }
+      }
+      return guidelines;
+    }
+  }
+
+  // 3. If there is a list of requirement topics (>= 2 topics) without an explicit cardinal
+  if (extractedTopics.length >= 2) {
+    return extractedTopics.map((topic, idx) => {
+      if (isEnglish) {
+        return `Step ${idx + 1}: Address or incorporate "${topic}"`;
+      }
+      return `Paso ${idx + 1}: Desarrolla o incorpora "${topic}"`;
+    });
+  }
+
+  // 4. Default pedagogical scaffolding if instruction represents a composition/production task
+  const isComposition = /\b(?:write|draft|compose|produce|redacta|escribe|elabora)\b/i.test(combined);
+  if (isComposition) {
+    if (isEnglish) {
+      return [
+        'Step 1: Introduction – Present the main topic or context clearly.',
+        'Step 2: Body – Develop supporting details, examples, and key descriptions.',
+        'Step 3: Conclusion – Provide a closing thought, summary, or personal reflection.'
+      ];
+    }
+    return [
+      'Paso 1: Introducción – Presenta el tema principal o contexto con claridad.',
+      'Paso 2: Desarrollo – Explica los detalles clave, ideas de apoyo y ejemplos.',
+      'Paso 3: Conclusión – Añade una reflexión final, cierre o resumen del texto.'
+    ];
+  }
+
+  return [];
+}
+
+/**
  * Evaluates whether text is a genuine autonomous reading passage
  * (article, narrative story, multi-turn dialogue, or full grammar reference table)
  * rather than a vocabulary list, idea bank, solved example, or instruction.
@@ -1214,7 +1375,7 @@ export function extractTopicIdeas(text: string): string[] {
 function sanitizeExtractedPayload(payload: ExtractedStructuredPayload): ExtractedStructuredPayload {
   const items = Array.isArray(payload.items) ? payload.items : [];
   const rawInstruction = payload.instruction ? String(payload.instruction).trim() : '';
-  const rawTitle = payload.title ? String(payload.title).trim() : '';
+  const rawTitle = payload.title ? stripEditorialPrefix(String(payload.title).trim()) : '';
   const isMatchingDirective = /match\b|relate\b|pair\b|emparej/i.test(`${rawTitle} ${rawInstruction}`);
   const isIdentifyDirective = /underline\b|circle\b|highlight\b|identify\b|subraya\b|encierra\b|marca\b/i.test(`${rawTitle} ${rawInstruction}`);
 
@@ -1229,24 +1390,24 @@ function sanitizeExtractedPayload(payload: ExtractedStructuredPayload): Extracte
   // Global pool of candidate options for matching tasks (e.g. headings or definitions)
   const matchingPool = Array.from(
     new Set([
-      ...(Array.isArray(payload.wordBank) ? payload.wordBank.map((w) => String(w).trim()).filter(Boolean) : []),
+      ...(Array.isArray(payload.wordBank) ? payload.wordBank.map((w) => stripOrphanTypographicalMarkers(String(w).trim())).filter(Boolean) : []),
       ...items.flatMap((it) => {
         if (Array.isArray(it.options) && it.options.length > 0) {
-          return it.options.map((o) => String(o).trim()).filter(Boolean);
+          return it.options.map((o) => stripOrphanTypographicalMarkers(String(o).trim())).filter(Boolean);
         }
-        return it.expectedAnswer ? [String(it.expectedAnswer).trim()] : [];
+        return it.expectedAnswer ? [stripOrphanTypographicalMarkers(String(it.expectedAnswer).trim())] : [];
       }),
     ])
   ).filter(Boolean);
 
   const sanitizedItems = items.map((it, idx) => {
-    const rawPrompt = String(it.prompt || '').trim();
-    const explanation = String(it.explanation || '').trim();
+    const rawPrompt = stripOrphanTypographicalMarkers(String(it.prompt || '').trim());
+    const explanation = stripOrphanTypographicalMarkers(String(it.explanation || '').trim());
     const isPureNumber = /^(?:item\s*)?\d+[.)]?$/i.test(rawPrompt) || rawPrompt === '';
     let prompt = isPureNumber && explanation
       ? (rawPrompt ? `${rawPrompt} _______ : ${explanation}` : `${idx + 1}. _______ : ${explanation}`)
       : (rawPrompt || `Item ${idx + 1}`);
-    const expectedAnswer = String(it.expectedAnswer || '').trim() || (isOpenProductionTask ? '' : `Respuesta ${idx + 1}`);
+    const expectedAnswer = stripOrphanTypographicalMarkers(String(it.expectedAnswer || '').trim()) || (isOpenProductionTask ? '' : `Respuesta ${idx + 1}`);
 
     // If this is an identification task ("Underline / Circle / Identify"), restore full intact sentence if blank was created
     if (isIdentifyDirective && /_{2,}/.test(prompt) && expectedAnswer) {
@@ -1254,7 +1415,7 @@ function sanitizeExtractedPayload(payload: ExtractedStructuredPayload): Extracte
     }
 
     let acceptedAnswers = Array.isArray(it.acceptedAnswers) && it.acceptedAnswers.length > 0
-      ? it.acceptedAnswers.map((a) => String(a).trim()).filter(Boolean)
+      ? it.acceptedAnswers.map((a) => stripOrphanTypographicalMarkers(String(a).trim())).filter(Boolean)
       : (expectedAnswer ? [expectedAnswer] : []);
 
     if (expectedAnswer && !acceptedAnswers.includes(expectedAnswer)) {
@@ -1262,14 +1423,14 @@ function sanitizeExtractedPayload(payload: ExtractedStructuredPayload): Extracte
     }
 
     let itemOptions: string[] | undefined = Array.isArray(it.options) && it.options.length > 1
-      ? it.options.map((o) => String(o).trim()).filter(Boolean)
-      : (isMatchingDirective && matchingPool.length > 1 ? matchingPool : (Array.isArray(it.options) ? it.options : undefined));
+      ? it.options.map((o) => stripOrphanTypographicalMarkers(String(o).trim())).filter(Boolean)
+      : (isMatchingDirective && matchingPool.length > 1 ? matchingPool : (Array.isArray(it.options) ? it.options.map((o) => stripOrphanTypographicalMarkers(String(o).trim())).filter(Boolean) : undefined));
 
     // If identification task and options are missing or insufficient, extract sentence words as distractors
     if (isIdentifyDirective && (!itemOptions || itemOptions.length <= 1)) {
       const distractors = extractSentenceDistractors(prompt, expectedAnswer);
       if (distractors.length > 0) {
-        itemOptions = Array.from(new Set([expectedAnswer, ...distractors]));
+        itemOptions = Array.from(new Set([expectedAnswer, ...distractors.map(stripOrphanTypographicalMarkers)]));
       }
     }
 
@@ -1284,7 +1445,9 @@ function sanitizeExtractedPayload(payload: ExtractedStructuredPayload): Extracte
   });
 
   const rawTableHeaders = Array.isArray(payload.tableHeaders) ? payload.tableHeaders : undefined;
-  const tableHeaders = rawTableHeaders ? rawTableHeaders.map((h) => String(h).trim()).filter(Boolean) : undefined;
+  const tableHeaders = rawTableHeaders
+    ? rawTableHeaders.map((h) => stripEditorialPrefix(stripOrphanTypographicalMarkers(String(h).trim()))).filter(Boolean)
+    : undefined;
 
   const rawTableRows = Array.isArray(payload.tableRows) ? payload.tableRows : undefined;
   const tableRows = rawTableRows
@@ -1293,10 +1456,10 @@ function sanitizeExtractedPayload(payload: ExtractedStructuredPayload): Extracte
         return row.map((cell) => {
           const isInput = Boolean(cell?.isInput);
           const isExample = Boolean(cell?.isExample);
-          const text = String(cell?.text || '').trim();
-          const expectedAnswer = String(cell?.expectedAnswer || '').trim();
+          const text = stripOrphanTypographicalMarkers(String(cell?.text || '').trim());
+          const expectedAnswer = stripOrphanTypographicalMarkers(String(cell?.expectedAnswer || '').trim());
           let acceptedAnswers = Array.isArray(cell?.acceptedAnswers) && cell.acceptedAnswers.length > 0
-            ? cell.acceptedAnswers.map((a) => String(a).trim()).filter(Boolean)
+            ? cell.acceptedAnswers.map((a) => stripOrphanTypographicalMarkers(String(a).trim())).filter(Boolean)
             : (expectedAnswer ? [expectedAnswer] : []);
 
           if (expectedAnswer && !acceptedAnswers.includes(expectedAnswer)) {
@@ -1309,7 +1472,7 @@ function sanitizeExtractedPayload(payload: ExtractedStructuredPayload): Extracte
             expectedAnswer: isInput ? (expectedAnswer || acceptedAnswers[0] || '') : undefined,
             acceptedAnswers,
             isExample,
-            hint: cell?.hint ? String(cell.hint).trim() : undefined,
+            hint: cell?.hint ? stripOrphanTypographicalMarkers(String(cell.hint).trim()) : undefined,
           };
         });
       })
@@ -1360,16 +1523,18 @@ function sanitizeExtractedPayload(payload: ExtractedStructuredPayload): Extracte
   } else {
     // Multi-stage procedural directives (a, b, c, d): preserve structured format with double-linebreaks and bold headers
     instruction = formatMultiStageDirectives(rawInstruction);
-    title = rawTitle.replace(/^(?:\(?\d+\)?\s*)?(?:[aA][.)]\s+|(?:\([aA]\)\s+))/g, '').trim();
+    title = stripEditorialPrefix(rawTitle.replace(/^(?:\(?\d+\)?\s*)?(?:[aA][.)]\s+|(?:\([aA]\)\s+))/g, '').trim());
   }
 
   if (!instruction && title.length > 50) {
     instruction = title;
     title = 'Speaking / Activity Task';
   } else if (!title && instruction) {
-    title = instruction.length <= 50 ? instruction : 'Speaking / Activity Task';
+    title = instruction.length <= 50 ? stripEditorialPrefix(instruction) : 'Speaking / Activity Task';
   } else if (!title && !instruction) {
     title = 'Actividad Digitalizada';
+  } else {
+    title = stripEditorialPrefix(title);
   }
 
   const rawRef = Array.isArray(payload.referenceContent)
@@ -1405,7 +1570,7 @@ function sanitizeExtractedPayload(payload: ExtractedStructuredPayload): Extracte
       // Not an autonomous reading text: extract any topics, ideas, or vocabulary into wordBankTopics,
       // and keep referenceContent = null so the activity spans 100% full stage width!
       const extracted = extractTopicIdeas(cleanedRawRef);
-      wordBankTopics.push(...extracted);
+      wordBankTopics.push(...extracted.map(stripOrphanTypographicalMarkers).filter(Boolean));
       referenceContent = null;
     }
   }
@@ -1413,8 +1578,8 @@ function sanitizeExtractedPayload(payload: ExtractedStructuredPayload): Extracte
   // Consolidate wordBank: include words from payload plus topics harvested from spurious referenceContent
   const activeWordBank: string[] = Array.from(
     new Set([
-      ...(Array.isArray(payload.wordBank) ? payload.wordBank.map((w) => String(w).trim()).filter(Boolean) : []),
-      ...wordBankTopics,
+      ...(Array.isArray(payload.wordBank) ? payload.wordBank.map((w) => stripOrphanTypographicalMarkers(String(w).trim())).filter(Boolean) : []),
+      ...wordBankTopics.map(stripOrphanTypographicalMarkers).filter(Boolean),
     ])
   );
 
@@ -1426,26 +1591,36 @@ function sanitizeExtractedPayload(payload: ExtractedStructuredPayload): Extracte
   const writingDirectiveRegex = /\b(?:write|draft|compose|produce)\s+(?:an?\s+)?(?:profile|paragraph|summary|description|email|letter|story|review|essay|biography|post|short\s+text|text)\b/i;
   const isWritingTask = writingDirectiveRegex.test(`${rawTitle} ${rawInstruction}`) || payload.interactionType === 'writing';
   let finalGuidelines: string[] = Array.isArray(payload.guidelines) && payload.guidelines.length > 0
-    ? payload.guidelines.map((g) => String(g).trim()).filter(Boolean)
+    ? payload.guidelines.map((g) => stripOrphanTypographicalMarkers(String(g).trim())).filter(Boolean)
     : [];
 
   if (isWritingTask) {
     finalInteractionType = 'writing';
     finalIsGraded = false; // Writing tasks receive formative feedback rather than binary scores
 
-    // Extract procedural steps / guidelines if not yet populated
+    // Extract procedural steps / guidelines deterministically
+    if (finalGuidelines.length === 0) {
+      finalGuidelines = generateDeterministicGuidelines(
+        instruction,
+        rawTitle,
+        activeWordBank
+      );
+    }
+
     if (finalGuidelines.length === 0) {
       const stepMatches = `${rawInstruction}\n${cleanedRawRef || ''}`.match(/(?:^|\n|\s)(?:\*{0,2}\(?[a-fA-F][).:]\*{0,2})\s+([^\n]+)/g);
       if (stepMatches && stepMatches.length > 1) {
-        finalGuidelines = stepMatches.map((m) => m.replace(/^[*\s(a-fA-F).:]+/, '').trim()).filter(Boolean);
+        finalGuidelines = stepMatches.map((m) => stripOrphanTypographicalMarkers(m.replace(/^[*\s(a-fA-F).:]+/, '').trim())).filter(Boolean);
       } else if (sanitizedItems.length > 0) {
         finalGuidelines = sanitizedItems
-          .map((it) => it.prompt.replace(/^\d+[.)]\s*/, '').trim())
+          .map((it) => stripOrphanTypographicalMarkers(it.prompt.replace(/^\d+[.)]\s*/, '').trim()))
           .filter((p) => p && !/^\d+$/.test(p));
       } else if (activeWordBank.length > 0) {
         finalGuidelines = activeWordBank.map((w) => `Include topic/phrase: ${w}`);
       }
     }
+
+    finalGuidelines = finalGuidelines.map(stripOrphanTypographicalMarkers).filter(Boolean);
 
     // Partition multi-phase instruction (e.g. a -> instruction, b -> followUpPrompt)
     const partitioned = partitionWritingInstruction(instruction, followUpPrompt);

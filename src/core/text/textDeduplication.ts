@@ -192,3 +192,65 @@ export function isSyntheticPedagogicalText(text: string | null | undefined): boo
   return false;
 }
 
+/**
+ * Strips isolated alphanumeric editorial cataloging codes, lesson/unit labels,
+ * or appendix prefixes (e.g., "3A. ", "1.2 - ", "Unit 3: ", "Lesson 4. ", "B1. ", "A. ", "Ex. 2: ")
+ * from titles and headings, while preserving the title when the whole string consists only of the label.
+ */
+export function stripEditorialPrefix(text: string | null | undefined): string {
+  if (!text) return '';
+  let current = text.trim();
+  if (!current) return '';
+
+  // Match prefixes:
+  // - Unit/Lesson/Module/Section/Part/Chapter/Exercise/Activity/Page (EN/ES)
+  // - Alphanumeric cataloging codes: "3A.", "B1.", "1.2 -", "2b)", "A.", "B.", "1.", "2."
+  const prefixRegex = /^(?:(?:(?:unit|unidad|lesson|lecci[oó]n|module|m[oó]dulo|section|secci[oó]n|part|parte|chapter|cap[ií]tulo|ap[eé]ndice|appendix|ex(?:ercise)?\.?|act(?:ivity)?\.?|ejercicio\.?|p(?:age|ág(?:ina)?)?\.?)\s*(?:\d+[a-zA-Z]?|[a-zA-Z]\d*|\d+\.\d+|[a-zA-Z]))|\b\d+[a-zA-Z](?:\.\d+)?|\b[a-zA-Z]\d+(?:\.\d+)?|\b\d+\.\d+(?:\.\d+)?|\b[A-Za-z]\b|\b\d{1,2}\b)(?:\s*[:.\-–—|•/)]|\s+)\s*/i;
+
+  let iterations = 0;
+  while (iterations < 3) {
+    const next = current.replace(prefixRegex, '').trim();
+    if (next && next !== current) {
+      current = next;
+      iterations++;
+    } else {
+      break;
+    }
+  }
+
+  return current.length > 0 ? current : text.trim();
+}
+
+/**
+ * Strips orphan typographical footnote/appendix calls (*, †, ‡, §, ¶, #, °, ◊, ¹, ², ³, ※)
+ * commonly found in scanned textbook word banks, table cells, and lexical items,
+ * while strictly preserving valid Markdown formatting (**bold**, `# Heading`).
+ */
+export function stripOrphanTypographicalMarkers(text: string | null | undefined): string {
+  if (!text) return '';
+  let str = text;
+
+  // 1. Remove explicit footnote reference symbols: †, ‡, §, ¶, ◊, ※
+  str = str.replace(/[†‡§¶◊※]/g, '');
+
+  // 2. Remove isolated superscript footnote numbers (¹ ² ³ ⁴ ⁵)
+  str = str.replace(/(?<=\w)[¹²³⁴⁵]+(?!\w)/g, '');
+  str = str.replace(/(?<!\w)[¹²³⁴⁵]+(?!\w)/g, '');
+
+  // 3. Remove orphan degree or hash signs attached at end of words or standalone: e.g. "word#", "word°"
+  str = str.replace(/(?<=[a-zA-Z0-9])[#°]+(?=\s|$|[.,;:!?])/g, '');
+  str = str.replace(/(?:^|\s)[°](?=\s|$)/g, ' ');
+
+  // 4. Remove orphan single asterisks without destroying Markdown bold (**bold**):
+  // - Trailing single asterisk: "word*" or "word *" -> "word"
+  str = str.replace(/(?<!\*)\*\s*$/g, '');
+  // - Leading isolated asterisk on single lexical item: "*word" -> "word" (avoiding "**bold**")
+  str = str.replace(/^\s*\*(?!\*)\s*/g, '');
+  // - Single asterisk immediately following an alphanumeric word: "take* a seat" -> "take a seat"
+  str = str.replace(/(?<=[a-zA-Z0-9])(?<!\*)\*(?!\*)(?=\s|[.,;:!?]|$)/g, '');
+  // - Isolated asterisk surrounded by spaces: "word * word" -> "word word"
+  str = str.replace(/(?<=\s)(?<!\*)\*(?!\*)(?=\s)/g, '');
+
+  return str.replace(/[ \t]{2,}/g, ' ').trim();
+}
+

@@ -11,6 +11,7 @@ import type {
 import { digitizeBook, createManualBlock, type ManualTemplateType } from '../core/ai/digitizeBook';
 import { mapBlockToRole, convertSlideToRole, type PedagogicalRole } from '../core/ai/payloadMapper';
 import { compressImageBase64 } from '../core/utils/imageCompressor';
+import { stripEditorialPrefix } from '../core/text/textDeduplication';
 import { useSessionStore } from './useSessionStore';
 export { validateFillInBlank, type FlexibleValidationResult } from '../core/evaluators/fillBlankValidator';
 
@@ -369,7 +370,7 @@ export const useLessonStore = create<LessonState>()(
           const state = get();
           const block = state.extractedBlocks.find((b) => b.id === blockId) || state.extractedBlocks[0];
           const newId = `slide-${Date.now()}`;
-          const title = block?.parsedData?.title || 'Diapositiva Digitalizada';
+          const title = stripEditorialPrefix(block?.parsedData?.title || 'Diapositiva Digitalizada');
           const subtitle = block?.parsedData?.instruction || 'Contenido adaptado desde libro de texto';
           const isGraded = block?.parsedData?.isGraded !== undefined ? Boolean(block.parsedData.isGraded) : true;
           const mapped = block ? mapBlockToRole(block, role) : {};
