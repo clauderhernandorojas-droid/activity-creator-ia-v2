@@ -626,62 +626,152 @@ export function mapBlockToWriting(block: ExtractedBlock): WritingBlock {
 }
 
 /**
- * Universal Grouping Heuristic: If reference content is not continuous prose,
- * but a series of categories with subordinated items (e.g. headers followed by bulleted/item lines,
- * or blocks separated by double linebreaks, or colons), parse it into structured columns.
+ * Hierarchical Reference Parse Result:
+ * Extracted global title (if present as an isolated heading) and structured columns/clusters.
  */
-export function parseStructuredReferenceColumns(text: string | null | undefined): StructuredReferenceColumn[] {
-  if (!text || !text.trim()) return [];
+export interface HierarchicalReferenceParseResult {
+  title?: string;
+  columns: StructuredReferenceColumn[];
+}
+
+/**
+ * Universal Hierarchical Reference Parser:
+ * Segments natural document hierarchy without rigid position coupling:
+ * 1. Global Title Extraction: If the first line/paragraph is an isolated single-line title
+ *    followed by structured clusters, extracts it as title so it doesn't pollute column headers.
+ * 2. Cluster Segmentation ({ header, items }): Parses blocks divided by double linebreaks,
+ *    or unindented category lines followed by indented/bulleted/listed items.
+ * 3. Type Invariant: If 2 or more clusters with items are identified, it MUST serialize
+ *    as a structured reference table rather than degrading to plain text.
+ */
+export function parseHierarchicalReference(text: string | null | undefined): HierarchicalReferenceParseResult {
+  if (!text || !text.trim()) return { columns: [] };
   const clean = text.trim();
 
-  // Pattern 1: Double linebreak separated category blocks (e.g. "Work:\n• do\n• make" or "In / At:\n...")
-  const blocks = clean.split(/\n{2,}/).map((b) => b.trim()).filter(Boolean);
+  // Split into paragraphs / blocks by double linebreaks or clear section separators
+  const rawBlocks = clean.split(/\n{2,}/).map((b) => b.trim()).filter(Boolean);
+  if (rawBlocks.length === 0) return { columns: [] };
+
+  let potentialTitle: string | undefined = undefined;
+  let blocksToProcess = rawBlocks;
+
+  // Check if first block is an isolated global title (single short line without bullet points or colon-lists)
+  const firstBlock = rawBlocks[0];
+  const firstBlockLines = firstBlock.split('\n').map((l) => l.trim()).filter(Boolean);
+  const isFirstBlockHeading =
+    firstBlockLines.length === 1 &&
+    firstBlockLines[0].length <= 60 &&
+    !firstBlockLines[0].includes(':') &&
+    !/^[•*\-\d.)]/.test(firstBlockLines[0]) &&
+    rawBlocks.length >= 2;
+
+  if (isFirstBlockHeading) {
+    potentialTitle = firstBlockLines[0].replace(/^[*#\s—-]+|[:*#\s—-]+$/g, '').trim();
+    blocksToProcess = rawBlocks.slice(1);
+  }
+
   const candidateCols: StructuredReferenceColumn[] = [];
 
-  for (const block of blocks) {
+  // Strategy A: Process blocks separated by double linebreaks
+  for (const block of blocksToProcess) {
     const lines = block.split('\n').map((l) => l.trim()).filter(Boolean);
     if (lines.length >= 2) {
-      // First line acts as category header
-      const rawHeader = lines[0]
-        .replace(/^[*#\s—\-:]+|[:*#\s—-]+$/g, '')
-        .trim();
+      // First line of the block is the category header
+      const header = lines[0].replace(/^[*#\s—\-:]+|[:*#\s—-]+$/g, '').trim();
       const items = lines.slice(1).map((l) =>
         l.replace(/^[•*\-\s\d.)]+/, '').trim()
       ).filter(Boolean);
 
-      if (rawHeader && items.length > 0 && rawHeader.length <= 40) {
-        candidateCols.push({ header: rawHeader, items });
-      }
-    }
-  }
-
-  // If we found at least 2 categories, or 1 category with multiple items and not continuous prose
-  if (candidateCols.length >= 2 || (candidateCols.length === 1 && candidateCols[0].items.length >= 2 && candidateCols[0].items.every((it) => it.length < 50))) {
-    return candidateCols;
-  }
-
-  // Pattern 2: Colon-separated lines (e.g. "Take: a break, a photo, a shower\nHave: lunch, dinner")
-  const colonLines = clean.split('\n').map((l) => l.trim()).filter(Boolean);
-  const colonCols: StructuredReferenceColumn[] = [];
-  for (const line of colonLines) {
-    const colonMatch = line.match(/^([^:]{2,30}):\s*(.+)$/);
-    if (colonMatch) {
-      const header = colonMatch[1].replace(/^[*#\s—-]+|[:*#\s—-]+$/g, '').trim();
-      const items = colonMatch[2]
-        .split(/[,;/•|]+/)
-        .map((it) => it.trim())
-        .filter(Boolean);
       if (header && items.length > 0) {
-        colonCols.push({ header, items });
+        candidateCols.push({ header, items });
+      }
+    } else if (lines.length === 1) {
+      // Check for inline colon list (e.g. "Work: a job, overtime, part-time")
+      const colonMatch = lines[0].match(/^([^:]{2,40}):\s*(.+)$/);
+      if (colonMatch) {
+        const header = colonMatch[1].replace(/^[*#\s—-]+|[:*#\s—-]+$/g, '').trim();
+        const items = colonMatch[2]
+          .split(/[,;/•|]+/)
+          .map((it) => it.trim())
+          .filter(Boolean);
+        if (header && items.length > 0) {
+          candidateCols.push({ header, items });
+        }
       }
     }
   }
 
-  if (colonCols.length >= 2) {
-    return colonCols;
+  // Strategy B: If Strategy A didn't find at least 2 clusters, try line-by-line stateful scan
+  // for mixed indentation or single-linebreaks between categories and items
+  if (candidateCols.length < 2) {
+    const allLines = clean.split('\n').map((l) => l.trim()).filter(Boolean);
+    const statefulCols: StructuredReferenceColumn[] = [];
+    let currentHeader: string | null = null;
+    let currentItems: string[] = [];
+
+    // Skip global title if detected
+    const linesToScan = isFirstBlockHeading && potentialTitle && allLines[0].includes(potentialTitle)
+      ? allLines.slice(1)
+      : allLines;
+
+    for (const line of linesToScan) {
+      const isBulletOrIndent = /^[•*\-\s\d.)]/.test(line);
+      const colonHeaderMatch = line.match(/^([^:]{2,35}):\s*$/);
+
+      if (colonHeaderMatch) {
+        // Explicit header line with trailing colon (e.g. "Prepositions:")
+        if (currentHeader && currentItems.length > 0) {
+          statefulCols.push({ header: currentHeader, items: currentItems });
+        }
+        currentHeader = colonHeaderMatch[1].replace(/^[*#\s—-]+|[:*#\s—-]+$/g, '').trim();
+        currentItems = [];
+      } else if (!isBulletOrIndent && line.length <= 35 && !line.includes('.') && !line.includes('?') && !line.includes(',')) {
+        // Short unindented line without punctuation acts as candidate category header
+        if (currentHeader && currentItems.length > 0) {
+          statefulCols.push({ header: currentHeader, items: currentItems });
+        }
+        currentHeader = line.replace(/^[*#\s—-]+|[:*#\s—-]+$/g, '').trim();
+        currentItems = [];
+      } else {
+        // Dependent item line
+        const cleanedItem = line.replace(/^[•*\-\s\d.)]+/, '').trim();
+        if (cleanedItem) {
+          if (!currentHeader) {
+            currentHeader = 'Items';
+          }
+          currentItems.push(cleanedItem);
+        }
+      }
+    }
+
+    if (currentHeader && currentItems.length > 0) {
+      statefulCols.push({ header: currentHeader, items: currentItems });
+    }
+
+    if (statefulCols.length >= 2) {
+      return {
+        title: potentialTitle,
+        columns: statefulCols,
+      };
+    }
   }
 
-  return [];
+  // If Strategy A found at least 2 clusters (or 1 strong multi-item cluster)
+  if (candidateCols.length >= 2 || (candidateCols.length === 1 && candidateCols[0].items.length >= 2)) {
+    return {
+      title: potentialTitle,
+      columns: candidateCols,
+    };
+  }
+
+  return { title: potentialTitle, columns: [] };
+}
+
+/**
+ * Universal Grouping Heuristic: Returns array of columns if structured categories are found.
+ */
+export function parseStructuredReferenceColumns(text: string | null | undefined): StructuredReferenceColumn[] {
+  return parseHierarchicalReference(text).columns;
 }
 
 /**
@@ -689,6 +779,8 @@ export function parseStructuredReferenceColumns(text: string | null | undefined)
  */
 export function mapBlockToStructuredReference(block: ExtractedBlock): StructuredReferenceBlock {
   const parsed = block.parsedData || {};
+
+  let extractedTitle: string | undefined = undefined;
 
   // Check if structured tableData exists
   let columns: StructuredReferenceColumn[] = [];
@@ -711,11 +803,14 @@ export function mapBlockToStructuredReference(block: ExtractedBlock): Structured
         .filter(Boolean),
     }));
   } else {
-    // Heurística Universal de Agrupación: deserializar texto de referencia con categorías y listas
+    // Heurística Universal de Agrupación: deserializar jerárquicamente texto de referencia con categorías y listas
     const textToAnalyze = String(parsed.referenceContent || parsed.content || block.rawText || '').trim();
-    const parsedCols = parseStructuredReferenceColumns(textToAnalyze);
-    if (parsedCols.length > 0) {
-      columns = parsedCols;
+    const hierResult = parseHierarchicalReference(textToAnalyze);
+    if (hierResult.columns.length > 0) {
+      columns = hierResult.columns;
+      if (hierResult.title && (!parsed.title || parsed.title === 'Actividad Digitalizada' || parsed.title.toLowerCase().includes('speaking / activity'))) {
+        extractedTitle = hierResult.title;
+      }
     }
   }
 
@@ -729,7 +824,7 @@ export function mapBlockToStructuredReference(block: ExtractedBlock): Structured
   return {
     type: 'reference_table',
     id: generateId('ref-tbl'),
-    title: parsed.title || 'Cuadro de Vocabulario / Referencia',
+    title: extractedTitle || parsed.title || 'Cuadro de Vocabulario / Referencia',
     instruction: parsed.instruction || '',
     columns,
     caption: parsed.caption || parsed.referenceContent || undefined,

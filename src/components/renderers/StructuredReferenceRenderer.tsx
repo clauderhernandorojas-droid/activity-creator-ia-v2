@@ -1,16 +1,20 @@
 import React, { useState } from 'react';
 import type { StructuredReferenceBlock } from '../../types/schema';
 import { Plus, Trash2, BookOpen, Layers } from 'lucide-react';
+import { renderFormattedMarkdown } from '../../core/text/markdownRenderer';
 
 interface Props {
   block: StructuredReferenceBlock;
   isEditMode?: boolean;
+  slideTitle?: string;
   onChange?: (updated: StructuredReferenceBlock) => void;
+  onRemove?: () => void;
 }
 
 export const StructuredReferenceRenderer: React.FC<Props> = ({
   block,
   isEditMode = false,
+  slideTitle,
   onChange,
 }) => {
   const [newColHeader, setNewColHeader] = useState('');
@@ -75,6 +79,10 @@ export const StructuredReferenceRenderer: React.FC<Props> = ({
     onChange({ ...block, columns: nextCols });
   };
 
+  const showTitle = Boolean(
+    block.title && (!slideTitle || block.title.trim().toLowerCase() !== slideTitle.trim().toLowerCase())
+  );
+
   return (
     <div className="bg-white border border-slate-200/90 rounded-2xl p-5 h-full flex flex-col shadow-xs overflow-hidden">
       {/* Header with Title and Query Badge */}
@@ -92,9 +100,11 @@ export const StructuredReferenceRenderer: React.FC<Props> = ({
               className="flex-1 text-base font-bold text-slate-900 bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 outline-none focus:border-indigo-500 focus:bg-white transition"
             />
           ) : (
-            <h3 className="text-base font-bold text-slate-900 truncate">
-              {block.title || 'Cuadro de Referencia'}
-            </h3>
+            showTitle && (
+              <h3 className="text-base font-bold text-slate-900 truncate">
+                {block.title}
+              </h3>
+            )
           )}
         </div>
 
@@ -162,7 +172,7 @@ export const StructuredReferenceRenderer: React.FC<Props> = ({
                     />
                   ) : (
                     <span className="inline-block text-xs font-bold tracking-wide text-indigo-950 bg-indigo-100/60 border border-indigo-200/60 px-2.5 py-1 rounded-lg">
-                      {col.header}
+                      {renderFormattedMarkdown(col.header)}
                     </span>
                   )}
 
@@ -195,7 +205,7 @@ export const StructuredReferenceRenderer: React.FC<Props> = ({
                         />
                       ) : (
                         <span className="flex-1 font-medium leading-relaxed select-text">
-                          {item}
+                          {renderFormattedMarkdown(item)}
                         </span>
                       )}
 
