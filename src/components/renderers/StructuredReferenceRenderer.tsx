@@ -240,8 +240,8 @@ export const StructuredReferenceRenderer: React.FC<Props> = ({
         )}
       </div>
 
-      {/* Optional Footnote / Caption */}
-      {block.caption && (
+      {/* Optional Footnote / Caption (only when no columns exist) */}
+      {block.caption && columns.length === 0 && (
         <div className="mt-3 pt-2.5 border-t border-slate-100 text-[11px] text-slate-500 italic">
           {block.caption}
         </div>

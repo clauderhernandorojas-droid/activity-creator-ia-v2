@@ -2,10 +2,16 @@ import React from 'react';
 import { useLessonStore } from '../store/useLessonStore';
 import { useSessionStore } from '../store/useSessionStore';
 import { INTERACTION_RENDERER_REGISTRY, REFERENCE_RENDERER_REGISTRY } from './renderers/registry';
+import { StructuredReferenceRenderer } from './renderers/StructuredReferenceRenderer';
+import { TextReferenceRenderer } from './renderers/TextReferenceRenderer';
 import { SlideErrorBoundary } from './common/SlideErrorBoundary';
 import confetti from 'canvas-confetti';
-import type { PedagogicalRole } from '../core/ai/payloadMapper';
-import type { ReferenceMediaBlock } from '../types/schema';
+import { 
+  type PedagogicalRole,
+  parseHierarchicalReference,
+  parseStructuredReferenceColumns 
+} from '../core/ai/payloadMapper';
+import type { ReferenceBlock, ReferenceMediaBlock, StructuredReferenceBlock } from '../types/schema';
 import { renderFormattedMarkdown } from '../core/text/markdownRenderer';
 import { isSubstantialTextOverlap, isConcatenationOfItems } from '../core/text/textDeduplication';
 import { ReferenceImageModal } from './modals/ReferenceImageModal';
@@ -124,18 +130,73 @@ export const Canvas: React.FC = () => {
   }
 
   const isEditMode = mode === 'edit';
+
+  // Dynamic resolution for reference content:
+  // If the persisted block is not explicitly 'reference_table' (e.g. 'reference_text' or 'text'),
+  // dynamically execute parseStructuredReferenceColumns on its text content.
+  // If 2 or more valid clusters with subordinate items exist, promote directly to StructuredReferenceBlock
+  // and instantiate StructuredReferenceRenderer. Otherwise fallback to TextReferenceRenderer.
+  const effectiveReferenceBlock: ReferenceBlock | null = (() => {
+    const ref = currentSlide.referenceContent;
+    if (!ref) return null;
+
+    if (ref.type === 'reference_table') {
+      return ref;
+    }
+
+    if (ref.type === 'table_reference' || ref.type === 'media') {
+      return ref;
+    }
+
+    const rawText = typeof (ref as any).content === 'string'
+      ? (ref as any).content
+      : Array.isArray((ref as any).paragraphs)
+      ? (ref as any).paragraphs.join('\n\n')
+      : typeof (ref as any).rawText === 'string'
+      ? (ref as any).rawText
+      : '';
+
+    if (rawText && rawText.trim().length > 0) {
+      const parsedHierarchical = parseHierarchicalReference(rawText);
+      const parsedCols = parseStructuredReferenceColumns(rawText);
+      const validClusters = parsedCols.filter(
+        (col) => col && Array.isArray(col.items) && col.items.length > 0
+      );
+
+      if (validClusters.length >= 2) {
+        const extractedTitle =
+          parsedHierarchical.title ||
+          ref.title ||
+          currentSlide.title ||
+          'Cuadro de Referencia';
+
+        const promotedBlock: StructuredReferenceBlock = {
+          type: 'reference_table',
+          id: ref.id,
+          title: extractedTitle,
+          instruction: (ref as any).instruction || '',
+          columns: validClusters,
+        };
+        return promotedBlock;
+      }
+    }
+
+    return ref;
+  })();
+
   const hasReference = Boolean(
-    currentSlide.referenceContent && (
-      (currentSlide.referenceContent.type === 'text' && currentSlide.referenceContent.content?.trim().length > 0) ||
-      (currentSlide.referenceContent.type === 'reference_table' && currentSlide.referenceContent.columns?.length > 0) ||
-      (currentSlide.referenceContent.type === 'table_reference' && currentSlide.referenceContent.rows?.length > 0) ||
-      (currentSlide.referenceContent.type === 'media' && currentSlide.referenceContent.url?.trim().length > 0)
+    effectiveReferenceBlock && (
+      (effectiveReferenceBlock.type === 'text' && effectiveReferenceBlock.content?.trim().length > 0) ||
+      ((effectiveReferenceBlock.type as string) === 'reference_text' && (effectiveReferenceBlock as any).content?.trim().length > 0) ||
+      (effectiveReferenceBlock.type === 'reference_table' && effectiveReferenceBlock.columns?.length > 0) ||
+      (effectiveReferenceBlock.type === 'table_reference' && effectiveReferenceBlock.rows?.length > 0) ||
+      (effectiveReferenceBlock.type === 'media' && effectiveReferenceBlock.url?.trim().length > 0)
     )
   );
   const isImageReference = Boolean(
-    currentSlide.referenceContent &&
-    currentSlide.referenceContent.type === 'media' &&
-    currentSlide.referenceContent.mediaType === 'image'
+    effectiveReferenceBlock &&
+    effectiveReferenceBlock.type === 'media' &&
+    effectiveReferenceBlock.mediaType === 'image'
   );
   const hasInteraction = Boolean(currentSlide.interaction);
 
@@ -177,14 +238,14 @@ export const Canvas: React.FC = () => {
   };
 
   const getReferenceButtonLabel = () => {
-    if (!currentSlide.referenceContent) return 'Consultar Referencia';
-    switch (currentSlide.referenceContent.type) {
+    if (!effectiveReferenceBlock) return 'Consultar Referencia';
+    switch (effectiveReferenceBlock.type) {
       case 'reference_table':
         return 'Consultar Cuadro de Vocabulario / Gramática';
       case 'table_reference':
         return 'Consultar Tabla Gramatical';
       case 'media':
-        return currentSlide.referenceContent.mediaType === 'image'
+        return effectiveReferenceBlock.mediaType === 'image'
           ? 'Consultar Imagen de Apoyo'
           : 'Consultar Audio / Transcripción';
       default:
@@ -207,21 +268,26 @@ export const Canvas: React.FC = () => {
           return 'interaction_writing';
       }
     }
-    if (currentSlide.referenceContent) {
-      if (currentSlide.referenceContent.type === 'reference_table' || currentSlide.referenceContent.type === 'table_reference') return 'reference_table';
+    if (effectiveReferenceBlock) {
+      if (effectiveReferenceBlock.type === 'reference_table' || effectiveReferenceBlock.type === 'table_reference') return 'reference_table';
       return 'reference_text';
     }
     return 'interaction_inputs';
   })();
 
-  // Resolve renderers from registry
+  // Resolve renderers from registry with dynamic fallback
   const InteractionComponent = currentSlide.interaction
     ? INTERACTION_RENDERER_REGISTRY[currentSlide.interaction.type]
     : null;
 
-  const ReferenceComponent = currentSlide.referenceContent
-    ? REFERENCE_RENDERER_REGISTRY[currentSlide.referenceContent.type]
-    : null;
+  const ReferenceComponent: React.ComponentType<any> | null = (() => {
+    if (!effectiveReferenceBlock) return null;
+    if (effectiveReferenceBlock.type === 'reference_table') {
+      return StructuredReferenceRenderer;
+    }
+    const resolved = REFERENCE_RENDERER_REGISTRY[effectiveReferenceBlock.type];
+    return resolved || TextReferenceRenderer;
+  })();
 
   // Check if slide subtitle is redundant with slide title or interaction content
   const isSubtitleRedundant = (() => {
@@ -491,7 +557,7 @@ export const Canvas: React.FC = () => {
                   </div>
 
                   <ReferenceComponent
-                    block={currentSlide.referenceContent}
+                    block={effectiveReferenceBlock as any}
                     isEditMode={isEditMode}
                     slideTitle={currentSlide.title}
                     onChange={(updated: any) => updateReferenceBlock(currentSlide.id, updated)}
@@ -526,7 +592,7 @@ export const Canvas: React.FC = () => {
             ) : hasReference && ReferenceComponent ? (
               /* If slide is purely reference, render reference on main stage */
               <ReferenceComponent
-                block={currentSlide.referenceContent}
+                block={effectiveReferenceBlock as any}
                 isEditMode={isEditMode}
                 slideTitle={currentSlide.title}
                 onChange={(updated: any) => updateReferenceBlock(currentSlide.id, updated)}

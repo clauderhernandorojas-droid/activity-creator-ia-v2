@@ -13,6 +13,7 @@ export const REFERENCE_RENDERER_REGISTRY: Record<string, ComponentType<any>> = {
   table_reference: TableReferenceRenderer,
   reference_table: StructuredReferenceRenderer,
   text: TextReferenceRenderer,
+  reference_text: TextReferenceRenderer,
   media: MediaReferenceRenderer,
 };
 

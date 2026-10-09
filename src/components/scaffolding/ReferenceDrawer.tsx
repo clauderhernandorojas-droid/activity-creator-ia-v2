@@ -1,30 +1,69 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { useSessionStore } from '../../store/useSessionStore';
 import { useLessonStore } from '../../store/useLessonStore';
 import { REFERENCE_RENDERER_REGISTRY } from '../renderers/registry';
+import { StructuredReferenceRenderer } from '../renderers/StructuredReferenceRenderer';
+import { TextReferenceRenderer } from '../renderers/TextReferenceRenderer';
 import { SlideErrorBoundary } from '../common/SlideErrorBoundary';
 import { BookOpen, X } from 'lucide-react';
+import { parseHierarchicalReference, parseStructuredReferenceColumns } from '../../core/ai/payloadMapper';
+import type { ReferenceBlock, StructuredReferenceBlock } from '../../types/schema';
 
 export const ReferenceDrawer: React.FC = () => {
   const { currentSlideId, isReferenceDrawerOpen, setIsReferenceDrawerOpen, mode } = useSessionStore();
   const { lesson, updateReferenceBlock } = useLessonStore();
 
   const currentSlide = lesson.slides.find((s) => s.id === currentSlideId);
-  const reference = currentSlide?.referenceContent;
+  const rawReference = currentSlide?.referenceContent;
 
-  if (!isReferenceDrawerOpen || !reference) return null;
+  const effectiveReference: ReferenceBlock | null = useMemo(() => {
+    if (!rawReference) return null;
+    if (rawReference.type === 'reference_table' || rawReference.type === 'table_reference' || rawReference.type === 'media') {
+      return rawReference;
+    }
+    const rawText = typeof (rawReference as any).content === 'string'
+      ? (rawReference as any).content
+      : Array.isArray((rawReference as any).paragraphs)
+      ? (rawReference as any).paragraphs.join('\n\n')
+      : typeof (rawReference as any).rawText === 'string'
+      ? (rawReference as any).rawText
+      : '';
 
-  const Renderer = REFERENCE_RENDERER_REGISTRY[reference.type];
+    if (rawText && rawText.trim().length > 0) {
+      const parsedHierarchical = parseHierarchicalReference(rawText);
+      const parsedCols = parseStructuredReferenceColumns(rawText);
+      const validClusters = parsedCols.filter(
+        (col) => col && Array.isArray(col.items) && col.items.length > 0
+      );
+      if (validClusters.length >= 2) {
+        const promoted: StructuredReferenceBlock = {
+          type: 'reference_table',
+          id: rawReference.id,
+          title: parsedHierarchical.title || rawReference.title || currentSlide?.title || 'Cuadro de Referencia',
+          instruction: (rawReference as any).instruction || '',
+          columns: validClusters,
+        };
+        return promoted;
+      }
+    }
+    return rawReference;
+  }, [rawReference, currentSlide?.title]);
+
+  if (!isReferenceDrawerOpen || !effectiveReference || !currentSlide) return null;
+
+  const Renderer: React.ComponentType<any> = effectiveReference.type === 'reference_table'
+    ? StructuredReferenceRenderer
+    : (REFERENCE_RENDERER_REGISTRY[effectiveReference.type] || TextReferenceRenderer);
   const isEditMode = mode === 'edit';
 
   const getDrawerTitle = () => {
-    switch (reference.type) {
+    switch (effectiveReference.type) {
       case 'reference_table':
         return 'Cuadro de Vocabulario / Consulta';
       case 'table_reference':
         return 'Tabla Gramatical de Consulta';
       case 'media':
-        return reference.mediaType === 'image'
+        return effectiveReference.mediaType === 'image'
           ? 'Material Visual de Consulta'
           : 'Audio y Transcripción (Listening)';
       default:
@@ -72,13 +111,13 @@ export const ReferenceDrawer: React.FC = () => {
           <SlideErrorBoundary fallbackTitle="Error al cargar el material de consulta">
             {Renderer ? (
               <Renderer
-                block={reference}
+                block={effectiveReference as any}
                 isEditMode={isEditMode}
                 onChange={(updated: any) => updateReferenceBlock(currentSlide.id, updated)}
               />
             ) : (
               <p className="text-xs text-slate-500">
-                Tipo de referencia no reconocido: {reference.type}
+                Tipo de referencia no reconocido: {effectiveReference.type}
               </p>
             )}
           </SlideErrorBoundary>
