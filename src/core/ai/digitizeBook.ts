@@ -326,7 +326,7 @@ const STRUCTURED_EXTRACTION_SCHEMA = {
     title: { type: 'string', description: 'Concise formal activity title (e.g. "Speaking: Tell other students about yourself")' },
     instruction: {
       type: 'string',
-      description: 'The explicit pedagogical directive, task instruction, or rubric prompt present in the clipping (e.g. "Work in groups. Tell other students about yourself. Use the phrases from 1 or your own ideas"). MUST NEVER BE EMPTY if the image contains an instructional order or directive. For multi-stage directives (phases a, b, c, d), preserve clean structured formatting with double linebreaks and bold headers: "**a)** ... \n\n **b)** ..."'
+      description: 'The explicit pedagogical directive, task instruction, or rubric prompt present in the clipping (e.g. "Work in groups. Tell other students about yourself. Use the phrases from 1 or your own ideas"). MUST NEVER BE EMPTY if the image contains an instructional order or directive. For multi-stage directives (phases a, b, c, d), preserve clean structured formatting with double linebreaks and bold headers: "**a)** ... \n\n **b)** ...". Cuando un ejercicio de producción presente un paso inicial de redacción (a) seguido de una fase de interacción, discusión o trabajo en pares/grupos (b), la fase inicial debe poblar "instruction" y la fase subsiguiente de discusión debe poblar exclusivamente "followUpPrompt".'
     },
     isGraded: {
       type: 'boolean',
@@ -342,7 +342,7 @@ const STRUCTURED_EXTRACTION_SCHEMA = {
     },
     followUpPrompt: {
       type: 'string',
-      description: 'Communicative follow-up directive, speaking practice, or oral closing task (e.g. subsection "c: Ask each other the questions" or "c: Work in pairs. Ask and answer"). NEVER concatenate subsections a, b, and c into a single string in title or instruction. Omit or empty string if no follow-up task.'
+      description: 'Communicative follow-up directive, speaking practice, or peer discussion task (e.g. subsection "b: Work in pairs. Ask each other questions" or "c: Work in pairs. Ask and answer"). Cuando un ejercicio de producción presente un paso inicial de redacción (a) seguido de una fase de interacción, discusión o trabajo en pares/grupos (b), la fase inicial debe poblar "instruction" y la fase subsiguiente de discusión debe poblar exclusivamente "followUpPrompt". NUNCA concatenes ambos incisos en una sola cadena en "instruction". Omit or empty string if no follow-up task.'
     },
     visualImageIndices: {
       type: 'array',
@@ -522,6 +522,11 @@ REGLAS UNIVERSALES DE BANCO DE OPCIONES Y ASIGNACIÓN BIUNÍVOCA:
     4. Asignar la consigna central a 'instruction' y el enunciado a 'prompt'.
     5. 'referenceContent' se mantiene en null a menos que exista un texto de lectura autónomo externo que el alumno deba consultar.
     6. 'isGraded': false (la redacción se evalúa de forma formativa con retroalimentación IA en lugar de calificación fija).
+- REGLA DE PARTICIÓN DE INSTRUCCIONES MULTIFASE EN TAREAS DE PRODUCCIÓN (WritingBlock):
+  * Cuando un ejercicio de producción presente un paso inicial de redacción (a) seguido de una fase de interacción, discusión o trabajo en pares/grupos (b):
+    1. La fase inicial de redacción (inciso a) debe poblar exclusivamente 'instruction'.
+    2. La fase subsiguiente de discusión, revisión o puesta en común en pares (inciso b o c) debe poblar estrictamente 'followUpPrompt'.
+    3. NUNCA concatenes ambos incisos en una sola cadena en 'instruction'. Desacopla ambas fases para que la consigna de escritura no contenga el texto del follow-up.
 - PRINCIPIO DIDÁCTICO DE PRODUCCIÓN ABIERTA ("Write N items using these ideas / prompts"):
   * Cuando la consigna instruya al estudiante a redactar un número específico de preguntas u oraciones a partir de una lista de tópicos/ideas sugeridas (ej. "Write ten questions. Use these ideas...", "Make eight sentences about..."):
     1. TÓPICOS DE APOYO: Mapea la lista de ideas/tópicos (ej. "personal details, family, work/study, hobbies, free time") a 'wordBank' o a la descripción/instrucción del bloque. NUNCA los extraigas como 'referenceContent' (lo que abriría un panel lateral espurio) ni como enunciados ('prompt') individuales de cada ítem de pregunta.
@@ -1052,6 +1057,94 @@ export function formatMultiStageDirectives(text: string): string {
 }
 
 /**
+ * Partitioned result of a multi-phase writing directive.
+ */
+export interface PartitionedWritingInstruction {
+  instruction: string;
+  followUpPrompt?: string;
+}
+
+/**
+ * Hierarchical Consign Partitioning for Writing Activities:
+ * Parses multi-phase sequential task instructions (e.g. inciso "a" for individual production,
+ * and subsequent inciso "b" or "c" for peer interaction, pair discussion, or class presentation).
+ *
+ * Rules:
+ * 1. Assigns the first stage / inciso to `instruction`.
+ * 2. Extracts the subsequent stage (inciso "b", "c", "2") to `followUpPrompt`.
+ * 3. Removes the extracted follow-up text from the main `instruction` string to prevent duplication
+ *    and ensure decoupling of data.
+ */
+export function partitionWritingInstruction(
+  rawInstruction: string | null | undefined,
+  existingFollowUp?: string | null
+): PartitionedWritingInstruction {
+  if (!rawInstruction || !rawInstruction.trim()) {
+    return {
+      instruction: rawInstruction || '',
+      followUpPrompt: existingFollowUp ? existingFollowUp.trim() : undefined,
+    };
+  }
+
+  let text = rawInstruction.trim();
+  let followUp = existingFollowUp ? existingFollowUp.trim() : undefined;
+
+  // 1. If an existing followUpPrompt was provided, strip it from instruction along with any leading inciso marker
+  if (followUp) {
+    const escaped = followUp.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const withMarkerRegex = new RegExp(
+      `(?:(?:\\r?\\n)+|\\s+)*(?:\\*{0,2}(?:\\([b-dB-D2-4]\\)|[b-dB-D2-4][).:]|\\([b-dB-D2-4]\\)[.:]?)\\*{0,2}\\s*)?${escaped}`,
+      'i'
+    );
+    if (withMarkerRegex.test(text)) {
+      text = text.replace(withMarkerRegex, '').trim();
+    } else if (text.includes(followUp)) {
+      text = text.replace(followUp, '').trim();
+    }
+  }
+
+  // 2. Sequential Marker Partitioning:
+  // Detect transitions to subsequent phases: e.g. "b)", "b.", "(b)", "**b)**", "2)", "2.", "c)"
+  const phaseBoundaryRegex = /(?:(?:\r?\n)+\s*|(?<=[.!?])\s+|\s{2,})(?:\*{0,2}(?:\([b-dB-D2-4]\)[.:]?|[b-dB-D2-4][).:])\*{0,2})\s+/i;
+  const match = text.match(phaseBoundaryRegex);
+
+  if (match && match.index !== undefined) {
+    const firstPart = text.slice(0, match.index).trim();
+    const secondPart = text.slice(match.index + match[0].length).trim();
+
+    if (firstPart.length > 0 && secondPart.length > 0) {
+      text = firstPart;
+      if (!followUp) {
+        followUp = secondPart;
+      }
+    }
+  }
+
+  // 3. Communicative Interaction Trigger Partitioning (Fallback):
+  // Triggers like "Work in pairs", "Discuss in pairs", "Ask each other", "Read your partner's"
+  if (!followUp) {
+    const communicativeTriggerRegex = /(?:(?:\r?\n)+\s*|(?<=[.!?])\s+)(?:\*{0,2}(?:[b-dB-D2-4][).:]?|\([b-dB-D2-4]\))\*{0,2}\s*)?(Work in pairs\b|In pairs\b|Discuss (?:in pairs|with a partner|with each other)\b|Ask (?:each other|your partner)\b|Share (?:with|your)\b|Read your partner\b|Compare (?:with|your answers)\b|Tell (?:your partner|the class)\b)/i;
+    const commMatch = text.match(communicativeTriggerRegex);
+    if (commMatch && commMatch.index !== undefined) {
+      const firstPart = text.slice(0, commMatch.index).trim();
+      const secondPart = text.slice(commMatch.index).replace(/^(?:(?:\r?\n)+\s*|(?<=[.!?])\s+)(?:\*{0,2}(?:[b-dB-D2-4][).:]?|\([b-dB-D2-4]\))\*{0,2}\s*)?/i, '').trim();
+      if (firstPart.length > 0 && secondPart.length > 0) {
+        text = firstPart;
+        followUp = secondPart;
+      }
+    }
+  }
+
+  // Final cleanup of trailing markers or punctuation from instruction
+  text = text.replace(/(?:(?:\r?\n)+\s*|\s+)(?:\*{0,2}(?:\([b-dB-D2-4]\)[.:]?|[b-dB-D2-4][).:])\*{0,2})\s*$/i, '').trim();
+
+  return {
+    instruction: text,
+    followUpPrompt: followUp && followUp.length > 0 ? followUp : undefined,
+  };
+}
+
+/**
  * Evaluates whether text is a genuine autonomous reading passage
  * (article, narrative story, multi-turn dialogue, or full grammar reference table)
  * rather than a vocabulary list, idea bank, solved example, or instruction.
@@ -1354,7 +1447,14 @@ function sanitizeExtractedPayload(payload: ExtractedStructuredPayload): Extracte
       }
     }
 
-    // If there is a pair work, speaking discussion or follow-up step among guidelines or instruction, populate followUpPrompt
+    // Partition multi-phase instruction (e.g. a -> instruction, b -> followUpPrompt)
+    const partitioned = partitionWritingInstruction(instruction, followUpPrompt);
+    instruction = partitioned.instruction;
+    if (partitioned.followUpPrompt) {
+      followUpPrompt = partitioned.followUpPrompt;
+    }
+
+    // If there is still a pair work or speaking discussion step among guidelines, populate followUpPrompt
     if (!followUpPrompt) {
       const followUpRegex = /\b(?:work in pairs|discuss in pairs|ask each other|share (?:with|your)|read your partner|compare with|tell your partner)\b/i;
       const followUpIndex = finalGuidelines.findIndex((g) => followUpRegex.test(g));
@@ -1362,7 +1462,7 @@ function sanitizeExtractedPayload(payload: ExtractedStructuredPayload): Extracte
         followUpPrompt = finalGuidelines[followUpIndex];
         // Retain in guidelines if guidelines are few, or let followUpPrompt display it distinctly
       } else {
-        const promptFollowUpMatch = `${rawInstruction}\n${cleanedRawRef || ''}`.match(/(?:^|\n|[;.]\s*)(?:\*{0,2}\(?[c-fC-F][).:]\*{0,2}\s*)([^\n]+(?:pair|discuss|partner|class|share|ask)[^\n]*)/i);
+        const promptFollowUpMatch = `${instruction}\n${cleanedRawRef || ''}`.match(/(?:^|\n|[;.]\s*)(?:\*{0,2}\(?[c-fC-F][).:]\*{0,2}\s*)([^\n]+(?:pair|discuss|partner|class|share|ask)[^\n]*)/i);
         if (promptFollowUpMatch && promptFollowUpMatch[1]?.trim()) {
           followUpPrompt = promptFollowUpMatch[1].trim();
         }

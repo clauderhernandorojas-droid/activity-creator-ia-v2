@@ -21,7 +21,17 @@ import type {
 } from '../../types/schema';
 import { generateGrammarVariants } from '../evaluators/fillBlankValidator';
 import { isDuplicateReferenceContent, isSyntheticPedagogicalText, isConcatenationOfItems } from '../text/textDeduplication';
-import { stripMetaComments, stripLeadingDuplicateTitle, stripPredictiveSpoilers, extractSentenceDistractors, isAutonomousReadingContent } from './digitizeBook';
+import { 
+  stripMetaComments, 
+  stripLeadingDuplicateTitle, 
+  stripPredictiveSpoilers, 
+  extractSentenceDistractors, 
+  isAutonomousReadingContent,
+  partitionWritingInstruction,
+  type PartitionedWritingInstruction
+} from './digitizeBook';
+
+export { partitionWritingInstruction, type PartitionedWritingInstruction };
 
 export type PedagogicalRole = 
   | 'interaction_inputs' 
@@ -565,13 +575,20 @@ export function mapBlockToSequence(block: ExtractedBlock): SequenceBlock {
   };
 }
 
+
 /**
  * Pure 1:1 Universal Mapper for Writing Block (Free production & formative feedback)
  */
 export function mapBlockToWriting(block: ExtractedBlock): WritingBlock {
   const parsed = block.parsedData || {};
   const id = block.id ? `wri-${block.id.replace(/^[a-z]+-/, '')}` : generateId('inter-wri');
-  const instruction = parsed.instruction || 'Redacta tu texto siguiendo las pautas:';
+  const rawInstruction = parsed.instruction || 'Redacta tu texto siguiendo las pautas:';
+  const existingFollowUp = parsed.followUpPrompt ? String(parsed.followUpPrompt).trim() : undefined;
+
+  // Hierarchical partitioning of multi-phase instructions
+  const partitioned = partitionWritingInstruction(rawInstruction, existingFollowUp);
+  const instruction = partitioned.instruction || 'Redacta tu texto siguiendo las pautas:';
+  const followUpPrompt = partitioned.followUpPrompt;
 
   // Extract central prompt
   let prompt = parsed.prompt || '';
@@ -584,6 +601,8 @@ export function mapBlockToWriting(block: ExtractedBlock): WritingBlock {
     } else {
       prompt = instruction;
     }
+  } else if (followUpPrompt && prompt.includes(followUpPrompt)) {
+    prompt = prompt.replace(followUpPrompt, '').trim();
   }
 
   // Extract guidelines
@@ -621,7 +640,7 @@ export function mapBlockToWriting(block: ExtractedBlock): WritingBlock {
     evaluationRubric,
     verificationAudioUrl: parsed.verificationAudioUrl || undefined,
     audioLabel: parsed.audioLabel || undefined,
-    followUpPrompt: parsed.followUpPrompt || undefined,
+    followUpPrompt: followUpPrompt || undefined,
   };
 }
 

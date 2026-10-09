@@ -5,6 +5,7 @@ import { evaluateWriting, type WritingFeedback } from '../../core/ai/evaluateWri
 import { VerificationAudioPlayer } from '../common/VerificationAudioPlayer';
 import { renderFormattedMarkdown } from '../../core/text/markdownRenderer';
 import { isSubstantialTextOverlap, isConcatenationOfItems } from '../../core/text/textDeduplication';
+import { partitionWritingInstruction } from '../../core/ai/payloadMapper';
 import { 
   Sparkles, 
   CheckCircle2, 
@@ -55,28 +56,63 @@ export const WritingRenderer: React.FC<Props> = ({
     };
   }, [currentText]);
 
+  // Dynamic extraction/isolation of followUpPrompt if present on block or embedded in multi-phase instruction
+  const effectiveFollowUpPrompt = useMemo(() => {
+    if (block.followUpPrompt && block.followUpPrompt.trim()) {
+      return block.followUpPrompt.trim();
+    }
+    const partitioned = partitionWritingInstruction(block.instruction);
+    return partitioned.followUpPrompt || undefined;
+  }, [block.followUpPrompt, block.instruction]);
+
+  // Clean up instruction so that if followUpPrompt exists, the main header instruction NEVER contains the follow-up text
+  const displayInstruction = useMemo(() => {
+    let raw = block.instruction?.trim() || 'Escribe tu redacción';
+
+    const followUp = effectiveFollowUpPrompt;
+    if (followUp) {
+      if (raw.includes(followUp)) {
+        raw = raw.replace(followUp, '').trim();
+      }
+      const escaped = followUp.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const withMarkerRegex = new RegExp(
+        `(?:(?:\\r?\\n)+|\\s+)*(?:\\*{0,2}(?:\\([b-dB-D2-4]\\)[.:]?|[b-dB-D2-4][).:])\\*{0,2}\\s*)?${escaped}`,
+        'i'
+      );
+      raw = raw.replace(withMarkerRegex, '').trim();
+      raw = raw.replace(/(?:(?:\r?\n)+\s*|\s+)(?:\*{0,2}(?:\([b-dB-D2-4]\)[.:]?|[b-dB-D2-4][).:])\*{0,2})\s*$/i, '').trim();
+    }
+
+    if (block.guidelines && block.guidelines.length > 0 && isConcatenationOfItems(raw, block.guidelines, 0.6)) {
+      return 'Redacta tu texto siguiendo las pautas indicadas:';
+    }
+    return raw || 'Escribe tu redacción';
+  }, [block.instruction, block.guidelines, effectiveFollowUpPrompt]);
+
+  // Clean prompt so it doesn't contain follow-up text or overlap with instruction
+  const displayPrompt = useMemo(() => {
+    if (!block.prompt?.trim()) return '';
+    let p = block.prompt.trim();
+    const followUp = effectiveFollowUpPrompt;
+    if (followUp && p.includes(followUp)) {
+      p = p.replace(followUp, '').trim();
+    }
+    return p;
+  }, [block.prompt, effectiveFollowUpPrompt]);
+
   // Check if prompt is redundant with instruction or is merely concatenating guidelines
   const isPromptRedundant = useMemo(() => {
-    if (!block.prompt?.trim()) return true;
-    if (block.instruction && isSubstantialTextOverlap(block.prompt, block.instruction, 0.65)) {
+    if (!displayPrompt.trim()) return true;
+    if (displayInstruction && isSubstantialTextOverlap(displayPrompt, displayInstruction, 0.65)) {
       return true;
     }
     if (block.guidelines && block.guidelines.length > 0) {
-      if (isConcatenationOfItems(block.prompt, block.guidelines, 0.55)) {
+      if (isConcatenationOfItems(displayPrompt, block.guidelines, 0.55)) {
         return true;
       }
     }
     return false;
-  }, [block.prompt, block.instruction, block.guidelines]);
-
-  // If instruction itself is a raw concatenation of guidelines, clean it up
-  const displayInstruction = useMemo(() => {
-    const raw = block.instruction?.trim() || 'Escribe tu redacción';
-    if (block.guidelines && block.guidelines.length > 0 && isConcatenationOfItems(raw, block.guidelines, 0.6)) {
-      return 'Redacta tu texto siguiendo las pautas indicadas:';
-    }
-    return raw;
-  }, [block.instruction, block.guidelines]);
+  }, [displayPrompt, displayInstruction, block.guidelines]);
 
   // Handle student text typing
   const handleTextChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -230,9 +266,9 @@ export const WritingRenderer: React.FC<Props> = ({
                   <h3 className="text-base sm:text-lg font-bold text-slate-900 leading-snug">
                     {renderFormattedMarkdown(displayInstruction)}
                   </h3>
-                  {block.prompt && !isPromptRedundant && (
+                  {displayPrompt && !isPromptRedundant && (
                     <p className="text-sm font-medium text-slate-600 mt-1 leading-relaxed">
-                      {renderFormattedMarkdown(block.prompt)}
+                      {renderFormattedMarkdown(displayPrompt)}
                     </p>
                   )}
                 </div>
@@ -409,7 +445,7 @@ export const WritingRenderer: React.FC<Props> = ({
         </div>
 
         {/* Complementary Follow-Up / Pair Work Activity Section */}
-        {((block.followUpPrompt && block.followUpPrompt.trim().length > 0) || isEditMode) && (
+        {((Boolean(effectiveFollowUpPrompt) && effectiveFollowUpPrompt!.trim().length > 0) || isEditMode) && (
           <div className="mt-4 pt-3.5 border-t border-slate-100">
             <div className="bg-gradient-to-r from-purple-50/70 to-indigo-50/50 border border-purple-200/80 rounded-xl p-3.5 space-y-2 shadow-2xs">
               <div className="flex items-center justify-between">
@@ -426,7 +462,7 @@ export const WritingRenderer: React.FC<Props> = ({
 
               {isEditMode ? (
                 <textarea
-                  value={block.followUpPrompt || ''}
+                  value={block.followUpPrompt || effectiveFollowUpPrompt || ''}
                   placeholder="Ej. Work in pairs. Read your partner's profile and ask two follow-up questions..."
                   onChange={(e) => handleFieldChange('followUpPrompt', e.target.value)}
                   rows={2}
@@ -434,7 +470,7 @@ export const WritingRenderer: React.FC<Props> = ({
                 />
               ) : (
                 <div className="text-xs sm:text-sm text-slate-700 leading-relaxed font-medium pl-1">
-                  {renderFormattedMarkdown(block.followUpPrompt || '')}
+                  {renderFormattedMarkdown(effectiveFollowUpPrompt || '')}
                 </div>
               )}
             </div>
