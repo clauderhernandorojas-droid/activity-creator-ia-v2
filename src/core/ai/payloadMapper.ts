@@ -3,6 +3,8 @@ import type {
   ReferenceBlock,
   ReferenceTextBlock,
   ReferenceTableBlock,
+  StructuredReferenceBlock,
+  StructuredReferenceColumn,
   InteractionBlock,
   InputFieldsBlock,
   InputFieldTableCell,
@@ -624,7 +626,55 @@ export function mapBlockToWriting(block: ExtractedBlock): WritingBlock {
 }
 
 /**
- * Pure 1:1 Universal Mapper for Reference Table
+ * Pure 1:1 Universal Mapper for Structured Reference Block (Columns of Vocabulary / Grammar)
+ */
+export function mapBlockToStructuredReference(block: ExtractedBlock): StructuredReferenceBlock {
+  const parsed = block.parsedData || {};
+
+  // Check if structured tableData exists
+  let columns: StructuredReferenceColumn[] = [];
+  if (Array.isArray(parsed.tableData) && parsed.tableData.length > 0) {
+    columns = parsed.tableData.map((c: any) => ({
+      header: String(c.header || '').trim(),
+      items: Array.isArray(c.items) ? c.items.map((it: any) => String(it).trim()).filter(Boolean) : [],
+    }));
+  } else if (Array.isArray(parsed.columns) && parsed.columns.length > 0) {
+    columns = parsed.columns.map((c: any) => ({
+      header: String(c.header || '').trim(),
+      items: Array.isArray(c.items) ? c.items.map((it: any) => String(it).trim()).filter(Boolean) : [],
+    }));
+  } else if (Array.isArray(parsed.headers) && Array.isArray(parsed.rows) && parsed.headers.length > 0) {
+    // Transform headers and rows matrix into columns
+    columns = parsed.headers.map((hdr: string, cIdx: number) => ({
+      header: String(hdr || '').trim(),
+      items: parsed.rows
+        .map((r: any) => (Array.isArray(r) ? String(r[cIdx] || '').trim() : ''))
+        .filter(Boolean),
+    }));
+  }
+
+  if (columns.length === 0) {
+    columns = [
+      { header: 'Columna 1', items: ['Elemento 1', 'Elemento 2'] },
+      { header: 'Columna 2', items: ['Elemento A', 'Elemento B'] },
+    ];
+  }
+
+  return {
+    type: 'reference_table',
+    id: generateId('ref-tbl'),
+    title: parsed.title || 'Cuadro de Vocabulario / Referencia',
+    instruction: parsed.instruction || '',
+    columns,
+    caption: parsed.caption || parsed.referenceContent || undefined,
+    verificationAudioUrl: parsed.verificationAudioUrl || undefined,
+    audioLabel: parsed.audioLabel || undefined,
+    followUpPrompt: parsed.followUpPrompt || undefined,
+  };
+}
+
+/**
+ * Pure 1:1 Universal Mapper for Reference Table (2D Matrix fallback)
  */
 export function mapBlockToReferenceTable(block: ExtractedBlock): ReferenceTableBlock {
   const parsed = block.parsedData || {};
@@ -840,23 +890,25 @@ export function mapBlockToRole(
   );
 
   const hasTableContent = Boolean(
-    Array.isArray(parsed.headers) &&
-    Array.isArray(parsed.rows) &&
-    parsed.rows.length > 0
+    (Array.isArray(parsed.tableData) && parsed.tableData.length > 0) ||
+    (Array.isArray(parsed.columns) && parsed.columns.length > 0) ||
+    (Array.isArray(parsed.headers) &&
+      Array.isArray(parsed.rows) &&
+      parsed.rows.length > 0)
   );
 
   // For interactive roles, reference content is strictly prohibited from opening unless genuine reading text or grammar table exists
   const validInteractiveReference: ReferenceBlock | undefined = hasReadingContent
     ? (sanitizeReferenceBlock(mapBlockToReferenceText(block), block) as ReferenceBlock)
     : hasTableContent
-    ? mapBlockToReferenceTable(block)
+    ? mapBlockToStructuredReference(block)
     : undefined;
 
   switch (role) {
     case 'reference_text':
       return { reference: sanitizeReferenceBlock(mapBlockToReferenceText(block), block) as ReferenceBlock };
     case 'reference_table':
-      return { reference: mapBlockToReferenceTable(block) };
+      return { reference: mapBlockToStructuredReference(block) };
     case 'interaction_inputs': {
       const isIdentifyTask = /underline\b|circle\b|highlight\b|identify\b|subraya\b|encierra\b|marca\b/i.test(
         `${parsed.title || ''} ${parsed.instruction || ''}`

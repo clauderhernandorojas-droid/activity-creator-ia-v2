@@ -844,8 +844,13 @@ export const useLessonStore = create<LessonState>()(
                   }
                 }
 
+                const nextLayout = (refContent || slide.referenceContent) && (mapped.interaction || slide.interaction)
+                  ? 'split_50_50'
+                  : slide.layout;
+
                 return {
                   ...slide,
+                  layout: nextLayout,
                   ...(shouldUpdateTitle ? { title: blockTitle } : {}),
                   ...(shouldUpdateSubtitle ? { subtitle: blockInstruction } : {}),
                   ...(isGraded !== undefined ? { isGraded } : {}),

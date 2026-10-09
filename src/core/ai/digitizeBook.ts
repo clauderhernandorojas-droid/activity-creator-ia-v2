@@ -121,6 +121,14 @@ Present Perfect | already, yet, ever, never, so far | I have visited Rome twice.
       rows: [
         ['Past Simple', 'yesterday, in 2020, 2 days ago', 'I visited Rome last year.'],
         ['Present Perfect', 'already, yet, ever, never, so far', 'I have visited Rome twice.']
+      ],
+      tableData: [
+        { header: 'Past Simple', items: ['yesterday', 'in 2020', '2 days ago', 'I visited Rome last year.'] },
+        { header: 'Present Perfect', items: ['already', 'yet', 'ever', 'never', 'I have visited Rome twice.'] }
+      ],
+      columns: [
+        { header: 'Past Simple', items: ['yesterday', 'in 2020', '2 days ago', 'I visited Rome last year.'] },
+        { header: 'Present Perfect', items: ['already', 'yet', 'ever', 'never', 'I have visited Rome twice.'] }
       ]
     }
   },
@@ -397,6 +405,18 @@ const STRUCTURED_EXTRACTION_SCHEMA = {
       },
       description: '2D matrix of cells if the exercise is structured as a table or grid, otherwise omit or empty array'
     },
+    tableData: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          header: { type: 'string', description: 'Column header name or lexical category (e.g. "Verb", "Work Collocations", "Preposition")' },
+          items: { type: 'array', items: { type: 'string' }, description: 'Clean list of phrases, words, or expressions under this column' }
+        },
+        required: ['header', 'items']
+      },
+      description: 'Structured reference table, collocations chart, or vocabulary diagram (e.g. Work Collocations, Grammar reference table). Use this when the clipping contains lexical diagrams, ovals, grouped lists, preposition rules, or resolved vocabulary charts intended for consultation without questions to answer.'
+    },
     items: {
       type: 'array',
       items: {
@@ -585,8 +605,15 @@ UNIVERSAL TAXONOMY & STRICT CONTRACT:
     - Reserva 'verificationAudioUrl' con una ruta local o placeholder (ej. "/audio/R1.2.mp3").
     - Si no contiene referencias a audio de verificación, omite estos campos.
 11. "followUpPrompt": Si la actividad contiene directivas subdivididas en fases (a, b, c) con audio en b, asigna la instrucción de producción oral o cierre (c) (ej. "Ask each other the questions", "Compare in pairs", "Work in pairs. Ask and answer") estrictamente a este campo. NUNCA concatenes a, b y c en el título o en la instrucción principal.
+12. "tableData": REGLA ONTOLÓGICA DE REFERENCIA ESTRUCTURADA / CUADROS DE VOCABULARIO:
+    Si el recorte o material complementario contiene diagramas léxicos (óvalos de colocaciones, listas agrupadas por categorías, reglas preposicionales, tablas de vocabulario resuelto o cuadros gramaticales) destinados exclusivamente a la consulta y sin preguntas para responder por parte del estudiante:
+    - Extrae como estructura de datos en 'tableData': un arreglo de columnas { "header": string, "items": string[] } con los textos digitalizados limpios (eliminando tachones, subrayados o artefactos de escaneo).
+    - 'title': Título del glosario o cuadro (ej. "Work Collocations", "Prepositions of Place", "Tense Contrast").
+    - 'interactionType': "reference".
+    - PROHIBICIÓN ESTRICTA DE IMAGEN CRUDA: Si el contenido del diagrama fue completamente digitalizado en texto estructurado en 'tableData', 'visualImageIndices' DEBE ser [] (está estrictamente prohibido adjuntar la imagen recortada cruda como parche visual en el panel de consulta).
 
 CRITICAL NEGATIVE CONSTRAINTS:
+- NUNCA adjuntes la imagen cruda recortada en visualImageIndices si su contenido léxico o gramatical fue completamente digitalizado en texto estructurado en tableData.
 - NUNCA extraigas tópicos de apoyo conceptual (ideas/bullets como "personal details", "family", "work/study") como enunciados individuales de preguntas ni los envíes a 'referenceContent'. Mapea los tópicos a 'wordBank' y genera N ítems interactivos de respuesta abierta numerados ("1.", "2."...).
 - NUNCA extraigas listas de vocabulario, bancos de ideas, ejemplos resueltos (ej. '1 do / What / do / you ? What do you do?' o 'What do you do?') o consignas como 'referenceContent'. 'referenceContent' es exclusivamente para pasajes de lectura autónomos (artículos, historias o tablas gramaticales). Si no hay un texto de lectura real, 'referenceContent' DEBE ser estrictamente null para que la actividad ocupe el ancho completo de la diapositiva.
 - NUNCA concatenes directivas procedimentales multietapa (a, b, c, d) en un único párrafo continuo sin formato; debes estructurarlas en viñetas limpias con saltos de línea dobles y negritas ('**a)** ... \n\n **b)** ...').
@@ -814,9 +841,13 @@ function buildExtractedBlockFromPayload(
   // Filter genuine visual assets (photos, illustrations) using visualImageIndices
   const refWords = String(sanitized.referenceContent || '').trim().split(/\s+/).filter(Boolean).length;
   const isTranscribedReadingArticle = refWords >= 40;
+  const isStructuredTable = Array.isArray(sanitized.tableData) && sanitized.tableData.length > 0;
 
   let visualImages: string[] = [];
-  if (isTranscribedReadingArticle && rawImages.length <= 1) {
+  if (isStructuredTable) {
+    // Prohibit raw image if table/vocabulary diagram was fully digitized into structured tableData
+    visualImages = [];
+  } else if (isTranscribedReadingArticle && rawImages.length <= 1) {
     // Si sólo hay un recorte y se transcribió un artículo completo (>= 40 palabras),
     // ese recorte es la captura de la página del texto: NUNCA tratarlo como foto o estímulo visual
     visualImages = [];
@@ -850,7 +881,7 @@ function buildExtractedBlockFromPayload(
   ].filter(Boolean);
 
   const detectedType: ExtractedBlock['detectedType'] =
-    sanitized.tableRows && sanitized.tableRows.length > 0
+    isStructuredTable || (sanitized.tableRows && sanitized.tableRows.length > 0)
       ? 'table'
       : sanitized.interactionType === 'buckets'
       ? 'vocabulary'
@@ -883,6 +914,8 @@ function buildExtractedBlockFromPayload(
       items: sanitized.items,
       tableHeaders: sanitized.tableHeaders,
       tableRows: sanitized.tableRows,
+      tableData: sanitized.tableData,
+      columns: sanitized.tableData,
       isGraded: sanitized.isGraded !== undefined ? sanitized.isGraded : true,
       images: visualImages.length > 0 ? visualImages : undefined,
       imageUrl: visualImages[0] || undefined,
@@ -1471,6 +1504,16 @@ function sanitizeExtractedPayload(payload: ExtractedStructuredPayload): Extracte
     items: finalItems,
     tableHeaders,
     tableRows,
+    tableData: Array.isArray(payload.tableData) && payload.tableData.length > 0
+      ? payload.tableData
+          .map((col) => ({
+            header: String(col?.header || '').trim(),
+            items: Array.isArray(col?.items)
+              ? col.items.map((it) => String(it).trim()).filter(Boolean)
+              : [],
+          }))
+          .filter((col) => col.header.length > 0 || col.items.length > 0)
+      : undefined,
     isGraded: finalIsGraded,
     verificationAudioUrl: verificationAudioUrl || undefined,
     audioLabel: audioLabel || undefined,

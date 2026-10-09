@@ -251,6 +251,13 @@ export const OcrPanel: React.FC = () => {
       return 'interaction_writing';
     }
 
+    if (
+      (Array.isArray(pd.tableData) && pd.tableData.length > 0) ||
+      (Array.isArray(pd.columns) && pd.columns.length > 0)
+    ) {
+      return 'reference_table';
+    }
+
     if (pd.interactionType === 'reference' || activeBlock.detectedType === 'paragraph') {
       return 'reference_text';
     }
@@ -431,7 +438,7 @@ export const OcrPanel: React.FC = () => {
     { id: 'interaction_sequence', label: '4. Secuencia', icon: ListOrdered },
     { id: 'interaction_writing', label: '✍️ Redacción / Writing', icon: FileText },
     { id: 'reference_text', label: 'Texto de Lectura', icon: BookOpen },
-    { id: 'reference_table', label: 'Cuadro Gramatical', icon: Table },
+    { id: 'reference_table', label: 'Cuadro Gramatical / Referencia Estructurada', icon: Table },
   ];
 
   return (
@@ -963,8 +970,101 @@ export const OcrPanel: React.FC = () => {
                         </div>
                       )}
 
-                      {/* Table View */}
-                      {mappedPreview.reference?.type === 'table_reference' && mappedPreview.reference.rows.length > 0 ? (
+                      {/* Structured Reference Table View (Columns of Vocabulary / Collocations / Rules) */}
+                      {mappedPreview.reference?.type === 'reference_table' && mappedPreview.reference.columns.length > 0 ? (() => {
+                        const refTable = mappedPreview.reference;
+                        return (
+                          <div className="space-y-3">
+                            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2.5">
+                              {refTable.columns.map((col, colIdx) => (
+                                <div key={colIdx} className="bg-white border border-slate-200 rounded-xl p-2.5 space-y-2 shadow-2xs">
+                                  <div className="flex items-center justify-between border-b border-slate-100 pb-1.5">
+                                    <input
+                                      type="text"
+                                      value={col.header}
+                                      onChange={(e) => {
+                                        const nextCols = [...refTable.columns];
+                                        nextCols[colIdx] = { ...nextCols[colIdx], header: e.target.value };
+                                        updateExtractedBlock(activeBlock.id, {
+                                          parsedData: {
+                                            ...activeBlock.parsedData,
+                                            tableData: nextCols,
+                                            columns: nextCols,
+                                          },
+                                        });
+                                      }}
+                                      className="font-bold text-xs text-indigo-900 bg-slate-50 border border-slate-200 rounded px-2 py-0.5 outline-none focus:border-indigo-500 w-full"
+                                      placeholder="Encabezado..."
+                                    />
+                                  </div>
+                                  <div className="space-y-1">
+                                    {col.items.map((item, itemIdx) => (
+                                      <div key={itemIdx} className="flex items-center gap-1.5 bg-slate-50 border border-slate-200/70 rounded px-2 py-1">
+                                        <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 flex-shrink-0" />
+                                        <input
+                                          type="text"
+                                          value={item}
+                                          onChange={(e) => {
+                                            const nextCols = [...refTable.columns];
+                                            const nextItems = [...nextCols[colIdx].items];
+                                            nextItems[itemIdx] = e.target.value;
+                                            nextCols[colIdx] = { ...nextCols[colIdx], items: nextItems };
+                                            updateExtractedBlock(activeBlock.id, {
+                                              parsedData: {
+                                                ...activeBlock.parsedData,
+                                                tableData: nextCols,
+                                                columns: nextCols,
+                                              },
+                                            });
+                                          }}
+                                          className="text-xs text-slate-800 bg-transparent outline-none flex-1"
+                                        />
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            const nextCols = [...refTable.columns];
+                                            const nextItems = nextCols[colIdx].items.filter((_: string, idx: number) => idx !== itemIdx);
+                                            nextCols[colIdx] = { ...nextCols[colIdx], items: nextItems };
+                                            updateExtractedBlock(activeBlock.id, {
+                                              parsedData: {
+                                                ...activeBlock.parsedData,
+                                                tableData: nextCols,
+                                                columns: nextCols,
+                                              },
+                                            });
+                                          }}
+                                          className="text-slate-300 hover:text-rose-600 p-0.5 rounded transition"
+                                          title="Eliminar elemento"
+                                        >
+                                          <Trash2 className="w-3 h-3" />
+                                        </button>
+                                      </div>
+                                    ))}
+                                  </div>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const nextCols = [...refTable.columns];
+                                      nextCols[colIdx] = { ...nextCols[colIdx], items: [...nextCols[colIdx].items, 'Nuevo elemento'] };
+                                      updateExtractedBlock(activeBlock.id, {
+                                        parsedData: {
+                                          ...activeBlock.parsedData,
+                                          tableData: nextCols,
+                                          columns: nextCols,
+                                        },
+                                      });
+                                    }}
+                                    className="w-full text-[11px] font-semibold text-indigo-600 hover:text-indigo-800 border border-dashed border-indigo-200 rounded py-1 flex items-center justify-center gap-1 transition"
+                                  >
+                                    <Plus className="w-3 h-3" />
+                                    <span>Elemento</span>
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        );
+                      })() : mappedPreview.reference?.type === 'table_reference' && mappedPreview.reference.rows.length > 0 ? (
                         <div className="overflow-x-auto space-y-2">
                           <table className="w-full text-xs text-left border-collapse">
                             <thead>

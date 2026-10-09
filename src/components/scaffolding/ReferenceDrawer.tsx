@@ -19,6 +19,8 @@ export const ReferenceDrawer: React.FC = () => {
 
   const getDrawerTitle = () => {
     switch (reference.type) {
+      case 'reference_table':
+        return 'Cuadro de Vocabulario / Consulta';
       case 'table_reference':
         return 'Tabla Gramatical de Consulta';
       case 'media':

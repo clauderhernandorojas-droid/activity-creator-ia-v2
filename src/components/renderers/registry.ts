@@ -1,5 +1,6 @@
 import type { ComponentType } from 'react';
 import { TableReferenceRenderer } from './TableReferenceRenderer';
+import { StructuredReferenceRenderer } from './StructuredReferenceRenderer';
 import { TextReferenceRenderer } from './TextReferenceRenderer';
 import { MediaReferenceRenderer } from './MediaReferenceRenderer';
 import { InputFieldsRenderer } from './InputFieldsRenderer';
@@ -10,6 +11,7 @@ import { WritingRenderer } from './WritingRenderer';
 
 export const REFERENCE_RENDERER_REGISTRY: Record<string, ComponentType<any>> = {
   table_reference: TableReferenceRenderer,
+  reference_table: StructuredReferenceRenderer,
   text: TextReferenceRenderer,
   media: MediaReferenceRenderer,
 };

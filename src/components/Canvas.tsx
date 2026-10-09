@@ -127,6 +127,7 @@ export const Canvas: React.FC = () => {
   const hasReference = Boolean(
     currentSlide.referenceContent && (
       (currentSlide.referenceContent.type === 'text' && currentSlide.referenceContent.content?.trim().length > 0) ||
+      (currentSlide.referenceContent.type === 'reference_table' && currentSlide.referenceContent.columns?.length > 0) ||
       (currentSlide.referenceContent.type === 'table_reference' && currentSlide.referenceContent.rows?.length > 0) ||
       (currentSlide.referenceContent.type === 'media' && currentSlide.referenceContent.url?.trim().length > 0)
     )
@@ -178,6 +179,8 @@ export const Canvas: React.FC = () => {
   const getReferenceButtonLabel = () => {
     if (!currentSlide.referenceContent) return 'Consultar Referencia';
     switch (currentSlide.referenceContent.type) {
+      case 'reference_table':
+        return 'Consultar Cuadro de Vocabulario / Gramática';
       case 'table_reference':
         return 'Consultar Tabla Gramatical';
       case 'media':
@@ -205,7 +208,7 @@ export const Canvas: React.FC = () => {
       }
     }
     if (currentSlide.referenceContent) {
-      if (currentSlide.referenceContent.type === 'table_reference') return 'reference_table';
+      if (currentSlide.referenceContent.type === 'reference_table' || currentSlide.referenceContent.type === 'table_reference') return 'reference_table';
       return 'reference_text';
     }
     return 'interaction_inputs';

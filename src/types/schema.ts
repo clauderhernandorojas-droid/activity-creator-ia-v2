@@ -23,6 +23,23 @@ export const ReferenceTableBlockSchema = z.object({
   caption: z.string().optional(),
 });
 
+export const StructuredReferenceColumnSchema = z.object({
+  header: z.string(),
+  items: z.array(z.string()).default([]),
+});
+
+export const StructuredReferenceBlockSchema = z.object({
+  type: z.literal('reference_table'),
+  id: z.string(),
+  title: z.string(),
+  instruction: z.string().optional().default(''),
+  columns: z.array(StructuredReferenceColumnSchema).default([]),
+  caption: z.string().optional(),
+  verificationAudioUrl: z.string().optional(),
+  audioLabel: z.string().optional(),
+  followUpPrompt: z.string().optional(),
+});
+
 export const ReferenceMediaBlockSchema = z.object({
   type: z.literal('media'),
   id: z.string(),
@@ -35,11 +52,14 @@ export const ReferenceMediaBlockSchema = z.object({
 export const ReferenceBlockSchema = z.discriminatedUnion('type', [
   ReferenceTextBlockSchema,
   ReferenceTableBlockSchema,
+  StructuredReferenceBlockSchema,
   ReferenceMediaBlockSchema,
 ]);
 
 export type ReferenceTextBlock = z.infer<typeof ReferenceTextBlockSchema>;
 export type ReferenceTableBlock = z.infer<typeof ReferenceTableBlockSchema>;
+export type StructuredReferenceColumn = z.infer<typeof StructuredReferenceColumnSchema>;
+export type StructuredReferenceBlock = z.infer<typeof StructuredReferenceBlockSchema>;
 export type ReferenceMediaBlock = z.infer<typeof ReferenceMediaBlockSchema>;
 export type ReferenceBlock = z.infer<typeof ReferenceBlockSchema>;
 
@@ -332,6 +352,10 @@ export const ExtractedStructuredPayloadSchema = z.object({
   items: z.array(ExtractedItemSchema).default([]),
   tableHeaders: z.array(z.string()).optional(),
   tableRows: z.array(z.array(ExtractedTableCellSchema)).optional(),
+  tableData: z.array(z.object({
+    header: z.string(),
+    items: z.array(z.string())
+  })).optional(),
   isGraded: z.boolean().default(true).optional(),
   visualImageIndices: z.array(z.number()).optional(),
 });
