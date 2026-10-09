@@ -3,6 +3,8 @@ import type { WritingBlock } from '../../types/schema';
 import type { SessionEvaluation } from '../../store/useSessionStore';
 import { evaluateWriting, type WritingFeedback } from '../../core/ai/evaluateWriting';
 import { VerificationAudioPlayer } from '../common/VerificationAudioPlayer';
+import { renderFormattedMarkdown } from '../../core/text/markdownRenderer';
+import { isSubstantialTextOverlap, isConcatenationOfItems } from '../../core/text/textDeduplication';
 import { 
   Sparkles, 
   CheckCircle2, 
@@ -51,6 +53,29 @@ export const WritingRenderer: React.FC<Props> = ({
       charCount: currentText.length,
     };
   }, [currentText]);
+
+  // Check if prompt is redundant with instruction or is merely concatenating guidelines
+  const isPromptRedundant = useMemo(() => {
+    if (!block.prompt?.trim()) return true;
+    if (block.instruction && isSubstantialTextOverlap(block.prompt, block.instruction, 0.65)) {
+      return true;
+    }
+    if (block.guidelines && block.guidelines.length > 0) {
+      if (isConcatenationOfItems(block.prompt, block.guidelines, 0.55)) {
+        return true;
+      }
+    }
+    return false;
+  }, [block.prompt, block.instruction, block.guidelines]);
+
+  // If instruction itself is a raw concatenation of guidelines, clean it up
+  const displayInstruction = useMemo(() => {
+    const raw = block.instruction?.trim() || 'Escribe tu redacción';
+    if (block.guidelines && block.guidelines.length > 0 && isConcatenationOfItems(raw, block.guidelines, 0.6)) {
+      return 'Redacta tu texto siguiendo las pautas indicadas:';
+    }
+    return raw;
+  }, [block.instruction, block.guidelines]);
 
   // Handle student text typing
   const handleTextChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -202,11 +227,11 @@ export const WritingRenderer: React.FC<Props> = ({
               ) : (
                 <div>
                   <h3 className="text-base sm:text-lg font-bold text-slate-900 leading-snug">
-                    {block.instruction || 'Escribe tu redacción'}
+                    {renderFormattedMarkdown(displayInstruction)}
                   </h3>
-                  {block.prompt && block.prompt !== block.instruction && (
+                  {block.prompt && !isPromptRedundant && (
                     <p className="text-sm font-medium text-slate-600 mt-1 leading-relaxed">
-                      {block.prompt}
+                      {renderFormattedMarkdown(block.prompt)}
                     </p>
                   )}
                 </div>
@@ -262,20 +287,11 @@ export const WritingRenderer: React.FC<Props> = ({
               </div>
             ) : (
               <ul className="space-y-1.5 text-xs sm:text-sm text-slate-600 list-disc list-inside">
-                {(block.guidelines || []).map((guide, gIdx) => {
-                  // Clean formatting for bold items or plain text
-                  const parts = guide.split(/(\*\*[^*]+\*\*)/g);
-                  return (
-                    <li key={gIdx} className="leading-relaxed">
-                      {parts.map((p, pIdx) => {
-                        if (p.startsWith('**') && p.endsWith('**')) {
-                          return <strong key={pIdx} className="font-semibold text-slate-800">{p.slice(2, -2)}</strong>;
-                        }
-                        return <span key={pIdx}>{p}</span>;
-                      })}
-                    </li>
-                  );
-                })}
+                {(block.guidelines || []).map((guide, gIdx) => (
+                  <li key={gIdx} className="leading-relaxed">
+                    {renderFormattedMarkdown(guide)}
+                  </li>
+                ))}
               </ul>
             )}
           </div>

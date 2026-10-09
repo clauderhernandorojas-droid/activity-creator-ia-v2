@@ -82,3 +82,113 @@ export function isDuplicateReferenceContent(
 
   return false;
 }
+
+/**
+ * Normalizes text for architectural deduplication and cross-level comparison.
+ * Strips accents, Markdown tokens (**bold**, _italic_), bullet points (1., a)), and punctuation.
+ */
+export function normalizeTextForComparison(text: string | null | undefined): string {
+  if (!text) return '';
+  return text
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/\*{1,3}|_{1,3}|`+/g, '') // remove markdown markers
+    .replace(/(?:^|\n|\s)(?:\(?\d+[.)]|\(?[a-zA-Z][.)])\s+/g, ' ') // remove bullets
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * Checks whether textA and textB have substantial or identical semantic overlap.
+ * Used to prevent stacked repeated instructions between Slide Header and Active Block.
+ */
+export function isSubstantialTextOverlap(
+  textA: string | null | undefined,
+  textB: string | null | undefined,
+  threshold = 0.65
+): boolean {
+  const normA = normalizeTextForComparison(textA);
+  const normB = normalizeTextForComparison(textB);
+
+  if (!normA || !normB) return false;
+  if (normA === normB) return true;
+
+  // Substring inclusion with length ratio check
+  if (normA.includes(normB) || normB.includes(normA)) {
+    const minLen = Math.min(normA.length, normB.length);
+    const maxLen = Math.max(normA.length, normB.length);
+    if (minLen / maxLen >= 0.45) return true;
+  }
+
+  // Token-based Jaccard / containment similarity
+  const wordsA = new Set(normA.split(' ').filter((w) => w.length > 2));
+  const wordsB = new Set(normB.split(' ').filter((w) => w.length > 2));
+
+  if (wordsA.size === 0 || wordsB.size === 0) return false;
+
+  let common = 0;
+  for (const w of wordsA) {
+    if (wordsB.has(w)) common++;
+  }
+
+  const similarity = common / Math.min(wordsA.size, wordsB.size);
+  return similarity >= threshold;
+}
+
+/**
+ * Determines whether a plain paragraph merely concatenates or restates structured items
+ * (e.g. guidelines or list items prompts). If true, the plain paragraph should be omitted
+ * in favor of the structured visual component.
+ */
+export function isConcatenationOfItems(
+  paragraph: string | null | undefined,
+  items: string[] | null | undefined,
+  threshold = 0.55
+): boolean {
+  if (!paragraph || !items || items.length === 0) return false;
+  const normPara = normalizeTextForComparison(paragraph);
+  if (!normPara || normPara.length < 15) return false;
+
+  let matchedChars = 0;
+  for (const it of items) {
+    const normIt = normalizeTextForComparison(it);
+    if (normIt && normIt.length > 5 && normPara.includes(normIt)) {
+      matchedChars += normIt.length;
+    }
+  }
+
+  return matchedChars / normPara.length >= threshold;
+}
+
+/**
+ * Detects whether a string in referenceContent is synthetic didactic advice,
+ * teacher notes, summaries, or artificial instructions fabricated by the AI model
+ * rather than an authentic printed reading passage (article, chronicle, dialogue, or grammar table).
+ */
+export function isSyntheticPedagogicalText(text: string | null | undefined): boolean {
+  if (!text) return true;
+  const trimmed = text.trim();
+  if (trimmed.length < 20) return true;
+
+  // 1. Explicit meta-pedagogical comments or teacher advice
+  const metaRegex = /^(?:this is an? (?:open-ended|speaking|communicative|interactive|writing|reading) activity|this (?:activity|exercise|task|lesson) is (?:designed|intended|meant|created|aimed) to|in this (?:activity|exercise|task|lesson),?\s*students (?:will|are encouraged to|can|practice|should)|the (?:goal|purpose|objective|aim) of this (?:activity|exercise|task)|learning objectives?|teacher'?s? notes?|teaching tips?|pedagogical notes?|guidelines for the teacher)/i;
+  if (metaRegex.test(trimmed)) return true;
+
+  // 2. Synthetic writing advice or student tips fabricated when no passage was in the image
+  const adviceRegex = /^(?:(?:useful\s+)?tips? for (?:writing|speaking|students?)|how to (?:write|complete|answer)|advice for (?:writing|students?)|writing tips?|useful tips?|reminders? for students?|instructions? for students?|steps? to follow)[:\s]/i;
+  if (adviceRegex.test(trimmed)) return true;
+
+  // 3. Teacher directives instructing how to write/answer rather than reading material
+  const directiveRegex = /^(?:to (?:write|complete|produce) (?:a|an|your|this)|before you (?:write|start|begin)|when (?:writing|answering|completing),?\s*(?:remember|make sure|think)|make sure (?:you|to)|remember to check|don't forget to|you (?:should|must|need to) (?:write|use|include|check))/i;
+  if (directiveRegex.test(trimmed)) return true;
+
+  // 4. Summaries or restatements of exercise prompts ("Write ten questions about...", "Ask each other...")
+  if (/^(?:write|make|ask|complete|match|choose|underline|circle)\s+(?:ten|eight|five|the|\d+)?\s*(?:questions|sentences|items|answers|dialogue)/i.test(trimmed) && trimmed.length < 120) {
+    return true;
+  }
+
+  return false;
+}
+

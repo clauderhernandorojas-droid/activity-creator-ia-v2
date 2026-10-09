@@ -22,7 +22,9 @@ export const ReferenceDrawer: React.FC = () => {
       case 'table_reference':
         return 'Tabla Gramatical de Consulta';
       case 'media':
-        return 'Audio y Transcripción (Listening)';
+        return reference.mediaType === 'image'
+          ? 'Material Visual de Consulta'
+          : 'Audio y Transcripción (Listening)';
       default:
         return 'Lectura y Contexto';
     }

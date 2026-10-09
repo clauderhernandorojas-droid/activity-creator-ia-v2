@@ -390,7 +390,7 @@ export const useLessonStore = create<LessonState>()(
             id: newId,
             title,
             subtitle,
-            layout: 'split_50_50',
+            layout: cleanRef ? 'split_50_50' : 'single_column',
             referenceContent: cleanRef,
             interaction: mapped.interaction || null,
             cachedInteraction: mapped.interaction || null,
@@ -522,9 +522,15 @@ export const useLessonStore = create<LessonState>()(
           ...recordHistory(state),
           lesson: {
             ...state.lesson,
-            slides: state.lesson.slides.map((s) =>
-              s.id === slideId ? { ...s, referenceContent: block } : s
-            ),
+            slides: state.lesson.slides.map((s) => {
+              if (s.id !== slideId) return s;
+              const hasRef = Boolean(block);
+              return {
+                ...s,
+                referenceContent: block,
+                layout: hasRef && s.interaction ? 'split_50_50' : 'single_column',
+              };
+            }),
           },
         }));
       },

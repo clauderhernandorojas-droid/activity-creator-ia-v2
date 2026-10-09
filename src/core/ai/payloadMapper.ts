@@ -18,8 +18,8 @@ import type {
   WritingBlock
 } from '../../types/schema';
 import { generateGrammarVariants } from '../evaluators/fillBlankValidator';
-import { isDuplicateReferenceContent } from '../text/textDeduplication';
-import { stripMetaComments, stripLeadingDuplicateTitle, stripPredictiveSpoilers, extractSentenceDistractors } from './digitizeBook';
+import { isDuplicateReferenceContent, isSyntheticPedagogicalText, isConcatenationOfItems } from '../text/textDeduplication';
+import { stripMetaComments, stripLeadingDuplicateTitle, stripPredictiveSpoilers, extractSentenceDistractors, isAutonomousReadingContent } from './digitizeBook';
 
 export type PedagogicalRole = 
   | 'interaction_inputs' 
@@ -824,20 +824,20 @@ export function mapBlockToRole(
   const parsed = block.parsedData || {};
   const rawRefText = String(parsed.referenceContent || parsed.content || '').trim();
   const items = Array.isArray(parsed.items) ? parsed.items : [];
+  const guidelines = Array.isArray(parsed.guidelines) ? parsed.guidelines : [];
+
   const isDuplicate = parsed.interactionType === 'reference'
     ? false
-    : isDuplicateReferenceContent(rawRefText, items);
+    : isDuplicateReferenceContent(rawRefText, items) || isConcatenationOfItems(rawRefText, guidelines);
 
-  const blockImages = resolveReadingReferenceImages(block, rawRefText);
-
+  const isSynthetic = isSyntheticPedagogicalText(rawRefText);
+  const isAutonomous = isAutonomousReadingContent(rawRefText);
   const refWords = rawRefText.split(/\s+/).filter(Boolean).length;
-  const isSpuriousModelRef = refWords < 25 && parsed.interactionType !== 'reference';
 
+  // Strict invariant: Only genuine, non-synthetic printed reading passages (>= 30 words) count as reading content
   const hasReadingContent = Boolean(
-    !isDuplicate && !isSpuriousModelRef && rawRefText.length > 0
+    !isDuplicate && !isSynthetic && isAutonomous && refWords >= 30 && rawRefText.length > 0
   );
-
-  const hasVisualAssets = blockImages.length > 0;
 
   const hasTableContent = Boolean(
     Array.isArray(parsed.headers) &&
@@ -845,7 +845,8 @@ export function mapBlockToRole(
     parsed.rows.length > 0
   );
 
-  const defaultReference: ReferenceBlock | undefined = (hasReadingContent || hasVisualAssets)
+  // For interactive roles, reference content is strictly prohibited from opening unless genuine reading text or grammar table exists
+  const validInteractiveReference: ReferenceBlock | undefined = hasReadingContent
     ? (sanitizeReferenceBlock(mapBlockToReferenceText(block), block) as ReferenceBlock)
     : hasTableContent
     ? mapBlockToReferenceTable(block)
@@ -861,18 +862,18 @@ export function mapBlockToRole(
         `${parsed.title || ''} ${parsed.instruction || ''}`
       );
       if (isIdentifyTask) {
-        return { interaction: mapBlockToSelection(block), reference: defaultReference };
+        return { interaction: mapBlockToSelection(block), reference: validInteractiveReference };
       }
-      return { interaction: mapBlockToInputFields(block), reference: defaultReference };
+      return { interaction: mapBlockToInputFields(block), reference: validInteractiveReference };
     }
     case 'interaction_selection':
-      return { interaction: mapBlockToSelection(block), reference: defaultReference };
+      return { interaction: mapBlockToSelection(block), reference: validInteractiveReference };
     case 'interaction_buckets':
-      return { interaction: mapBlockToBuckets(block), reference: defaultReference };
+      return { interaction: mapBlockToBuckets(block), reference: validInteractiveReference };
     case 'interaction_sequence':
-      return { interaction: mapBlockToSequence(block), reference: defaultReference };
+      return { interaction: mapBlockToSequence(block), reference: validInteractiveReference };
     case 'interaction_writing':
-      return { interaction: mapBlockToWriting(block), reference: defaultReference };
+      return { interaction: mapBlockToWriting(block), reference: validInteractiveReference };
   }
 }
 

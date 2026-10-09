@@ -3,6 +3,7 @@ import type { ReferenceTextBlock } from '../../types/schema';
 import { Camera, Image as ImageIcon, Upload, Link as LinkIcon, X, Plus } from 'lucide-react';
 import { compressImageBase64 } from '../../core/utils/imageCompressor';
 import { useLessonStore } from '../../store/useLessonStore';
+import { renderFormattedMarkdown } from '../../core/text/markdownRenderer';
 
 const MAX_IMAGES = 4;
 
@@ -341,7 +342,7 @@ export const TextReferenceRenderer: React.FC<Props> = ({
       ) : (
         block.title && (!slideTitle || block.title.trim().toLowerCase() !== slideTitle.trim().toLowerCase()) && (
           <h3 className="text-base sm:text-lg font-bold text-slate-900 mb-3 tracking-tight shrink-0">
-            {block.title}
+            {renderFormattedMarkdown(block.title)}
           </h3>
         )
       )}
@@ -491,11 +492,13 @@ export const TextReferenceRenderer: React.FC<Props> = ({
                 {paragraphs.length > 0 ? (
                   paragraphs.map((paragraph, idx) => (
                     <p key={idx} className="whitespace-pre-line break-words leading-relaxed">
-                      {paragraph}
+                      {renderFormattedMarkdown(paragraph)}
                     </p>
                   ))
                 ) : (
-                  <p className="whitespace-pre-line break-words leading-relaxed">{block.content}</p>
+                  <p className="whitespace-pre-line break-words leading-relaxed">
+                    {renderFormattedMarkdown(block.content)}
+                  </p>
                 )}
               </div>
             )}

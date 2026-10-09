@@ -241,6 +241,16 @@ export const OcrPanel: React.FC = () => {
     if (pd.interactionType === 'classification' || pd.interactionType === 'drag_drop') {
       return 'interaction_buckets';
     }
+    const isWritingTask = Boolean(
+      pd.interactionType === 'writing' ||
+      (activeBlock.detectedType as string) === 'writing' ||
+      /write\b|writing\b|redacta\b|redacción\b|redactar\b/i.test(`${pd.title || ''} ${pd.instruction || ''}`) ||
+      (Array.isArray(pd.guidelines) && pd.guidelines.length > 0)
+    );
+    if (isWritingTask) {
+      return 'interaction_writing';
+    }
+
     if (pd.interactionType === 'reference' || activeBlock.detectedType === 'paragraph') {
       return 'reference_text';
     }
@@ -398,7 +408,10 @@ export const OcrPanel: React.FC = () => {
     setIsOcrDrawerOpen(false);
   };
 
-  const getBlockTypeMeta = (type: ExtractedBlock['detectedType']) => {
+  const getBlockTypeMeta = (type: ExtractedBlock['detectedType'], interactionType?: string) => {
+    if (interactionType === 'writing' || (type as string) === 'writing') {
+      return { label: 'Producción Escrita', icon: FileText, color: 'text-indigo-700 bg-indigo-50 border-indigo-200' };
+    }
     switch (type) {
       case 'table':
         return { label: 'Tabla Detectada', icon: Table, color: 'text-indigo-700 bg-indigo-50 border-indigo-200' };
@@ -416,6 +429,7 @@ export const OcrPanel: React.FC = () => {
     { id: 'interaction_selection', label: '2. Selección Múltiple', icon: CheckSquare },
     { id: 'interaction_buckets', label: '3. Buckets / Categorías', icon: FolderGit2 },
     { id: 'interaction_sequence', label: '4. Secuencia', icon: ListOrdered },
+    { id: 'interaction_writing', label: '✍️ Redacción / Writing', icon: FileText },
     { id: 'reference_text', label: 'Texto de Lectura', icon: BookOpen },
     { id: 'reference_table', label: 'Cuadro Gramatical', icon: Table },
   ];
@@ -796,6 +810,16 @@ export const OcrPanel: React.FC = () => {
                           <p className="text-[10px] text-slate-400">Cuadrícula 2D con inputs</p>
                         </div>
                       </button>
+                      <button
+                        onClick={() => handleCreateManual('writing', 'Producción escrita')}
+                        className="w-full text-left text-xs p-2 rounded-xl hover:bg-indigo-50 text-slate-700 hover:text-indigo-700 flex items-center gap-2 transition"
+                      >
+                        <FileText className="w-4 h-4 text-indigo-600 flex-shrink-0" />
+                        <div>
+                          <p className="font-semibold">Writing / Redacción</p>
+                          <p className="text-[10px] text-slate-400">Producción libre con feedback</p>
+                        </div>
+                      </button>
                     </div>
                   )}
                 </div>
@@ -810,7 +834,7 @@ export const OcrPanel: React.FC = () => {
                   <div className="flex-1 min-w-0 space-y-1">
                     <div className="flex items-center gap-2">
                       {(() => {
-                        const meta = getBlockTypeMeta(activeBlock.detectedType);
+                        const meta = getBlockTypeMeta(activeBlock.detectedType, activeBlock.parsedData?.interactionType);
                         const Icon = meta.icon;
                         return (
                           <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold border ${meta.color}`}>
@@ -866,7 +890,7 @@ export const OcrPanel: React.FC = () => {
                   <span className="text-xs font-bold text-slate-700 block">
                     Formato de la actividad en la diapositiva:
                   </span>
-                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
+                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-1.5">
                     {ROLE_OPTIONS.map((opt) => {
                       const Icon = opt.icon;
                       const isSelected = selectedRole === opt.id;
@@ -1317,7 +1341,117 @@ export const OcrPanel: React.FC = () => {
                             <span>Añadir Pregunta</span>
                           </button>
                         </div>
-                      ) : (
+                      ) : mappedPreview.interaction?.type === 'writing' ? (() => {
+                        const writingInter = mappedPreview.interaction;
+                        const guidelines = Array.isArray(activeBlock.parsedData?.guidelines)
+                          ? activeBlock.parsedData.guidelines
+                          : Array.isArray(writingInter.guidelines)
+                          ? writingInter.guidelines
+                          : [];
+                        return (
+                          /* Dedicated Interactive Writing Preview & Editor */
+                          <div className="space-y-3">
+                            <div className="p-3.5 rounded-xl bg-white border border-indigo-200/90 shadow-2xs space-y-2">
+                              <div className="flex items-center justify-between">
+                                <label className="text-[11px] font-bold text-indigo-700 uppercase tracking-wider flex items-center gap-1.5">
+                                  <FileText className="w-3.5 h-3.5 text-indigo-600" />
+                                  <span>Consigna Central de Redacción (Prompt):</span>
+                                </label>
+                                <span className="text-[10px] bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded-full font-semibold border border-indigo-200">
+                                  ✍️ Producción Escrita
+                                </span>
+                              </div>
+                              <textarea
+                                value={
+                                  activeBlock.parsedData?.prompt ||
+                                  writingInter.prompt ||
+                                  ''
+                                }
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  updateExtractedBlock(activeBlock.id, {
+                                    parsedData: {
+                                      ...activeBlock.parsedData,
+                                      prompt: val,
+                                    },
+                                  });
+                                }}
+                                rows={3}
+                                className="w-full text-xs text-slate-800 bg-slate-50/50 hover:bg-white focus:bg-white border border-slate-200 focus:border-indigo-500 rounded-lg p-2.5 outline-none transition resize-y font-medium leading-relaxed"
+                                placeholder="Escribe la consigna que el estudiante deberá desarrollar..."
+                              />
+                            </div>
+
+                            {/* Guidelines / Pautas */}
+                            <div className="p-3.5 rounded-xl bg-white border border-slate-200/90 shadow-2xs space-y-2">
+                              <div className="flex items-center justify-between">
+                                <span className="text-[11px] font-bold text-slate-700 flex items-center gap-1.5">
+                                  <span>📋 Pautas o Tópicos de Apoyo ({guidelines.length}):</span>
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const nextGuidelines = [...guidelines, 'Nueva pauta o punto clave a incluir'];
+                                    updateExtractedBlock(activeBlock.id, {
+                                      parsedData: {
+                                        ...activeBlock.parsedData,
+                                        guidelines: nextGuidelines,
+                                      },
+                                    });
+                                  }}
+                                  className="text-[11px] font-semibold text-indigo-600 hover:text-indigo-800 hover:bg-indigo-50 px-2 py-0.5 rounded-lg border border-indigo-200 flex items-center gap-1 transition cursor-pointer"
+                                >
+                                  <Plus className="w-3.5 h-3.5" />
+                                  <span>Añadir Pauta</span>
+                                </button>
+                              </div>
+
+                              {guidelines.length > 0 ? (
+                                <div className="space-y-1.5">
+                                  {guidelines.map((guide: string, gIdx: number) => (
+                                    <div key={gIdx} className="flex items-center gap-2 bg-slate-50 border border-slate-200/70 rounded-lg px-2.5 py-1.5">
+                                      <span className="text-[11px] text-slate-400 font-bold">•</span>
+                                      <input
+                                        type="text"
+                                        value={guide}
+                                        onChange={(e) => {
+                                          const nextGuidelines = [...guidelines];
+                                          nextGuidelines[gIdx] = e.target.value;
+                                          updateExtractedBlock(activeBlock.id, {
+                                            parsedData: {
+                                              ...activeBlock.parsedData,
+                                              guidelines: nextGuidelines,
+                                            },
+                                          });
+                                        }}
+                                        className="flex-1 text-xs text-slate-800 bg-transparent border-b border-transparent focus:border-indigo-400 outline-none"
+                                      />
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          const nextGuidelines = guidelines.filter((_: string, idx: number) => idx !== gIdx);
+                                          updateExtractedBlock(activeBlock.id, {
+                                            parsedData: {
+                                              ...activeBlock.parsedData,
+                                              guidelines: nextGuidelines,
+                                            },
+                                          });
+                                        }}
+                                        className="text-slate-300 hover:text-rose-600 p-0.5 rounded transition cursor-pointer"
+                                        title="Eliminar pauta"
+                                      >
+                                        <Trash2 className="w-3.5 h-3.5" />
+                                      </button>
+                                    </div>
+                                  ))}
+                                </div>
+                              ) : (
+                                <p className="text-xs text-slate-400 italic">No hay pautas específicas. El estudiante redactará libremente a partir de la consigna.</p>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })() : (
                         /* Raw text / Reference text editable fallback */
                         <div className="space-y-2">
                           <textarea

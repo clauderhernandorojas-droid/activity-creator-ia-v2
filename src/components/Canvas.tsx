@@ -5,6 +5,10 @@ import { INTERACTION_RENDERER_REGISTRY, REFERENCE_RENDERER_REGISTRY } from './re
 import { SlideErrorBoundary } from './common/SlideErrorBoundary';
 import confetti from 'canvas-confetti';
 import type { PedagogicalRole } from '../core/ai/payloadMapper';
+import type { ReferenceMediaBlock } from '../types/schema';
+import { renderFormattedMarkdown } from '../core/text/markdownRenderer';
+import { isSubstantialTextOverlap, isConcatenationOfItems } from '../core/text/textDeduplication';
+import { ReferenceImageModal } from './modals/ReferenceImageModal';
 import { 
   CheckCircle2, 
   RotateCcw, 
@@ -17,7 +21,9 @@ import {
   Sparkles,
   Plus,
   Wand2,
-  Headphones
+  Headphones,
+  Image as ImageIcon,
+  Trash2
 } from 'lucide-react';
 
 interface FormatSwitchOption {
@@ -34,6 +40,10 @@ const FORMAT_SWITCH_OPTIONS: FormatSwitchOption[] = [
   { id: 'interaction_writing', label: 'Escritura', icon: '✍️' },
   { id: 'reference_text', label: 'Referencia', icon: '📖' },
 ];
+
+function generateReferenceImageId(): string {
+  return `ref-img-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+}
 
 export const Canvas: React.FC = () => {
   const {
@@ -62,6 +72,8 @@ export const Canvas: React.FC = () => {
     toggleReferenceDrawer,
     setIsOcrDrawerOpen,
   } = useSessionStore();
+
+  const [isImageModalOpen, setIsImageModalOpen] = React.useState(false);
 
   const currentSlide = lesson.slides.find((s) => s.id === currentSlideId);
 
@@ -119,7 +131,23 @@ export const Canvas: React.FC = () => {
       (currentSlide.referenceContent.type === 'media' && currentSlide.referenceContent.url?.trim().length > 0)
     )
   );
+  const isImageReference = Boolean(
+    currentSlide.referenceContent &&
+    currentSlide.referenceContent.type === 'media' &&
+    currentSlide.referenceContent.mediaType === 'image'
+  );
   const hasInteraction = Boolean(currentSlide.interaction);
+
+  const handleAttachReferenceImage = (dataUrl: string, title: string) => {
+    const newRef: ReferenceMediaBlock = {
+      type: 'media',
+      id: generateReferenceImageId(),
+      mediaType: 'image',
+      url: dataUrl,
+      title: title || 'Material Visual de Consulta',
+    };
+    updateReferenceBlock(currentSlide.id, newRef);
+  };
 
   const verificationAudioUrl = currentSlide.interaction && 'verificationAudioUrl' in currentSlide.interaction
     ? currentSlide.interaction.verificationAudioUrl
@@ -153,7 +181,9 @@ export const Canvas: React.FC = () => {
       case 'table_reference':
         return 'Consultar Tabla Gramatical';
       case 'media':
-        return 'Consultar Audio / Transcripción';
+        return currentSlide.referenceContent.mediaType === 'image'
+          ? 'Consultar Imagen de Apoyo'
+          : 'Consultar Audio / Transcripción';
       default:
         return 'Consultar Lectura y Reglas';
     }
@@ -190,6 +220,52 @@ export const Canvas: React.FC = () => {
     ? REFERENCE_RENDERER_REGISTRY[currentSlide.referenceContent.type]
     : null;
 
+  // Check if slide subtitle is redundant with slide title or interaction content
+  const isSubtitleRedundant = (() => {
+    if (!currentSlide.subtitle?.trim()) return false;
+
+    // Redundant with title
+    if (isSubstantialTextOverlap(currentSlide.subtitle, currentSlide.title, 0.7)) {
+      return true;
+    }
+
+    const interaction = currentSlide.interaction;
+    if (!interaction) return false;
+
+    // Redundant with interaction instruction
+    if ('instruction' in interaction && typeof (interaction as any).instruction === 'string') {
+      const instr = (interaction as any).instruction;
+      if (instr && isSubstantialTextOverlap(currentSlide.subtitle, instr, 0.65)) {
+        return true;
+      }
+    }
+
+    // Redundant with writing prompt or guidelines
+    if (interaction.type === 'writing') {
+      const writing = interaction as any;
+      if (writing.prompt && isSubstantialTextOverlap(currentSlide.subtitle, writing.prompt, 0.65)) {
+        return true;
+      }
+      if (Array.isArray(writing.guidelines) && writing.guidelines.length > 0) {
+        if (isConcatenationOfItems(currentSlide.subtitle, writing.guidelines, 0.55)) {
+          return true;
+        }
+      }
+    }
+
+    // Redundant with input item prompts
+    if ('listItems' in interaction && Array.isArray((interaction as any).listItems)) {
+      const itemPrompts = (interaction as any).listItems
+        .map((it: any) => it.prompt || '')
+        .filter(Boolean);
+      if (itemPrompts.length > 0 && isConcatenationOfItems(currentSlide.subtitle, itemPrompts, 0.55)) {
+        return true;
+      }
+    }
+
+    return false;
+  })();
+
   return (
     <main className="flex-1 flex flex-col items-center justify-start p-4 sm:p-6 md:p-10 pb-24 w-full bg-slate-100 select-none min-h-[calc(100vh-4rem)]">
       {/* Dynamic Wide Container: 94vw on laptop/desktop, 88vw on 2k/4k displays, no wasted grey gutters! */}
@@ -220,32 +296,80 @@ export const Canvas: React.FC = () => {
                 <h2 className="text-xl md:text-3xl font-bold text-slate-900 tracking-tight">
                   {currentSlide.title}
                 </h2>
-                {currentSlide.subtitle && (
-                  <p className="text-sm text-slate-500 font-medium mt-1">
-                    {currentSlide.subtitle}
+                {currentSlide.subtitle && !isSubtitleRedundant && (
+                  <p className="text-sm text-slate-500 font-medium mt-1 leading-relaxed">
+                    {renderFormattedMarkdown(currentSlide.subtitle)}
                   </p>
                 )}
               </div>
             )}
           </div>
 
-          {/* Floating Scaffolding Button / Screen Indicator */}
-          {hasReference && !hasInteraction && isEditMode && (
-            <button
-              onClick={toggleReferenceDrawer}
-              className="flex items-center gap-2 px-4 py-2.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-semibold text-xs sm:text-sm rounded-xl border border-indigo-200 shadow-2xs transition transform active:scale-95 cursor-pointer"
-              title="Abrir cajón flotante de consulta sin salir del ejercicio"
-            >
-              <BookOpen className="w-4 h-4 text-indigo-600" />
-              <span>{getReferenceButtonLabel()}</span>
-            </button>
-          )}
-          {hasReference && hasInteraction && (
-            <div className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 bg-indigo-50/80 text-indigo-700 text-xs font-semibold rounded-xl border border-indigo-200/80 shadow-2xs">
-              <BookOpen className="w-3.5 h-3.5 text-indigo-600" />
-              <span>Lectura Integrada en Pantalla</span>
-            </div>
-          )}
+          {/* Floating Scaffolding Button / Screen Indicator & Visual Reference Button */}
+          <div className="flex flex-wrap items-center gap-2">
+            {/* Visual Reference Button in Edit Mode */}
+            {isEditMode && (
+              !hasReference ? (
+                <button
+                  type="button"
+                  onClick={() => setIsImageModalOpen(true)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 font-semibold text-xs rounded-xl border border-emerald-200 shadow-2xs transition transform active:scale-95 cursor-pointer"
+                  title="Adjuntar una imagen o material visual de consulta a esta diapositiva"
+                >
+                  <ImageIcon className="w-3.5 h-3.5 text-emerald-600" />
+                  <span>🖼️ Añadir Referencia Visual / Imagen</span>
+                </button>
+              ) : isImageReference ? (
+                <div className="flex items-center gap-1.5 bg-slate-50 border border-slate-200/90 rounded-xl p-1 shadow-2xs">
+                  <button
+                    type="button"
+                    onClick={() => setIsImageModalOpen(true)}
+                    className="flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-slate-700 hover:text-indigo-600 hover:bg-white rounded-lg transition cursor-pointer"
+                    title="Reemplazar o cambiar la imagen de referencia"
+                  >
+                    <ImageIcon className="w-3.5 h-3.5 text-indigo-600" />
+                    <span>Cambiar Imagen</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => updateReferenceBlock(currentSlide.id, null)}
+                    className="flex items-center gap-1 px-2 py-1 text-xs font-semibold text-rose-600 hover:text-rose-700 hover:bg-rose-50 rounded-lg transition cursor-pointer"
+                    title="Quitar referencia visual y restaurar ancho completo (100%)"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Quitar</span>
+                  </button>
+                </div>
+              ) : null
+            )}
+
+            {/* Floating Scaffolding Button / Screen Indicator */}
+            {hasReference && !hasInteraction && isEditMode && (
+              <button
+                onClick={toggleReferenceDrawer}
+                className="flex items-center gap-2 px-4 py-2.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-semibold text-xs sm:text-sm rounded-xl border border-indigo-200 shadow-2xs transition transform active:scale-95 cursor-pointer"
+                title="Abrir cajón flotante de consulta sin salir del ejercicio"
+              >
+                <BookOpen className="w-4 h-4 text-indigo-600" />
+                <span>{getReferenceButtonLabel()}</span>
+              </button>
+            )}
+            {hasReference && hasInteraction && (
+              <div className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 bg-indigo-50/80 text-indigo-700 text-xs font-semibold rounded-xl border border-indigo-200/80 shadow-2xs">
+                {isImageReference ? (
+                  <>
+                    <ImageIcon className="w-3.5 h-3.5 text-indigo-600" />
+                    <span>Imagen Integrada en Pantalla</span>
+                  </>
+                ) : (
+                  <>
+                    <BookOpen className="w-3.5 h-3.5 text-indigo-600" />
+                    <span>Lectura Integrada en Pantalla</span>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Dynamic Archetype Conversion Toolbar (Segmented Control) - Only visible in Edit Mode */}
@@ -309,6 +433,18 @@ export const Canvas: React.FC = () => {
                   </span>
                 </label>
               )}
+              {/* Quick Visual Reference Button in Toolbar */}
+              {!hasReference && (
+                <button
+                  type="button"
+                  onClick={() => setIsImageModalOpen(true)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-emerald-50 text-slate-700 hover:text-emerald-700 rounded-lg border border-slate-200 text-xs font-semibold shadow-2xs transition cursor-pointer"
+                  title="Añadir una imagen de referencia o diagrama para activar el layout de doble columna"
+                >
+                  <ImageIcon className="w-3.5 h-3.5 text-emerald-600" />
+                  <span>+ Imagen Referencia</span>
+                </button>
+              )}
             </div>
           </div>
         )}
@@ -323,15 +459,24 @@ export const Canvas: React.FC = () => {
                 <div className="w-full lg:w-5/12 sm:sticky sm:top-4 self-start flex flex-col bg-slate-50/80 border border-slate-200/90 rounded-2xl p-5 sm:p-6 shadow-2xs space-y-4">
                   <div className="flex items-center justify-between pb-2.5 border-b border-slate-200 shrink-0">
                     <div className="flex items-center gap-2 text-xs font-bold text-indigo-700 uppercase tracking-wider">
-                      <BookOpen className="w-4 h-4 text-indigo-600" />
-                      <span>Material de Lectura / Consulta</span>
+                      {isImageReference ? (
+                        <>
+                          <ImageIcon className="w-4 h-4 text-indigo-600" />
+                          <span>Material Visual de Consulta</span>
+                        </>
+                      ) : (
+                        <>
+                          <BookOpen className="w-4 h-4 text-indigo-600" />
+                          <span>Material de Lectura / Consulta</span>
+                        </>
+                      )}
                     </div>
                     {isEditMode ? (
                       <button
                         type="button"
                         onClick={() => updateReferenceBlock(currentSlide.id, null)}
                         className="text-[10px] text-slate-400 hover:text-rose-600 font-semibold px-2 py-0.5 rounded hover:bg-rose-50 transition cursor-pointer"
-                        title="Quitar panel de lectura para dar ancho completo a la actividad"
+                        title="Quitar panel de referencia para dar ancho completo a la actividad"
                       >
                         Quitar Referencia
                       </button>
@@ -347,6 +492,7 @@ export const Canvas: React.FC = () => {
                     isEditMode={isEditMode}
                     slideTitle={currentSlide.title}
                     onChange={(updated: any) => updateReferenceBlock(currentSlide.id, updated)}
+                    onRemove={() => updateReferenceBlock(currentSlide.id, null)}
                   />
                 </div>
 
@@ -627,6 +773,26 @@ export const Canvas: React.FC = () => {
           </div>
         )}
       </div>
+
+      {/* Reference Image Upload / Paste Modal */}
+      {isEditMode && (
+        <ReferenceImageModal
+          key={isImageModalOpen ? `open-${isImageReference && currentSlide.referenceContent?.type === 'media' ? currentSlide.referenceContent.url : 'new'}` : 'closed'}
+          isOpen={isImageModalOpen}
+          onClose={() => setIsImageModalOpen(false)}
+          onAttach={handleAttachReferenceImage}
+          currentImageUrl={
+            isImageReference && currentSlide.referenceContent && currentSlide.referenceContent.type === 'media'
+              ? currentSlide.referenceContent.url
+              : undefined
+          }
+          currentTitle={
+            isImageReference && currentSlide.referenceContent && currentSlide.referenceContent.type === 'media'
+              ? currentSlide.referenceContent.title
+              : undefined
+          }
+        />
+      )}
     </main>
   );
 };

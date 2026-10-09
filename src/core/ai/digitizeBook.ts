@@ -1,6 +1,6 @@
 import type { ExtractedBlock, ExtractedStructuredPayload } from '../../types/schema';
 import { GoogleGenAI } from '@google/genai';
-import { isDuplicateReferenceContent } from '../text/textDeduplication';
+import { isDuplicateReferenceContent, isSyntheticPedagogicalText, isConcatenationOfItems } from '../text/textDeduplication';
 
 export type ManualTemplateType = 'input_fields' | 'buckets' | 'selection' | 'reference_table' | 'table_grid' | 'writing';
 
@@ -343,7 +343,7 @@ const STRUCTURED_EXTRACTION_SCHEMA = {
     },
     referenceContent: {
       type: 'string',
-      description: 'Passive consultation material: autonomous reading passage, article, dialogue, or grammar guidance box that students consult. Null or empty string if none. CRITICAL: NEVER extract vocabulary lists, topic/idea banks (e.g. "personal details, family, work..."), solved examples, or task instructions here. referenceContent is strictly for autonomous reading passages. If no autonomous reading text exists, referenceContent MUST be null/omitted so the activity takes full stage width. Setting referenceContent triggers a two-column reading layout.'
+      description: 'Passive consultation material: STRICTLY and EXCLUSIVELY literal transcription of an independent reading passage, article, narrative story, formal multi-turn dialogue, or grammar reference chart visibly printed on the page. MUST BE NULL/omitted if no autonomous reading text exists. STRICT PROHIBITION OF SYNTHETIC CONTENT: NEVER generate synthetic explanations, pedagogical summaries, didactic goals, advice, guidelines, tips, or summaries not visibly printed in the image. If there is no printed reading passage, referenceContent MUST BE null.'
     },
     wordBank: {
       type: 'array',
@@ -506,10 +506,11 @@ REGLAS UNIVERSALES DE BANCO DE OPCIONES Y ASIGNACIÓN BIUNÍVOCA:
     1. TÓPICOS DE APOYO: Mapea la lista de ideas/tópicos (ej. "personal details, family, work/study, hobbies, free time") a 'wordBank' o a la descripción/instrucción del bloque. NUNCA los extraigas como 'referenceContent' (lo que abriría un panel lateral espurio) ni como enunciados ('prompt') individuales de cada ítem de pregunta.
     2. ÍTEMS DEL EJERCICIO: Genera exactamente los N ítems interactivos requeridos como líneas de respuesta abierta numeradas (ej. prompt: "1.", prompt: "2." ... prompt: "10."), con expectedAnswer: "" (o la pregunta modelo resuelta si el libro provee un ejemplo impreso en el ítem 1) y acceptedAnswers: [].
     3. Al ser producción comunicativa personalizada, asigna isGraded: false e interactionType: 'fill_blanks'.
-- DELIMITACIÓN RIGUROSA DE referenceContent (ANCHO COMPLETO vs DOBLE PANEL):
-  * 'referenceContent' (material de lectura o consulta) es EXCLUSIVAMENTE para textos autónomos de comprensión (artículos, narraciones, diálogos extensos de consulta o tablas completas de reglas gramaticales).
+- REGLA DE TRANSCRIPCIÓN ESTRICTA DE referenceContent (FIDELIDAD TEXTUAL Y PROHIBICIÓN DE CONTENIDO SINTÉTICO):
+  * 'referenceContent' (material de lectura o consulta) debe ser EXCLUSIVAMENTE una transcripción literal de un texto de lectura o consulta visible e impreso en el recorte (artículos, crónicas, narraciones, diálogos formales con hablantes identificados o tablas completas de reglas gramaticales).
+  * PROHIBICIÓN TAXATIVA DE CONTENIDO SINTÉTICO: Tienes estrictamente prohibido generar resúmenes, metas pedagógicas, explicaciones didácticas, justificaciones, consejos de redacción, estrategias o notas de estudio que no estén presentes de forma literal e impresa en la imagen original.
+  * Si el material recortado no incluye un pasaje de lectura impreso independiente, 'referenceContent' DEBE SER ESTRICTAMENTE null o "". Esto garantiza deterministamente que la actividad ocupe el 100% del ancho de la diapositiva sin paneles laterales espurios.
   * PROHIBICIÓN TAXATIVA: Listas de vocabulario, bancos de ideas/tópicos (ej. 'personal details, family, work...'), ejemplos resueltos, respuestas modelo o instrucciones NUNCA son 'referenceContent'.
-  * Si no hay un pasaje de lectura o texto autónomo real e independiente, 'referenceContent' DEBE SER ESTRICTAMENTE null o "". Esto garantiza que la actividad ocupe el ancho completo de la diapositiva en un diseño limpio y enfocado, sin paneles laterales espurios.
 - FORMATEO ESTRUCTURADO DE DIRECTIVAS MULTIETAPA (a, b, c, d):
   * Cuando una actividad comunicativa, de speaking o procedimental contenga una secuencia de fases o pasos (a, b, c, d):
     - Preserva la estructura en viñetas limpias con saltos de línea dobles y negritas para cada paso:
@@ -1024,7 +1025,10 @@ export function formatMultiStageDirectives(text: string): string {
 export function isAutonomousReadingContent(text: string | null): boolean {
   if (!text) return false;
   const trimmed = text.trim();
-  if (trimmed.length < 20) return false;
+  if (trimmed.length < 25) return false;
+
+  // Strict check: Synthetic pedagogical advice, teacher notes, or artificial instructions are NEVER reading passages
+  if (isSyntheticPedagogicalText(trimmed)) return false;
 
   // Check if it's explicitly an idea bank, topic list, or word bank
   const isIdeaOrTopicList = /^(?:(?:useful\s+)?(?:ideas|topics|prompts|vocabulary|words|categories|phrases)|use these ideas|ideas to use)[:\s]/i.test(trimmed);
@@ -1257,15 +1261,22 @@ function sanitizeExtractedPayload(payload: ExtractedStructuredPayload): Extracte
   const wordBankTopics: string[] = [];
 
   if (cleanedRawRef) {
+    const isAutonomous = isAutonomousReadingContent(cleanedRawRef);
+    const isDuplicate = isDuplicateReferenceContent(cleanedRawRef, sanitizedItems) ||
+      isConcatenationOfItems(cleanedRawRef, Array.isArray(payload.guidelines) ? payload.guidelines : []);
+    const isSynthetic = isSyntheticPedagogicalText(cleanedRawRef);
+
     if (payload.interactionType === 'reference' && !isOpenProductionTask) {
-      // In speaking cards without open production, preserve referenceContent and format multi-stage directives if present
-      referenceContent = formatMultiStageDirectives(cleanedRawRef);
-    } else if (isAutonomousReadingContent(cleanedRawRef) && !isDuplicateReferenceContent(cleanedRawRef, sanitizedItems)) {
-      // Genuine autonomous reading passage
+      // In speaking cards without open production, preserve genuine dialogue/model context
+      referenceContent = (isAutonomous && !isSynthetic)
+        ? formatMultiStageDirectives(cleanedRawRef)
+        : null;
+    } else if (isAutonomous && !isDuplicate && !isSynthetic) {
+      // Genuine autonomous reading passage (article, chronicle, formal dialogue, or reference chart)
       referenceContent = cleanedRawRef;
     } else {
       // Not an autonomous reading text: extract any topics, ideas, or vocabulary into wordBankTopics,
-      // and keep referenceContent = null so the activity spans the full stage width!
+      // and keep referenceContent = null so the activity spans 100% full stage width!
       const extracted = extractTopicIdeas(cleanedRawRef);
       wordBankTopics.push(...extracted);
       referenceContent = null;
