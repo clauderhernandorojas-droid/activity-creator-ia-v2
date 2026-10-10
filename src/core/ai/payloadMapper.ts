@@ -656,6 +656,56 @@ export function mapBlockToSequence(block: ExtractedBlock): SequenceBlock {
 
 
 /**
+ * Extracts explicit reading comprehension questions (? or open inquiry prompts)
+ * from instruction or text without capturing entire narrative reading paragraphs.
+ */
+export function extractComprehensionQuestions(
+  text: string | null | undefined,
+  instruction?: string | null | undefined
+): string[] {
+  const questions: string[] = [];
+
+  const candidateSources = [
+    instruction ? String(instruction) : '',
+    text ? String(text) : ''
+  ].filter(Boolean);
+
+  for (const src of candidateSources) {
+    const lines = src
+      .split(/(?:\r?\n)+/)
+      .map((l) => l.trim())
+      .filter(Boolean);
+
+    for (const line of lines) {
+      // If line contains multiple concatenated questions (e.g. "1. What is it about? 2. What is a commuter?"), split them:
+      const subSegments = line.includes('?') && line.length > 40 && /(?<=\?)\s+(?=(?:\(?\d+[.)]?|[a-zA-Z][.)]|\b(?:What|Where|When|Who|Why|How|Do|Does|Did|Is|Are|Can|Discuss)\b))/i.test(line)
+        ? line.split(/(?<=\?)\s+(?=(?:\(?\d+[.)]?|[a-zA-Z][.)]|\b(?:What|Where|When|Who|Why|How|Do|Does|Did|Is|Are|Can|Discuss)\b))/i)
+        : [line];
+
+      for (const segment of subSegments) {
+        const seg = segment.trim();
+        const unnumbered = seg.replace(/^(?:(?:\(?\d+[.)]?|[a-zA-Z][.)]|•|\*|-)\s*)/, '').trim();
+
+        const hasQuestionMark = seg.includes('?') || seg.includes('¿');
+        const startsWithInterrogative = /^(?:what|where|when|who|whom|whose|which|why|how|do|does|did|is|are|was|were|can|could|should|would|have|has|had|qué|cómo|cuál|cuáles|dónde|cuándo|por qué|quién)\b/i.test(unnumbered);
+
+        // Standalone question line (not a full narrative paragraph of > 220 chars)
+        const isReasonableLength = seg.length <= 220;
+
+        if ((hasQuestionMark || startsWithInterrogative) && isReasonableLength) {
+          const cleaned = stripOrphanTypographicalMarkers(seg.replace(/_{2,}/g, '').replace(/\s{2,}/g, ' ')).trim();
+          if (cleaned && cleaned.length > 3 && !questions.includes(cleaned)) {
+            questions.push(cleaned);
+          }
+        }
+      }
+    }
+  }
+
+  return questions;
+}
+
+/**
  * Pure 1:1 Universal Mapper for Writing Block (Free production & formative feedback)
  */
 export function mapBlockToWriting(block: ExtractedBlock): WritingBlock {
@@ -683,11 +733,14 @@ export function mapBlockToWriting(block: ExtractedBlock): WritingBlock {
   } else if (followUpPrompt && prompt.includes(followUpPrompt)) {
     prompt = prompt.replace(followUpPrompt, '').trim();
   }
-  prompt = stripOrphanTypographicalMarkers(prompt);
+  // Strictly sanitize completion underscores in writing prompt
+  prompt = stripOrphanTypographicalMarkers(prompt.replace(/_{2,}/g, '').replace(/\s{2,}/g, ' ').trim());
 
   // Extract guidelines
   let guidelines: string[] | undefined = Array.isArray(parsed.guidelines) && parsed.guidelines.length > 0
-    ? parsed.guidelines.map((g: any) => stripOrphanTypographicalMarkers(String(g).trim())).filter(Boolean)
+    ? parsed.guidelines
+        .map((g: any) => stripOrphanTypographicalMarkers(String(g).replace(/_{2,}/g, '').trim()))
+        .filter(Boolean)
     : undefined;
 
   // If guidelines are missing, generate them deterministically (cardinal patterns, requirement lists, or scaffolding)
@@ -705,10 +758,15 @@ export function mapBlockToWriting(block: ExtractedBlock): WritingBlock {
     }
   }
 
+  // Guard: If guidelines are still missing and items exist, populate only if items are genuine prompts/questions,
+  // and strip any completion underscores (_{2,}) so writing never contains completion markers!
   if (!guidelines && Array.isArray(parsed.items) && parsed.items.length > 1) {
     const itemGuides = parsed.items
-      .map((it: any) => (typeof it === 'object' ? stripOrphanTypographicalMarkers(String(it.prompt || '').trim()) : stripOrphanTypographicalMarkers(String(it).trim())))
-      .filter((p: string) => p && !/^\d+[.)]?$/.test(p));
+      .map((it: any) => {
+        const raw = typeof it === 'object' ? String(it.prompt || '').trim() : String(it).trim();
+        return stripOrphanTypographicalMarkers(raw.replace(/_{2,}/g, '').trim());
+      })
+      .filter((p: string) => p && !/^\d+[.)]?$/.test(p) && p.length > 2);
     if (itemGuides.length > 1) {
       guidelines = itemGuides;
     }
@@ -717,6 +775,13 @@ export function mapBlockToWriting(block: ExtractedBlock): WritingBlock {
   if (!guidelines && Array.isArray(parsed.wordBank) && parsed.wordBank.length > 0) {
     guidelines = parsed.wordBank.map((w: any) => `Use topic/idea: ${stripOrphanTypographicalMarkers(String(w).trim())}`);
   }
+
+  // Final sanitization guard for writing block: strictly forbid completion underscores (_{2,})
+  const sanitizedGuidelines = guidelines && guidelines.length > 0
+    ? guidelines
+        .map((g) => stripOrphanTypographicalMarkers(g.replace(/_{2,}/g, '').replace(/\s{2,}/g, ' ').trim()))
+        .filter(Boolean)
+    : undefined;
 
   const minWords = typeof parsed.minWords === 'number' ? parsed.minWords : undefined;
   const maxWords = typeof parsed.maxWords === 'number' ? parsed.maxWords : undefined;
@@ -728,7 +793,7 @@ export function mapBlockToWriting(block: ExtractedBlock): WritingBlock {
     id,
     instruction,
     prompt,
-    guidelines: guidelines && guidelines.length > 0 ? guidelines : undefined,
+    guidelines: sanitizedGuidelines && sanitizedGuidelines.length > 0 ? sanitizedGuidelines : undefined,
     minWords,
     maxWords,
     placeholder,
@@ -1516,8 +1581,49 @@ export function convertSlideToRole(slide: Slide, targetRole: PedagogicalRole): S
     }
   } else {
     // Subcase 2B: No interaction existed yet (slide was purely reference)
-    // Run recovery parsing on slide.referenceContent so listItems is NEVER empty!
-    if (slide.referenceContent && slide.referenceContent.type === 'text') {
+    if (targetRole === 'interaction_writing') {
+      // Orthogonality Rule for Writing: Do NOT treat reading text as fill-in-the-blanks!
+      const rawText = slide.referenceContent && slide.referenceContent.type === 'text'
+        ? slide.referenceContent.content
+        : '';
+      const instruction = slide.subtitle || 'Responde a las preguntas o redacta tu texto:';
+      const title = slide.title || 'Actividad de Redacción';
+
+      // 1. Cleanly extract comprehension questions (? or interrogatives) without underscores
+      const extractedQuestions = extractComprehensionQuestions(rawText, slide.subtitle);
+
+      // 2. Set guidelines: clean comprehension questions or pedagogical deterministic guidelines
+      let guidelines: string[] | undefined = undefined;
+      if (extractedQuestions.length > 0) {
+        guidelines = extractedQuestions;
+      } else {
+        const generated = generateDeterministicGuidelines(
+          instruction,
+          title
+        );
+        if (generated.length > 0) {
+          guidelines = generated;
+        }
+      }
+
+      // 3. Central prompt: if questions exist, instruct student to answer them; otherwise use instruction/title
+      const prompt = extractedQuestions.length > 0
+        ? (slide.subtitle && !extractedQuestions.some((q) => q.includes(slide.subtitle!))
+            ? slide.subtitle
+            : 'Responde a las siguientes preguntas basándote en la lectura:')
+        : (instruction || title);
+
+      const writingBlock: WritingBlock = {
+        type: 'writing',
+        id: generateId('inter-wri'),
+        instruction: instruction || 'Redacta tu texto siguiendo las pautas:',
+        prompt: stripOrphanTypographicalMarkers(prompt.replace(/_{2,}/g, '').trim()),
+        guidelines: guidelines && guidelines.length > 0 ? guidelines : undefined,
+        placeholder: 'Escribe tu redacción aquí...',
+      };
+
+      nextInteraction = writingBlock;
+    } else if (slide.referenceContent && slide.referenceContent.type === 'text') {
       const items = parseTextToInteractiveItems(slide.referenceContent.content);
       const block: ExtractedBlock = {
         id: `recovered-${Date.now()}`,
