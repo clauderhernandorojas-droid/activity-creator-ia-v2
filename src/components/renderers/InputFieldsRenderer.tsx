@@ -22,7 +22,7 @@ interface ParsedMatchingPrompt {
 const parseMatchingPrompt = (
   rawPrompt: string,
   fallbackIdx: number,
-  hasWordBank = false,
+  _hasWordBank = false,
   fallbackClue?: string,
   isSentenceOrQuestionTask = false
 ): ParsedMatchingPrompt => {
@@ -47,7 +47,8 @@ const parseMatchingPrompt = (
     };
   }
 
-  // Pattern 1: e.g. "2. _______ : a time", "2) _______ : a time", "2. : a time", "_______ : a time", ": a time"
+  // Pattern 1: Delimitador explícito de asociación con dos puntos:
+  // e.g. "2. _______ : a time", "2) _______ : a time", "2. : a time", "_______ : a time", ": a time"
   const colonMatch = trimmed.match(/^(?:(\d+)[.)]\s*)?(?:_+|\.{3,}|—+)?\s*:\s*(.+)$/);
   if (colonMatch && colonMatch[2].trim()) {
     const candidate = colonMatch[2].trim();
@@ -60,7 +61,8 @@ const parseMatchingPrompt = (
     }
   }
 
-  // Pattern 2: e.g. "2. _______ - a time", "2. — a time", "2. -> a time"
+  // Pattern 2: Delimitador explícito de asociación con guión o flecha:
+  // e.g. "2. _______ - a time", "2. — a time", "2. -> a time", "2. => a time"
   const dashMatch = trimmed.match(/^(?:(\d+)[.)]\s*)?(?:_+|\.{3,}|—+)?\s*(?:[-—–]|->|=>)\s*(.+)$/);
   if (dashMatch && dashMatch[2].trim()) {
     const candidate = dashMatch[2].trim();
@@ -73,9 +75,10 @@ const parseMatchingPrompt = (
     }
   }
 
-  // Pattern 3: e.g. "2. _______ a time" (missing colon/dash but blank at start)
-  const blankMatch = trimmed.match(/^(?:(\d+)[.)]\s*)?(?:_+|\.{3,}|—+)\s*(.+)$/);
-  if (blankMatch && blankMatch[2].trim() && (hasWordBank || blankMatch[2].length < 80)) {
+  // Pattern 3: Delimitador explícito de hueco al inicio seguido de texto:
+  // e.g. "2. _______ a time" (con hueco explícito de guiones bajos al inicio)
+  const blankMatch = trimmed.match(/^(?:(\d+)[.)]\s*)?(?:_{2,}|\.{3,}|—{2,})\s*(.+)$/);
+  if (blankMatch && blankMatch[2].trim()) {
     const candidate = blankMatch[2].replace(/^:\s*/, '').trim();
     if (/[a-zA-Z]{2,}/.test(candidate) && !candidate.includes('?')) {
       return {
@@ -86,35 +89,7 @@ const parseMatchingPrompt = (
     }
   }
 
-  // Pattern 4: Number followed by definition/clue phrase: "2. a time", "2) a time"
-  const numClueMatch = trimmed.match(/^(\d+)[.)]\s+(.+)$/);
-  if (numClueMatch && numClueMatch[2].trim()) {
-    const candidateClue = numClueMatch[2].trim();
-    const isDefinitionClue = /[a-zA-Z]{2,}/.test(candidateClue) &&
-      !candidateClue.includes('?') &&
-      !/^\([eE]\.[gG]\./i.test(candidateClue);
-    if ((hasWordBank || candidateClue.length < 80) && isDefinitionClue) {
-      return {
-        isMatching: true,
-        itemNumber: numClueMatch[1],
-        clue: candidateClue,
-      };
-    }
-  }
-
-  // Pattern 5: When hasWordBank is true and rawPrompt is an actual definition phrase without number: "a time", "a person"
-  const isDefinitionPhrase = /[a-zA-Z]{2,}/.test(trimmed) &&
-    trimmed.length >= 3 &&
-    !/^(?:item\s*)?\d+[.)]?$/i.test(trimmed);
-  if (hasWordBank && isDefinitionPhrase && !trimmed.includes('?') && trimmed.length < 80 && !trimmed.includes('___')) {
-    return {
-      isMatching: true,
-      itemNumber: String(fallbackIdx + 1),
-      clue: trimmed,
-    };
-  }
-
-  // Pattern 6: If rawPrompt is just a number (e.g. "2" or "2.") but we have a fallback clue from hint/explanation
+  // Pattern 4: Fallback solo si es un número puro con pista explícita en fallbackClue (proveniente de hint/explicación)
   if (isPureNumber && fallbackClue && fallbackClue.trim() && !isSentenceOrQuestionTask) {
     const isRealClue = fallbackClue.trim().length > 3 && !/open|formulation|respuesta/i.test(fallbackClue);
     if (isRealClue) {

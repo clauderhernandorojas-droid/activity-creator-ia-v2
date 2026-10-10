@@ -366,8 +366,8 @@ const STRUCTURED_EXTRACTION_SCHEMA = {
     },
     interactionType: {
       type: 'string',
-      enum: ['fill_blanks', 'multiple_choice', 'matching', 'buckets', 'reference', 'writing'],
-      description: 'The strict pedagogical archetype of the interactive exercise. Use "writing" for free text production (paragraphs, profiles, letters, essays, reviews). Use "multiple_choice" or "matching" for matching tasks (headings to paragraphs, terms to definitions) AND identification tasks. Use "buckets" for category sorting. Use "reference" for communicative activities where no digital answer is evaluated.'
+      enum: ['fill_blanks', 'multiple_choice', 'selection', 'matching', 'buckets', 'reference', 'writing'],
+      description: 'The strict pedagogical archetype of the interactive exercise. Use "writing" for free text production (paragraphs, profiles, letters, essays, reviews). Use "multiple_choice" or "selection" for checklists, ticking/marking items ("Tick (✓)...", "Check...", "Select all that apply", "Choose from the list"), matching tasks (headings to paragraphs, terms to definitions) AND identification tasks ("Underline", "Circle"). Use "buckets" for category sorting. Use "reference" for communicative activities where no digital answer is evaluated.'
     },
     guidelines: {
       type: 'array',
@@ -580,6 +580,18 @@ REGLAS UNIVERSALES DE BANCO DE OPCIONES Y ASIGNACIÓN BIUNÍVOCA:
     3. En cada ítem, 'expectedAnswer' DEBE ser exactamente la opción correspondiente del segundo conjunto.
     4. En 'acceptedAnswers', incluye la opción completa y cualquier variante válida (ej. solo la letra "A" o el texto completo).
     5. 'interactionType' DEBE ser 'multiple_choice' o 'matching'.
+- REGLA DIDÁCTICA UNIVERSAL PARA TAREAS DE MARCADO / CHECKLIST / LISTAS DE VERIFICACIÓN ("Tick / Check / Mark / Select all that apply / Choose from the list"):
+  * Cuando la consigna instruya marcar, tildar, verificar con tick (✓), seleccionar afirmaciones verdaderas o elegir elementos de una lista ("Tick the phrases...", "Tick (✓)...", "Check the boxes...", "Check the sentences that are true...", "Select all that apply", "Choose from the list"):
+  * PROHIBICIÓN ESTRICTA DE 'fill_blanks' Y PROHIBICIÓN DE WORDBANK FICTICIO:
+    - NUNCA clasifiques estas actividades como 'fill_blanks'.
+    - NUNCA crees huecos artificiales para rellenar con texto libre ("___").
+    - NUNCA generes un wordBank artificial a partir de las frases o elementos a marcar.
+  * MODELADO COMO SELECCIÓN / CHECKLIST:
+    1. 'interactionType' DEBE ser 'multiple_choice' o 'selection'.
+    2. 'items': Cada frase, oración o elemento a marcar debe ser un ítem interactivo limpio en 'prompt' sin ningún hueco ni guiones bajos (ej. prompt: "be married", prompt: "have children").
+    3. 'wordBank' DEBE ser [] (vacío). NUNCA generes un banco de palabras ficticio con las opciones a marcar.
+    4. Si la actividad es de reflexión personal, encuesta o no tiene respuestas únicas o fijas ("true for you", "about yourself", "your opinion"), asigna obligatoriamente 'isGraded': false.
+
 - REGLA DIDÁCTICA UNIVERSAL PARA TAREAS DE IDENTIFICACIÓN / MARCADO ("Underline / Circle / Highlight / Identify"):
   * Cuando la consigna instruya identificar, subrayar, encerrar en un círculo o resaltar elementos lingüísticos sobre oraciones o preguntas existentes (ej. "Underline the question words", "Circle the correct verbs", "Identify the past forms", "Highlight the adjectives"):
   * PROHIBICIÓN ESTRICTA DE 'fill_blanks': NUNCA clasifiques estas actividades como 'fill_blanks', NUNCA borres palabras de las oraciones y NUNCA generes huecos artificiales con '___'.
@@ -597,7 +609,8 @@ UNIVERSAL TAXONOMY & STRICT CONTRACT:
 4. "referenceContent": Passive consultation material. Put reading passages, articles, dialogues, speech bubbles, instructional guidance ('TIPS!'), or consolidated support phrases/vocabulary here that provide reference context and DO NOT require an interactive answer. (null if none). Preserva fielmente la estructura visual y saltos de línea del documento original ('\n\n' entre párrafos y '\n' entre turnos de diálogo o listas). NUNCA repitas el título aquí ni agregues meta-explicaciones ni descripciones de fotos ni spoilers a preguntas predictivas. CRÍTICO: Listas de ideas/tópicos, vocabulario suelto, ejemplos resueltos o consignas NUNCA son referenceContent; si no hay un texto de lectura autónomo, pon estrictamente null.
 5. "wordBank": If the clipping contains a vocabulary box, word box, container, or pool of suggested ideas/topics (e.g. ['personal details', 'family', 'work']), extract them into "wordBank" as string[]. (Empty array [] if none).
    * REGLA DE PARTICIÓN 1: NUNCA incluyas cajas de palabras (Word Banks), notas de apoyo ('TIPS!'), números de página o códigos de lección dentro de 'items'.
-6. "interactionType": Must be one of: 'fill_blanks', 'multiple_choice', 'matching', 'buckets', 'reference', 'writing'.
+6. "interactionType": Must be one of: 'fill_blanks', 'multiple_choice', 'selection', 'matching', 'buckets', 'reference', 'writing'.
+   - Actividades de marcado directo, listas de verificación o checklist ('Tick (✓)...', 'Check...', 'Select all that apply') se categorizan SIEMPRE como 'multiple_choice' o 'selection' con wordBank vacío [].
    - Actividades de redacción continua libre ('Write a profile / paragraph / summary / email / story...') usan 'writing' con 'guidelines' para las pautas guía y 'prompt'/'instruction' para la consigna central.
    - Actividades de emparejar/relacionar dos conjuntos (párrafos con títulos, términos con definiciones, preguntas con respuestas) se categorizan SIEMPRE como 'multiple_choice' o 'matching' poblando 'options' en cada ítem.
    - Ejercicios de agrupar o clasificar términos en categorías o columnas usan 'buckets' siguiendo la Regla Universal de Clasificación por Categorías.
@@ -630,7 +643,8 @@ CRITICAL NEGATIVE CONSTRAINTS:
 - NUNCA extraigas listas de vocabulario, bancos de ideas, ejemplos resueltos (ej. '1 do / What / do / you ? What do you do?' o 'What do you do?') o consignas como 'referenceContent'. 'referenceContent' es exclusivamente para pasajes de lectura autónomos (artículos, historias o tablas gramaticales). Si no hay un texto de lectura real, 'referenceContent' DEBE ser estrictamente null para que la actividad ocupe el ancho completo de la diapositiva.
 - NUNCA concatenes directivas procedimentales multietapa (a, b, c, d) en un único párrafo continuo sin formato; debes estructurarlas en viñetas limpias con saltos de línea dobles y negritas ('**a)** ... \n\n **b)** ...').
 - NUNCA concatenes directivas divididas en letras (a, b, c) en una sola cadena en el título ni en la instrucción cuando (b) es audio de verificación. La tarea principal (a) es el 'title'/'instruction', la directiva de verificación auditiva (b) define 'audioLabel'/'verificationAudioUrl', y el cierre oral (c) define 'followUpPrompt'.
-- NUNCA clasifiques tareas de relacionar, emparejar o correspondencia (Matching de párrafos con encabezados, términos con definiciones, preguntas con respuestas) como 'fill_blanks'. Deben modelarse obligatoriamente como 'multiple_choice' con el conjunto completo de alternativas en 'options' para cada ítem.
+- NUNCA clasifiques tareas de marcado directo, tick (✓), verificación o checklist ("Tick...", "Check...", "Select all that apply") como 'fill_blanks' ni generes inputs de texto o un wordBank ficticio; deben modelarse como selección/checklist ('multiple_choice' o 'selection').
+- NUNCA clasifiques tareas de emparejar o correspondencia (Matching de párrafos con encabezados, términos con definiciones, preguntas con respuestas) como 'fill_blanks'. Deben modelarse obligatoriamente como 'multiple_choice' con el conjunto completo de alternativas en 'options' para cada ítem.
 - NUNCA clasifiques tareas de identificación o marcado ("Underline...", "Circle...", "Highlight...", "Identify the...") como 'fill_blanks' borrando palabras ni creando huecos artificiales en las oraciones; deben modelarse como 'multiple_choice' conservando la oración completa intacta en 'prompt' y presentando las palabras candidatas en 'options'.
 - NUNCA incluyas recortes de pasajes de lectura, textos transcritos, artículos o ejercicios en 'visualImageIndices'; solo fotografías o ilustraciones genuinas sin transcripción textual directa.
 - NUNCA incluyas meta-comentarios pedagógicos, justificaciones didácticas ni notas dirigidas al profesor (ej. "This is an open-ended activity...", "This exercise is designed to encourage students..."). Todo el texto debe ser 100% material directo para el alumno.
@@ -1378,6 +1392,7 @@ function sanitizeExtractedPayload(payload: ExtractedStructuredPayload): Extracte
   const rawTitle = payload.title ? stripEditorialPrefix(String(payload.title).trim()) : '';
   const isMatchingDirective = /match\b|relate\b|pair\b|emparej/i.test(`${rawTitle} ${rawInstruction}`);
   const isIdentifyDirective = /underline\b|circle\b|highlight\b|identify\b|subraya\b|encierra\b|marca\b/i.test(`${rawTitle} ${rawInstruction}`);
+  const isChecklistDirective = /tick\b|check\b|marcar?\b|select\s+all\b|choose\s+from\b|verdader[ao]s?\s+para\s+ti|true\s+for\s+you|about\s+yourself/i.test(`${rawTitle} ${rawInstruction}`);
 
   // Detect open production directive ("Write ten questions. Use these ideas...")
   const openProductionRegex = /\b(?:write|make|ask|create|formulate|produce)\s+(?:(?:at\s+least|about|approx\w*)\s+)?(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|\d{1,2})\s+(questions|sentences|phrases|things|items)\b/i;
@@ -1576,16 +1591,38 @@ function sanitizeExtractedPayload(payload: ExtractedStructuredPayload): Extracte
   }
 
   // Consolidate wordBank: include words from payload plus topics harvested from spurious referenceContent
-  const activeWordBank: string[] = Array.from(
+  let activeWordBank: string[] = Array.from(
     new Set([
       ...(Array.isArray(payload.wordBank) ? payload.wordBank.map((w) => stripOrphanTypographicalMarkers(String(w).trim())).filter(Boolean) : []),
       ...wordBankTopics.map(stripOrphanTypographicalMarkers).filter(Boolean),
     ])
   );
 
+  // Discard fictitious wordBank on checklists or selection tasks
+  if (isChecklistDirective || payload.interactionType === 'selection' || (payload.interactionType === 'multiple_choice' && !isMatchingDirective)) {
+    activeWordBank = [];
+  }
+
   let finalItems = sanitizedItems;
   let finalIsGraded = payload.isGraded !== undefined ? Boolean(payload.isGraded) : true;
+  if (isChecklistDirective && /true for you|about yourself|your opinion|para ti/i.test(`${rawTitle} ${rawInstruction}`)) {
+    finalIsGraded = false;
+  }
   let finalInteractionType = payload.interactionType || 'fill_blanks';
+
+  // Clean checklist items from orphan letter markers (e.g. "be married F" -> "be married")
+  if (isChecklistDirective || payload.interactionType === 'selection') {
+    finalItems = finalItems.map((it) => {
+      let p = it.prompt.replace(/^(?:item\s*)?\d+[.)]\s*/i, '').trim();
+      p = p.replace(/\s+[A-L]$/, '').trim();
+      return {
+        ...it,
+        prompt: p || it.prompt,
+        expectedAnswer: '',
+        acceptedAnswers: [],
+      };
+    });
+  }
 
   // 0. FREE WRITING TASKS ("Write a profile / paragraph / summary / description / email...")
   const writingDirectiveRegex = /\b(?:write|draft|compose|produce)\s+(?:an?\s+)?(?:profile|paragraph|summary|description|email|letter|story|review|essay|biography|post|short\s+text|text)\b/i;
@@ -1770,6 +1807,9 @@ function sanitizeExtractedPayload(payload: ExtractedStructuredPayload): Extracte
     interactionType: (() => {
       if (isWritingTask) {
         return 'writing';
+      }
+      if (isChecklistDirective || payload.interactionType === 'selection') {
+        return 'selection';
       }
       if ((isMatchingDirective || isIdentifyDirective) && finalItems.length > 0 && !isOpenProductionTask) {
         return 'multiple_choice';

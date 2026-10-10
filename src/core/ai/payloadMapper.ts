@@ -444,10 +444,83 @@ export function mapBlockToSelection(block: ExtractedBlock): SelectionBlock {
     };
   }
 
+  // Case 1b: Explicit flat options already present
+  if (Array.isArray(parsed.options) && parsed.options.length > 0) {
+    const flatOptions: SelectionOption[] = parsed.options.map((opt: any, idx: number) => {
+      const rawOpt = typeof opt === 'string' ? opt.trim() : String(opt.text || opt.label || '').trim();
+      const text = stripOrphanTypographicalMarkers(rawOpt);
+      const isCorrect = typeof opt === 'object' && opt !== null ? Boolean(opt.isCorrect) : false;
+      return {
+        id: generateId('opt'),
+        text: text || `Elemento ${idx + 1}`,
+        isCorrect,
+        feedback: typeof opt === 'object' ? opt.feedback : undefined
+      };
+    });
+
+    return {
+      type: 'selection',
+      id: generateId('inter-sel'),
+      instruction: parsed.instruction || parsed.title || 'Marca las opciones correspondientes:',
+      verificationAudioUrl: parsed.verificationAudioUrl || undefined,
+      audioLabel: parsed.audioLabel || undefined,
+      followUpPrompt: parsed.followUpPrompt || undefined,
+      allowMultiple: true,
+      options: flatOptions,
+      questions: []
+    };
+  }
+
   // Case 2: Structured items with candidate options
   const rawItems: any[] = Array.isArray(parsed.items) ? parsed.items : [];
 
   if (rawItems.length > 0) {
+    const contextDirective = `${parsed.title || ''} ${parsed.instruction || ''}`;
+    const isChecklist = /tick\b|check\b|marcar?\b|select\s+all\b|choose\s+from\b|true\s+for\s+you|verdader[ao]s?\s+para\s+ti|about\s+yourself/i.test(contextDirective) ||
+      parsed.interactionType === 'selection';
+
+    const isMatching = /match\b|relate\b|pair\b|emparej/i.test(contextDirective) ||
+      parsed.interactionType === 'matching';
+
+    const isIdentifyTask = /underline\b|circle\b|highlight\b|identify\b|subraya\b|encierra\b|marca\b/i.test(contextDirective);
+
+    const hasPerItemOptions = rawItems.some((it) => Array.isArray(it?.options) && it.options.length > 1);
+
+    // If it's a checklist or simple candidate items without nested options and not a matching/identify task:
+    // Map directly to Flat Selection Mode (Tarjetas interactivas con checkbox)
+    if (isChecklist || (!hasPerItemOptions && !isMatching && !isIdentifyTask)) {
+      const flatOptions: SelectionOption[] = rawItems.map((item: any, idx: number) => {
+        let text = typeof item === 'object' && item !== null
+          ? String(item.prompt || item.text || `Elemento ${idx + 1}`).trim()
+          : String(item).trim();
+
+        // Clean leading item numbers: "1. be married" -> "be married"
+        text = text.replace(/^(?:item\s*)?\d+[.)]\s*/i, '').trim();
+        // Clean trailing sample letter if it was a book sample like "be married F" -> "be married"
+        text = text.replace(/\s+[A-L]$/, '').trim();
+        text = stripOrphanTypographicalMarkers(text);
+
+        const isCorrect = typeof item === 'object' && item !== null ? Boolean(item.isCorrect) : false;
+        return {
+          id: generateId('opt'),
+          text: text || `Elemento ${idx + 1}`,
+          isCorrect,
+          feedback: typeof item === 'object' ? (item.explanation || item.feedback) : undefined,
+        };
+      });
+
+      return {
+        type: 'selection',
+        id: generateId('inter-sel'),
+        instruction: parsed.instruction || parsed.title || 'Marca las opciones correspondientes:',
+        verificationAudioUrl: parsed.verificationAudioUrl || undefined,
+        audioLabel: parsed.audioLabel || undefined,
+        followUpPrompt: parsed.followUpPrompt || undefined,
+        allowMultiple: true,
+        options: flatOptions,
+        questions: []
+      };
+    }
     // Global options pool from wordBank or from all items' options or expectedAnswers
     const globalOptionsPool = Array.from(
       new Set([
@@ -461,11 +534,7 @@ export function mapBlockToSelection(block: ExtractedBlock): SelectionBlock {
       ])
     ).filter(Boolean);
 
-    const isMatching = /match\b|relate\b|pair\b|emparej/i.test(`${parsed.title || ''} ${parsed.instruction || ''}`) ||
-      parsed.interactionType === 'matching' ||
-      globalOptionsPool.length >= 3;
-
-    const isIdentifyTask = /underline\b|circle\b|highlight\b|identify\b|subraya\b|encierra\b|marca\b/i.test(`${parsed.title || ''} ${parsed.instruction || ''}`);
+    const isMatchingMode = isMatching || globalOptionsPool.length >= 3;
 
     const questions = rawItems.map((item: any, idx: number) => {
       let prompt = String(item.prompt || item.text || `Pregunta ${idx + 1}`).trim();
@@ -519,7 +588,7 @@ export function mapBlockToSelection(block: ExtractedBlock): SelectionBlock {
         }
       }
 
-      const mode: 'single_choice' | 'multiple_choice' | 'dropdown' = isMatching
+      const mode: 'single_choice' | 'multiple_choice' | 'dropdown' = isMatchingMode
         ? 'dropdown'
         : 'single_choice';
 
@@ -531,7 +600,7 @@ export function mapBlockToSelection(block: ExtractedBlock): SelectionBlock {
       };
     });
 
-    const defaultInstruction = isMatching
+    const defaultInstruction = isMatchingMode
       ? 'Elige la correspondencia correcta para cada elemento:'
       : (isIdentifyTask
         ? 'Selecciona la opción correcta identificada en cada oración:'
@@ -1120,10 +1189,12 @@ export function mapBlockToRole(
     case 'reference_table':
       return { reference: mapBlockToStructuredReference(block) };
     case 'interaction_inputs': {
-      const isIdentifyTask = /underline\b|circle\b|highlight\b|identify\b|subraya\b|encierra\b|marca\b/i.test(
-        `${parsed.title || ''} ${parsed.instruction || ''}`
-      );
-      if (isIdentifyTask) {
+      const isSelectionTask = parsed.interactionType === 'selection' ||
+        parsed.interactionType === 'multiple_choice' ||
+        /tick\b|check\b|marcar?\b|select\s+all\b|choose\s+from\b|underline\b|circle\b|highlight\b|identify\b|subraya\b|encierra\b|marca\b|true\s+for\s+you|verdader[ao]s?\s+para\s+ti/i.test(
+          `${parsed.title || ''} ${parsed.instruction || ''}`
+        );
+      if (isSelectionTask) {
         return { interaction: mapBlockToSelection(block), reference: validInteractiveReference };
       }
       return { interaction: mapBlockToInputFields(block), reference: validInteractiveReference };

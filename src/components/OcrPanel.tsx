@@ -232,10 +232,15 @@ export const OcrPanel: React.FC = () => {
       return 'interaction_inputs';
     }
 
-    const isIdentifyDirective = /underline\b|circle\b|highlight\b|identify\b|subraya\b|encierra\b|marca\b/i.test(
+    const isSelectionOrChecklistDirective = /tick\b|check\b|marcar?\b|select\s+all\b|choose\s+from\b|underline\b|circle\b|highlight\b|identify\b|subraya\b|encierra\b|marca\b|true\s+for\s+you|verdader[ao]s?\s+para\s+ti/i.test(
       `${pd.title || ''} ${pd.instruction || ''}`
     );
-    if (pd.interactionType === 'multiple_choice' || pd.interactionType === 'matching' || isIdentifyDirective) {
+    if (
+      pd.interactionType === 'multiple_choice' ||
+      pd.interactionType === 'selection' ||
+      pd.interactionType === 'matching' ||
+      isSelectionOrChecklistDirective
+    ) {
       return 'interaction_selection';
     }
     if (pd.interactionType === 'classification' || pd.interactionType === 'drag_drop') {

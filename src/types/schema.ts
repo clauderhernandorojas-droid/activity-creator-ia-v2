@@ -344,7 +344,7 @@ export const ExtractedStructuredPayloadSchema = z.object({
   followUpPrompt: z.string().optional(),
   referenceContent: z.string().nullable().optional(),
   wordBank: z.array(z.string()).default([]),
-  interactionType: z.enum(['fill_blanks', 'multiple_choice', 'matching', 'buckets', 'reference', 'writing']).default('fill_blanks'),
+  interactionType: z.enum(['fill_blanks', 'multiple_choice', 'selection', 'matching', 'buckets', 'reference', 'writing']).default('fill_blanks'),
   guidelines: z.array(z.string()).optional(),
   minWords: z.number().optional(),
   maxWords: z.number().optional(),
