@@ -79,11 +79,6 @@ export function slugify(text: string): string {
 export function mapBlockToInputFields(block: ExtractedBlock): InputFieldsBlock {
   const parsed = block.parsedData || {};
 
-  // Pure 1:1 extraction of Word Bank
-  const wordBank: string[] | undefined = Array.isArray(parsed.wordBank) && parsed.wordBank.length > 0
-    ? parsed.wordBank.map((w: any) => stripOrphanTypographicalMarkers(String(w).trim())).filter(Boolean)
-    : undefined;
-
   const rawTableHeaders = Array.isArray(parsed.tableHeaders)
     ? parsed.tableHeaders
     : (Array.isArray(parsed.headers) ? parsed.headers : []);
@@ -91,11 +86,32 @@ export function mapBlockToInputFields(block: ExtractedBlock): InputFieldsBlock {
     ? parsed.tableRows
     : (Array.isArray(parsed.rows) ? parsed.rows : []);
 
+  const rawItems: any[] = Array.isArray(parsed.items) ? parsed.items : [];
+  const hasInteractiveItems = rawItems.length > 0;
   const hasTableRows = rawTableRows.length > 0;
+
+  // Invariante: Cualquier bloque de tabla con items (preguntas) es de consulta y pertenece a referenceContent.
+  // layoutMode es 'table' SOLO si NO hay items interactivos y las celdas de la tabla contienen inputs explícitos.
   const isTableLayout = Boolean(
-    parsed.layoutMode === 'table' ||
+    (parsed.layoutMode === 'table' || hasTableRows) &&
+    !hasInteractiveItems &&
+    rawTableRows.some((row: any[]) => Array.isArray(row) && row.some((c: any) => c?.isInput))
+  );
+
+  // Invariante estricta: Si la actividad consiste en responder preguntas sobre material de consulta
+  // (referenceContent, tabla o lectura presente), wordBank debe inicializarse vacío (undefined).
+  const hasReference = Boolean(
+    parsed.referenceContent ||
+    parsed.content ||
+    (block.rawText && block.rawText.includes('|')) ||
     hasTableRows
   );
+
+  const wordBank: string[] | undefined = (hasReference && hasInteractiveItems)
+    ? undefined
+    : (Array.isArray(parsed.wordBank) && parsed.wordBank.length > 0
+        ? parsed.wordBank.map((w: any) => stripOrphanTypographicalMarkers(String(w).trim())).filter(Boolean)
+        : undefined);
 
   let tableHeaders: string[] = [];
   let tableRows: InputFieldTableCell[][] = [];
@@ -149,8 +165,6 @@ export function mapBlockToInputFields(block: ExtractedBlock): InputFieldsBlock {
       });
     });
   }
-
-  const rawItems: any[] = Array.isArray(parsed.items) ? parsed.items : [];
 
   // Pure 1:1 transformation of items
   const listItems: InputFieldListItem[] = rawItems.map((item: any, idx: number) => {
@@ -1014,21 +1028,70 @@ export function mapBlockToStructuredReference(block: ExtractedBlock): Structured
 }
 
 /**
+ * Parses GitHub-flavored Markdown tables into structured headers and rows matrix.
+ */
+export function parseMarkdownTable(markdown?: string | null): { headers: string[]; rows: string[][] } | null {
+  if (!markdown || !markdown.includes('|')) return null;
+  const lines = markdown.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  const tableLines = lines.filter((l) => l.startsWith('|') && l.endsWith('|'));
+  if (tableLines.length < 2) return null;
+
+  const parseRow = (line: string) =>
+    line.slice(1, -1).split('|').map((c) => stripOrphanTypographicalMarkers(c.trim()));
+
+  const headers = parseRow(tableLines[0]);
+  const isSeparator = (line: string) => /^\|(?:\s*:?-+:?\s*\|)+$/.test(line);
+
+  const contentRowLines = tableLines.slice(1).filter((l) => !isSeparator(l));
+  if (contentRowLines.length === 0) return null;
+
+  const rows = contentRowLines.map(parseRow);
+  return { headers, rows };
+}
+
+/**
  * Pure 1:1 Universal Mapper for Reference Table (2D Matrix fallback)
  */
 export function mapBlockToReferenceTable(block: ExtractedBlock): ReferenceTableBlock {
   const parsed = block.parsedData || {};
 
-  const headers: string[] = Array.isArray(parsed.headers) ? parsed.headers : [];
-  const rows: string[][] = Array.isArray(parsed.rows) ? parsed.rows : [];
+  let headers: string[] = Array.isArray(parsed.tableHeaders) && parsed.tableHeaders.length > 0
+    ? parsed.tableHeaders.map((h: any) => stripEditorialPrefix(stripOrphanTypographicalMarkers(String(h).trim()))).filter(Boolean)
+    : (Array.isArray(parsed.headers) ? parsed.headers.map((h: any) => stripEditorialPrefix(stripOrphanTypographicalMarkers(String(h).trim()))).filter(Boolean) : []);
+
+  let rawRows: any[] = Array.isArray(parsed.tableRows) && parsed.tableRows.length > 0
+    ? parsed.tableRows
+    : (Array.isArray(parsed.rows) ? parsed.rows : []);
+
+  // If table headers/rows are not in structured arrays, scan referenceContent or rawText for Markdown table syntax:
+  if (headers.length === 0 || rawRows.length === 0) {
+    const textToScan = typeof parsed.referenceContent === 'string'
+      ? parsed.referenceContent
+      : (typeof parsed.content === 'string' ? parsed.content : block.rawText || '');
+    const parsedMdTable = parseMarkdownTable(textToScan);
+    if (parsedMdTable) {
+      headers = parsedMdTable.headers;
+      rawRows = parsedMdTable.rows;
+    }
+  }
+
+  const rows: string[][] = rawRows.map((r: any) => {
+    if (!Array.isArray(r)) return [];
+    return r.map((c: any) => {
+      if (typeof c === 'object' && c !== null) {
+        return stripOrphanTypographicalMarkers(String(c.text || c.expectedAnswer || '').trim());
+      }
+      return stripOrphanTypographicalMarkers(String(c || '').trim());
+    });
+  });
 
   return {
     type: 'table_reference',
     id: generateId('ref-tbl'),
-    title: parsed.title || 'Cuadro Gramatical / Referencia',
+    title: stripEditorialPrefix(parsed.title || 'Cuadro Gramatical / Referencia'),
     headers,
     rows,
-    caption: parsed.caption || parsed.referenceContent || undefined
+    caption: parsed.caption || (typeof parsed.referenceContent === 'string' && !parsed.referenceContent.includes('|') ? parsed.referenceContent : undefined)
   };
 }
 
@@ -1235,24 +1298,34 @@ export function mapBlockToRole(
   const hasTableContent = Boolean(
     (Array.isArray(parsed.tableData) && parsed.tableData.length > 0) ||
     (Array.isArray(parsed.columns) && parsed.columns.length > 0) ||
+    (Array.isArray(parsed.tableHeaders) &&
+      Array.isArray(parsed.tableRows) &&
+      parsed.tableRows.length > 0) ||
     (Array.isArray(parsed.headers) &&
       Array.isArray(parsed.rows) &&
       parsed.rows.length > 0) ||
-    parsedCols.length > 0
+    parsedCols.length > 0 ||
+    (typeof parsed.referenceContent === 'string' && parsed.referenceContent.includes('|') && parsed.referenceContent.includes('\n')) ||
+    (typeof block.rawText === 'string' && block.rawText.includes('|') && block.rawText.includes('\n'))
   );
 
   // For interactive roles, reference content is strictly prohibited from opening unless genuine reading text or grammar table exists
   const validInteractiveReference: ReferenceBlock | undefined = hasReadingContent
     ? (sanitizeReferenceBlock(mapBlockToReferenceText(block), block) as ReferenceBlock)
     : hasTableContent
-    ? mapBlockToStructuredReference(block)
+    ? ((Array.isArray(parsed.tableHeaders) && Array.isArray(parsed.tableRows) && parsed.tableRows.length > 0) ||
+       (Array.isArray(parsed.headers) && Array.isArray(parsed.rows) && parsed.rows.length > 0) ||
+       (typeof parsed.referenceContent === 'string' && parsed.referenceContent.includes('|')) ||
+       (typeof block.rawText === 'string' && block.rawText.includes('|'))
+        ? mapBlockToReferenceTable(block)
+        : mapBlockToStructuredReference(block))
     : undefined;
 
   switch (role) {
     case 'reference_text':
       return { reference: sanitizeReferenceBlock(mapBlockToReferenceText(block), block) as ReferenceBlock };
     case 'reference_table':
-      return { reference: mapBlockToStructuredReference(block) };
+      return { reference: validInteractiveReference || mapBlockToStructuredReference(block) };
     case 'interaction_inputs': {
       const isSelectionTask = parsed.interactionType === 'selection' ||
         parsed.interactionType === 'multiple_choice' ||
@@ -1260,9 +1333,15 @@ export function mapBlockToRole(
           `${parsed.title || ''} ${parsed.instruction || ''}`
         );
       if (isSelectionTask) {
-        return { interaction: mapBlockToSelection(block), reference: validInteractiveReference };
+        const interaction = mapBlockToSelection(block);
+        return { interaction, reference: validInteractiveReference };
       }
-      return { interaction: mapBlockToInputFields(block), reference: validInteractiveReference };
+      const interaction = mapBlockToInputFields(block);
+      // Invariante estricta: Si referenceContent o tabla está presente, wordBank debe ser vacío
+      if (validInteractiveReference) {
+        delete (interaction as any).wordBank;
+      }
+      return { interaction, reference: validInteractiveReference };
     }
     case 'interaction_selection':
       return { interaction: mapBlockToSelection(block), reference: validInteractiveReference };

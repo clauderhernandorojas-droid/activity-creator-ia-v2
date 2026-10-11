@@ -723,12 +723,18 @@ export const InputFieldsRenderer: React.FC<Props> = ({
 
           const rawPromptTrimmed = (item.prompt || '').trim();
           const isPureNumPrompt = /^(?:item\s*)?\d+[.)]?$/i.test(rawPromptTrimmed) || !rawPromptTrimmed;
-          const isQuestionTask = Boolean(
-            /question/i.test(`${block.instruction || ''} ${block.followUpPrompt || ''}`) ||
-            rawPromptTrimmed.includes('?') ||
-            (item.expectedAnswer && item.expectedAnswer.includes('?'))
-          );
-          const openPlaceholder = isQuestionTask ? 'Escribe tu pregunta aquí...' : 'Escribe tu respuesta aquí...';
+          const isInterrogativePrompt = rawPromptTrimmed.includes('?') ||
+            /^(?:(?:\(?\d+[.)]?|[a-zA-Z][.)]|•|\*|-)\s*)?(?:what|where|when|who|whom|which|why|how|do|does|did|is|are|was|were|can|could|should|would|have|has)\b/i.test(rawPromptTrimmed);
+
+          // Deterministic Question Semantics:
+          // When an item prompt is interrogative ('?' or question syntax), it is the question the student reads.
+          // The placeholder must always prompt for an answer ("Escribe tu respuesta..."), never infer that the student must formulate questions.
+          const isFormulateQuestionDirective = !isInterrogativePrompt && isPureNumPrompt &&
+            /\b(?:write|ask|make|formulate)\s+questions?\b|\b(?:formula|escribe|haz)\s+preguntas?\b/i.test(
+              `${block.instruction || ''} ${block.followUpPrompt || ''}`
+            );
+
+          const openPlaceholder = isFormulateQuestionDirective ? 'Escribe tu pregunta aquí...' : 'Escribe tu respuesta...';
 
           const hasRealClueOnRight = Boolean(
             parsedPrompt.isMatching &&

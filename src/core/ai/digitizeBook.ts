@@ -1364,11 +1364,52 @@ export function isAutonomousReadingContent(text: string | null): boolean {
 }
 
 /**
+ * Formats table headers and rows into clean GitHub-flavored Markdown table syntax.
+ */
+export function formatTableToMarkdown(headers: string[], rows: any[][]): string {
+  if (!headers.length && !rows.length) return '';
+  const numCols = Math.max(headers.length, ...rows.map((r) => (Array.isArray(r) ? r.length : 0)));
+  if (numCols === 0) return '';
+  const cleanHeaders = Array.from({ length: numCols }, (_, i) => headers[i] || `Columna ${i + 1}`);
+  const headerLine = `| ${cleanHeaders.join(' | ')} |`;
+  const sepLine = `| ${cleanHeaders.map(() => '---').join(' | ')} |`;
+  const rowLines = rows.map((r) => {
+    if (!Array.isArray(r)) return `| ${cleanHeaders.map(() => '').join(' | ')} |`;
+    const cells = Array.from({ length: numCols }, (_, i) => {
+      const cell = r[i];
+      const val = typeof cell === 'object' && cell !== null ? (cell.text || cell.expectedAnswer || '') : String(cell || '');
+      return stripOrphanTypographicalMarkers(String(val).replace(/\|/g, '-').trim());
+    });
+    return `| ${cells.join(' | ')} |`;
+  });
+  return [headerLine, sepLine, ...rowLines].join('\n');
+}
+
+/**
+ * Formats column-based structured table data into clean GitHub-flavored Markdown table syntax.
+ */
+export function formatColumnsToMarkdown(columns: { header: string; items: string[] }[]): string {
+  if (!columns.length) return '';
+  const maxRows = Math.max(...columns.map((c) => (Array.isArray(c?.items) ? c.items.length : 0)));
+  const headers = columns.map((c, i) => c?.header || `Columna ${i + 1}`);
+  const headerLine = `| ${headers.join(' | ')} |`;
+  const sepLine = `| ${headers.map(() => '---').join(' | ')} |`;
+  const rowLines: string[] = [];
+  for (let r = 0; r < maxRows; r++) {
+    const row = columns.map((c) => (Array.isArray(c?.items) ? c.items[r] || '' : ''));
+    rowLines.push(`| ${row.map((cell) => stripOrphanTypographicalMarkers(String(cell).replace(/\|/g, '-').trim())).join(' | ')} |`);
+  }
+  return [headerLine, sepLine, ...rowLines].join('\n');
+}
+
+/**
  * Extracts support topic ideas from a text block or bulleted list
  * (e.g. "Ideas: personal details, family, work and studies" -> ["personal details", "family", "work and studies"])
  */
 export function extractTopicIdeas(text: string): string[] {
   if (!text) return [];
+  // Invariante estricta: Las celdas, filas o columnas de una tabla pasiva jamás deben aplanarse ni transferirse al wordBank
+  if (text.includes('|')) return [];
   const cleaned = text
     .replace(/^(?:(?:useful\s+)?(?:ideas|topics|prompts|vocabulary|words|categories|phrases)|use these ideas|ideas to use)[:\s]*/gi, '')
     .trim();
@@ -1561,30 +1602,52 @@ function sanitizeExtractedPayload(payload: ExtractedStructuredPayload): Extracte
     ? stripPredictiveSpoilers(stripLeadingDuplicateTitle(stripMetaComments(rawRef), title), contextDirective)
     : null;
 
+  // 1. Preservación Estructural de Datos Tabulares (encabezados + filas/columnas):
+  // Cualquier bloque visual o semántico detectado con formato de tabla debe mapearse
+  // exclusivamente a referenceContent (preservando su formato Markdown/tabular).
+  const hasPayloadTable = Boolean(
+    (Array.isArray(tableHeaders) && tableHeaders.length > 0 && Array.isArray(tableRows) && tableRows.length > 0) ||
+    (Array.isArray(payload.tableData) && payload.tableData.length > 0)
+  );
+
+  let synthesizedTableMarkdown: string | null = null;
+  if (hasPayloadTable && (!cleanedRawRef || !cleanedRawRef.includes('|'))) {
+    if (Array.isArray(tableHeaders) && Array.isArray(tableRows)) {
+      synthesizedTableMarkdown = formatTableToMarkdown(tableHeaders, tableRows);
+    } else if (Array.isArray(payload.tableData)) {
+      synthesizedTableMarkdown = formatColumnsToMarkdown(payload.tableData as any);
+    }
+  }
+
+  const effectiveRawRef = cleanedRawRef || synthesizedTableMarkdown;
+  const isTableMarkdown = Boolean(effectiveRawRef && effectiveRawRef.includes('|') && effectiveRawRef.includes('\n'));
+
   // Strict Delimitation of referenceContent:
   // Lists of vocabulary, banks of ideas/topics, solved examples, or instructions NEVER belong in referenceContent.
   // referenceContent is strictly for autonomous reading passages (articles, dialogues, reference tables).
   let referenceContent: string | null = null;
   const wordBankTopics: string[] = [];
 
-  if (cleanedRawRef) {
-    const isAutonomous = isAutonomousReadingContent(cleanedRawRef);
-    const isDuplicate = isDuplicateReferenceContent(cleanedRawRef, sanitizedItems) ||
-      isConcatenationOfItems(cleanedRawRef, Array.isArray(payload.guidelines) ? payload.guidelines : []);
-    const isSynthetic = isSyntheticPedagogicalText(cleanedRawRef);
+  if (effectiveRawRef) {
+    const isAutonomous = isTableMarkdown || isAutonomousReadingContent(effectiveRawRef);
+    const isDuplicate = isDuplicateReferenceContent(effectiveRawRef, sanitizedItems) ||
+      isConcatenationOfItems(effectiveRawRef, Array.isArray(payload.guidelines) ? payload.guidelines : []);
+    const isSynthetic = !isTableMarkdown && isSyntheticPedagogicalText(effectiveRawRef);
 
-    if (payload.interactionType === 'reference' && !isOpenProductionTask) {
+    if (isTableMarkdown) {
+      // Tabular data must be preserved structurally in referenceContent without flattening
+      referenceContent = effectiveRawRef;
+    } else if (payload.interactionType === 'reference' && !isOpenProductionTask) {
       // In speaking cards without open production, preserve genuine dialogue/model context
       referenceContent = (isAutonomous && !isSynthetic)
-        ? formatMultiStageDirectives(cleanedRawRef)
+        ? formatMultiStageDirectives(effectiveRawRef)
         : null;
     } else if (isAutonomous && !isDuplicate && !isSynthetic) {
       // Genuine autonomous reading passage (article, chronicle, formal dialogue, or reference chart)
-      referenceContent = cleanedRawRef;
+      referenceContent = effectiveRawRef;
     } else {
-      // Not an autonomous reading text: extract any topics, ideas, or vocabulary into wordBankTopics,
-      // and keep referenceContent = null so the activity spans 100% full stage width!
-      const extracted = extractTopicIdeas(cleanedRawRef);
+      // Only extract topic ideas if it is NOT a table. Tables are strictly forbidden from wordBank!
+      const extracted = extractTopicIdeas(effectiveRawRef);
       wordBankTopics.push(...extracted.map(stripOrphanTypographicalMarkers).filter(Boolean));
       referenceContent = null;
     }
@@ -1597,6 +1660,12 @@ function sanitizeExtractedPayload(payload: ExtractedStructuredPayload): Extracte
       ...wordBankTopics.map(stripOrphanTypographicalMarkers).filter(Boolean),
     ])
   );
+
+  // Invariante estricta: Si la actividad consiste en responder preguntas sobre material de consulta (referenceContent presente),
+  // wordBank debe inicializarse vacío ([]).
+  if (referenceContent && sanitizedItems.length > 0) {
+    activeWordBank = [];
+  }
 
   // Discard fictitious wordBank on checklists or selection tasks
   if (isChecklistDirective || payload.interactionType === 'selection' || (payload.interactionType === 'multiple_choice' && !isMatchingDirective)) {
