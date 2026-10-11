@@ -826,14 +826,12 @@ export async function digitizeBook(
       const envGeminiModel = import.meta.env.VITE_GEMINI_MODEL?.trim();
       const candidateModels = Array.from(new Set([
         ...(envGeminiModel ? [envGeminiModel] : []),
+        'gemini-2.0-flash',
+        'gemini-1.5-flash-latest',
+        'gemini-1.5-pro',
         'gemini-2.5-flash',
         'gemini-2.5-pro',
-        'gemini-2.0-flash-001',
-        'gemini-2.0-flash',
         'gemini-2.0-flash-lite',
-        'gemini-1.5-flash-latest',
-        'gemini-1.5-pro-latest',
-        'gemini-1.5-flash',
       ]));
 
       for (const model of candidateModels) {
@@ -973,7 +971,7 @@ export async function digitizeBook(
 /**
  * Transforms the strict structured payload into a standardized ExtractedBlock.
  */
-function buildExtractedBlockFromPayload(
+export function buildExtractedBlockFromPayload(
   payload: ExtractedStructuredPayload,
   sourceUrl: string,
   sourceImages?: string[]

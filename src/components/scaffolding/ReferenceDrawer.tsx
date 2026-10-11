@@ -5,6 +5,7 @@ import { REFERENCE_RENDERER_REGISTRY } from '../renderers/registry';
 import { StructuredReferenceRenderer } from '../renderers/StructuredReferenceRenderer';
 import { TextReferenceRenderer } from '../renderers/TextReferenceRenderer';
 import { BookOpen, X } from 'lucide-react';
+import { SlideErrorBoundary } from '../common/SlideErrorBoundary';
 import { parseHierarchicalReference, parseStructuredReferenceColumns } from '../../core/utils/referenceParser';
 import type { ReferenceBlock, StructuredReferenceBlock } from '../../types/schema';
 

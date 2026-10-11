@@ -11,7 +11,6 @@ import type {
 import { digitizeBook, createManualBlock, type ManualTemplateType } from '../core/ai/digitizeBook';
 import { convertSlideToRole, type PedagogicalRole } from '../core/utils/slideRoleConverter';
 import { compressImageBase64 } from '../core/utils/imageCompressor';
-import { stripEditorialPrefix } from '../core/text/textDeduplication';
 import { useSessionStore } from './useSessionStore';
 export { validateFillInBlank, type FlexibleValidationResult } from '../core/evaluators/fillBlankValidator';
 
@@ -859,7 +858,11 @@ export const useLessonStore = create<LessonState>()(
           listItems: [
             { id: 'item-1', prompt: '1. She _______ (live) in London for three years.', expectedAnswer: 'has lived', acceptedAnswers: ['has lived', 'lived'] },
             { id: 'item-2', prompt: '2. We _______ (already / see) that documentary.', expectedAnswer: 'have already seen', acceptedAnswers: ['have already seen'] }
-          ]
+          ],
+          tableHeaders: [],
+          tableRows: [],
+          paragraphTemplate: '',
+          paragraphInputs: {}
         };
         state.updateInteractionBlock(slideId, intBlock);
       },

@@ -23,7 +23,7 @@ import {
   ImageIcon,
   Square
 } from 'lucide-react';
-import type { ExtractedBlock } from '../types/schema';
+import type { ExtractedBlock, ReferenceBlock, InteractionBlock } from '../types/schema';
 import type { ManualTemplateType } from '../core/ai/digitizeBook';
 import { type PedagogicalRole } from '../core/utils/slideRoleConverter';
 import { compressImageBase64 } from '../core/utils/imageCompressor';
@@ -905,9 +905,12 @@ export const OcrPanel: React.FC = () => {
 
                 {/* Structured Preview Box */}
                 {(() => {
-                  const mappedPreview = {
-                    reference: (activeBlock as any)?.referenceContent || null,
-                    interaction: (activeBlock as any)?.interaction || null,
+                  const mappedPreview: {
+                    reference: ReferenceBlock | null;
+                    interaction: InteractionBlock | null;
+                  } = {
+                    reference: ((activeBlock as any)?.referenceContent as ReferenceBlock) || null,
+                    interaction: ((activeBlock as any)?.interaction as InteractionBlock) || null,
                   };
 
                   return (

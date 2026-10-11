@@ -1,6 +1,5 @@
 import type {
   Slide,
-  ReferenceBlock,
   InteractionBlock,
   InputFieldsBlock,
   SelectionBlock,

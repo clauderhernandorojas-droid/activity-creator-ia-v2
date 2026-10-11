@@ -7,6 +7,11 @@ import { TextReferenceRenderer } from './renderers/TextReferenceRenderer';
 import { SlideErrorBoundary } from './common/SlideErrorBoundary';
 import confetti from 'canvas-confetti';
 import type { ReferenceBlock, ReferenceMediaBlock, StructuredReferenceBlock } from '../types/schema';
+import type { PedagogicalRole } from '../core/utils/slideRoleConverter';
+import { 
+  parseHierarchicalReference, 
+  parseStructuredReferenceColumns 
+} from '../core/utils/referenceParser';
 import { renderFormattedMarkdown } from '../core/text/markdownRenderer';
 import { isSubstantialTextOverlap, isConcatenationOfItems, stripEditorialPrefix } from '../core/text/textDeduplication';
 import { ReferenceImageModal } from './modals/ReferenceImageModal';
@@ -155,7 +160,7 @@ export const Canvas: React.FC = () => {
       const parsedHierarchical = parseHierarchicalReference(rawText);
       const parsedCols = parseStructuredReferenceColumns(rawText);
       const validClusters = parsedCols.filter(
-        (col) => col && Array.isArray(col.items) && col.items.length > 0
+        (col: { header: string; items: string[] }) => col && Array.isArray(col.items) && col.items.length > 0
       );
 
       if (validClusters.length >= 2) {
