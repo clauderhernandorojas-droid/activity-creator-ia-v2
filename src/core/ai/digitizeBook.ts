@@ -367,7 +367,7 @@ export const STRUCTURED_SLIDE_SCHEMA = {
               title: { type: 'string', description: 'Title of the reading passage or reference chart' },
               content: {
                 type: 'string',
-                description: 'Literal text of reading passage, story, or dialogue. Preserve paragraphs with double line breaks.'
+                description: 'Literal text of continuous reading passage, story, or dialogue. Preserve paragraphs with double line breaks (\\n\\n). NEVER fragment continuous articles into columns.'
               },
               category: {
                 type: 'string',
@@ -385,7 +385,7 @@ export const STRUCTURED_SLIDE_SCHEMA = {
                   },
                   required: ['header', 'items']
                 },
-                description: 'Columns of vocabulary, collocations, or grammar categories for reference_table'
+                description: 'Columns of parallel comparative data, vocabulary lists, or grammar categories. Use ONLY for tabular lists, NEVER for continuous narrative reading articles.'
               },
               headers: {
                 type: 'array',
@@ -528,7 +528,7 @@ export const STRUCTURED_SLIDE_SCHEMA = {
                   type: 'object',
                   properties: {
                     id: { type: 'string' },
-                    label: { type: 'string' },
+                    label: { type: 'string', description: 'Bucket/target label preserving verbatim textbook visual identifiers (e.g. "Paragraph 1", "Section A")' },
                     description: { type: 'string' },
                     color: { type: 'string' }
                   },
@@ -541,7 +541,7 @@ export const STRUCTURED_SLIDE_SCHEMA = {
                   type: 'object',
                   properties: {
                     id: { type: 'string' },
-                    text: { type: 'string' },
+                    text: { type: 'string', description: 'Token text preserving verbatim textbook visual identifiers (e.g. "a. Heading title", "1. Word")' },
                     correctBucketId: { type: 'string' },
                     isExample: { type: 'boolean' },
                     hint: { type: 'string' }
@@ -764,8 +764,9 @@ CANONICAL ARCHETYPES:
 1. "referenceContent" (Passive consultation material):
    - Set to null if the clipping does not contain an independent printed reading passage, dialogue, or grammar chart.
    - ZERO TABLE DUPLICATION: If the activity is purely an interactive table (interaction.layoutMode: "table"), DO NOT duplicate the table inside referenceContent. In purely interactive table activities, referenceContent MUST be strictly null and layout MUST be "single_column".
-   - Use type: "text" for reading articles, stories, dialogues, or context questions analyzed by students.
-   - Use type: "reference_table" for vocabulary collocation tables or grammar rules with columns.
+   - CONTINUOUS READING TEXTS vs COLUMNS:
+     * Use type: "text" for all reading articles, narrative stories, dialogues, or continuous texts divided into paragraphs. Use standard double line breaks (\n\n) between paragraphs. NEVER fragment a continuous reading text into independent vertical columns (even if formatted in newspaper columns on the original page!).
+     * Use type: "reference_table" (columns) ONLY when the printed material consists of comparative data or parallel tabular lists organized in vertical categories (e.g. vocabulary categories, preposition lists).
    - STRICT FIDELITY: Strictly transcribe literal text. NEVER generate synthetic summaries or pedagogical explanations.
 
 2. "interaction" (Active evaluated exercise):
@@ -780,8 +781,9 @@ CANONICAL ARCHETYPES:
        - Cells for student input/blank columns MUST have isInput: true, with expectedAnswer and acceptedAnswers.
    - "selection": When students mark, tick (✓), or choose valid candidates from a SINGLE domain ("Tick...", "Which sentences are true?", "Select all that apply"). Preserve the full intact text in options[].text!
    - "buckets_matching": For categorization into buckets OR bijective correspondence between TWO differentiated domains (Column A <-> Column B, "Match words with definitions", "Match sentence halves"):
+     * PRESERVE VERBATIM VISUAL IDENTIFIERS: Always preserve literal printed visual identifiers from the textbook (letters "a", "b", "c", numbers "1", "2", "3", or verbatim labels) in tokens and buckets/targetSlots. Do NOT omit them and do NOT invent synthetic names.
      * MATCHING HEADINGS / LABELS TO PARAGRAPHS: When the instruction explicitly directs to match or assign headings, titles, or labels to numbered sections or paragraphs (e.g. "Match headings a-d with paragraphs 1-4", "Match words with definitions"):
-       - PREFERRED PRIMITIVE: Model preferably as interaction.type: "buckets_matching", where the paragraphs or section numbers are the targetSlots / buckets, and the headings are the tokens / sourceItems to drag or match.
+       - PREFERRED PRIMITIVE: Model preferably as interaction.type: "buckets_matching", where the paragraphs or section numbers are the targetSlots / buckets (labeled with their literal identifiers, e.g. "Paragraph 1"), and the headings are the tokens / sourceItems to drag or match (preserving their literal letter/text, e.g. "a. Heading title").
        - Alternatively, if modeled as input_fields, it OBLIGATORIAMENTE must include the complete "wordBank" with the exact list of options to match.
        - NEVER emit orphan empty text fields without providing the printed bank of options/headings from the activity.
    - "sequence": For ordering disordered sentences or dialogue lines into chronological sequence.
