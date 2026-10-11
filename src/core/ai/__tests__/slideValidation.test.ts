@@ -350,4 +350,165 @@ describe('slideValidation - Direct Schema & Architectural Invariant Tests', () =
     });
   });
 
+  // =========================================================================
+  // CASO F: Tabla Interactiva con Inputs en Celdas (Cuestionarios Tabulares)
+  // =========================================================================
+  describe('Caso F: Tabla Interactiva con Inputs en Celdas (layoutMode: table)', () => {
+    it('debe validar un cuestionario tabular con celdas interactivas isInput: true sin degradar a writing', () => {
+      const rawSlideJson = JSON.stringify({
+        slides: [
+          {
+            id: 'slide-table-interactive-1',
+            title: 'Classmate Survey: Habits & Routines',
+            layout: 'single_column',
+            referenceContent: null,
+            interaction: {
+              id: 'int-table-survey-1',
+              type: 'input_fields',
+              instruction: 'Ask your partner and complete the table with their answers:',
+              layoutMode: 'table',
+              tableHeaders: ['Question', 'Your Answer', "Partner's Answer"],
+              tableRows: [
+                [
+                  { text: 'What time do you wake up?', isInput: false },
+                  { text: '', isInput: true, expectedAnswer: '7:00 AM', acceptedAnswers: ['7:00', '7:00 AM', 'at 7:00'] },
+                  { text: '', isInput: true, expectedAnswer: '6:30 AM', acceptedAnswers: ['6:30', '6:30 AM', 'at 6:30'] }
+                ],
+                [
+                  { text: 'How do you get to school or work?', isInput: false },
+                  { text: '', isInput: true, expectedAnswer: 'By bus', acceptedAnswers: ['by bus', 'bus', 'on the bus'] },
+                  { text: '', isInput: true, expectedAnswer: 'Walking', acceptedAnswers: ['on foot', 'walking', 'walk'] }
+                ],
+                [
+                  { text: 'Do you play any sports?', isInput: false },
+                  { text: '', isInput: true, expectedAnswer: 'Soccer', acceptedAnswers: ['yes, soccer', 'soccer', 'football'] },
+                  { text: '', isInput: true, expectedAnswer: 'Tennis', acceptedAnswers: ['tennis', 'yes, tennis'] }
+                ]
+              ]
+            }
+          }
+        ]
+      });
+
+      const slides = validateAndParseSlides(rawSlideJson);
+      expect(slides).toHaveLength(1);
+
+      const slide = slides[0];
+
+      // 1. Invariante: referenceContent DEBE ser null (la tabla es el ejercicio interactivo)
+      expect(slide.referenceContent).toBeNull();
+
+      // 2. Invariante: interaction.type DEBE ser estrictamente 'input_fields'
+      expect(slide.interaction?.type).toBe('input_fields');
+
+      if (slide.interaction?.type === 'input_fields') {
+        // 3. Invariante: layoutMode DEBE ser estrictamente 'table'
+        expect(slide.interaction.layoutMode).toBe('table');
+        expect(slide.interaction.tableHeaders).toEqual(['Question', 'Your Answer', "Partner's Answer"]);
+        expect(slide.interaction.tableRows).toHaveLength(3);
+
+        // 4. Invariante: Celdas impresas/consignas tienen isInput: false
+        expect(slide.interaction.tableRows[0][0].text).toBe('What time do you wake up?');
+        expect(slide.interaction.tableRows[0][0].isInput).toBe(false);
+
+        // 5. Invariante: Celdas a rellenar tienen isInput: true y respuestas válidas
+        expect(slide.interaction.tableRows[0][1].isInput).toBe(true);
+        expect(slide.interaction.tableRows[0][1].expectedAnswer).toBe('7:00 AM');
+        expect(slide.interaction.tableRows[0][1].acceptedAnswers).toContain('7:00 AM');
+
+        expect(slide.interaction.tableRows[0][2].isInput).toBe(true);
+        expect(slide.interaction.tableRows[0][2].expectedAnswer).toBe('6:30 AM');
+
+        // Verificar el resto de las filas
+        expect(slide.interaction.tableRows[1][0].isInput).toBe(false);
+        expect(slide.interaction.tableRows[1][1].isInput).toBe(true);
+        expect(slide.interaction.tableRows[1][2].isInput).toBe(true);
+
+        expect(slide.interaction.tableRows[2][0].isInput).toBe(false);
+        expect(slide.interaction.tableRows[2][1].isInput).toBe(true);
+        expect(slide.interaction.tableRows[2][2].isInput).toBe(true);
+      }
+    });
+  });
+
+  // =========================================================================
+  // CASO G: Ejercicios de Completar Letras / Vocales (Palabras Completas)
+  // =========================================================================
+  describe('Caso G: Completar Letras / Vocales en Palabras Completas (input_fields)', () => {
+    it('debe validar un ejercicio de vocales donde el input espera la palabra completa con colocación', () => {
+      const rawSlideJson = JSON.stringify({
+        slides: [
+          {
+            id: 'slide-vowels-1',
+            title: 'Sports Vocabulary: Write the Vowels',
+            layout: 'single_column',
+            referenceContent: null,
+            interaction: {
+              id: 'int-vowels-1',
+              type: 'input_fields',
+              instruction: 'Write the vowels (a, e, i, o, u) to complete the sports words:',
+              layoutMode: 'list',
+              listItems: [
+                {
+                  id: 'item-vow-1',
+                  prefix: 'play',
+                  prompt: 'v_ll_yb_ll',
+                  expectedAnswer: 'volleyball',
+                  acceptedAnswers: ['volleyball'],
+                  explanation: 'Complete word with vowels: volleyball'
+                },
+                {
+                  id: 'item-vow-2',
+                  prefix: 'go',
+                  prompt: 'sw_mm_ng',
+                  expectedAnswer: 'swimming',
+                  acceptedAnswers: ['swimming'],
+                  explanation: 'Complete word with vowels: swimming'
+                },
+                {
+                  id: 'item-vow-3',
+                  prefix: 'do',
+                  prompt: 'g_mn_st_cs',
+                  expectedAnswer: 'gymnastics',
+                  acceptedAnswers: ['gymnastics'],
+                  explanation: 'Complete word with vowels: gymnastics'
+                }
+              ]
+            }
+          }
+        ]
+      });
+
+      const slides = validateAndParseSlides(rawSlideJson);
+      expect(slides).toHaveLength(1);
+
+      const slide = slides[0];
+
+      // 1. Invariante: Cero duplicación (ejercicio autosuficiente)
+      expect(slide.referenceContent).toBeNull();
+      expect(slide.layout).toBe('single_column');
+
+      // 2. Invariante: Tipo input_fields en modo list
+      expect(slide.interaction?.type).toBe('input_fields');
+
+      if (slide.interaction?.type === 'input_fields') {
+        expect(slide.interaction.layoutMode).toBe('list');
+        expect(slide.interaction.listItems).toHaveLength(3);
+
+        // 3. Invariante: Respuestas son palabras completas, no letras microscópicas
+        expect(slide.interaction.listItems[0].expectedAnswer).toBe('volleyball');
+        expect(slide.interaction.listItems[0].prefix).toBe('play');
+        expect(slide.interaction.listItems[0].expectedAnswer?.length).toBeGreaterThan(1);
+
+        expect(slide.interaction.listItems[1].expectedAnswer).toBe('swimming');
+        expect(slide.interaction.listItems[1].prefix).toBe('go');
+
+        expect(slide.interaction.listItems[2].expectedAnswer).toBe('gymnastics');
+        expect(slide.interaction.listItems[2].prefix).toBe('do');
+      }
+    });
+  });
+
 });
+
+
