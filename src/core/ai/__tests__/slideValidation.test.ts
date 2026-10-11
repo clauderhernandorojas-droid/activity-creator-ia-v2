@@ -513,7 +513,7 @@ describe('slideValidation - Direct Schema & Architectural Invariant Tests', () =
   // CASO H: Alternativas Cerradas / Elección Discreta ("Circle the correct word")
   // =========================================================================
   describe('Caso H: Alternativas Cerradas (Circle the correct word / opciones delimitadas)', () => {
-    it('debe validar ejercicio de alternativas cerradas como selection (quiz mode) con isExample en la opción modelo', () => {
+    it('debe validar ejercicio de alternativas cerradas como selection (quiz mode) con token {{blank}} y segmentación de layout', () => {
       const rawSlideJson = JSON.stringify({
         slides: [
           {
@@ -530,7 +530,7 @@ describe('slideValidation - Direct Schema & Architectural Invariant Tests', () =
               questions: [
                 {
                   id: 'q-1',
-                  prompt: '1. Yesterday I was / were at home.',
+                  question: '1. Yesterday I {{blank}} at home.',
                   mode: 'single_choice',
                   isExample: true,
                   options: [
@@ -551,7 +551,7 @@ describe('slideValidation - Direct Schema & Architectural Invariant Tests', () =
                 },
                 {
                   id: 'q-2',
-                  prompt: '2. They was / were happy to see us.',
+                  prompt: '2. They {{blank}} happy to see us.',
                   mode: 'single_choice',
                   options: [
                     {
@@ -577,17 +577,24 @@ describe('slideValidation - Direct Schema & Architectural Invariant Tests', () =
 
       const slide = slides[0];
 
-      // 1. Invariante: Cero degradación a input_fields (debe ser selection)
+      // 1. Invariante de Segmentación de Layout: autosuficiente en single_column
+      expect(slide.referenceContent).toBeNull();
+      expect(slide.layout).toBe('single_column');
+
+      // 2. Invariante: Cero degradación a input_fields (debe ser selection)
       expect(slide.interaction?.type).toBe('selection');
       expect(slide.interaction?.type).not.toBe('input_fields');
 
       if (slide.interaction?.type === 'selection') {
         expect(slide.interaction.questions).toHaveLength(2);
 
-        // 2. Pregunta 1: Ejemplo resuelto
+        // 3. Pregunta 1: Invariante {{blank}} y soporte question/prompt
         const q1 = slide.interaction.questions[0];
         expect(q1.mode).toBe('single_choice');
         expect(q1.isExample).toBe(true);
+        expect(q1.prompt).toBe('1. Yesterday I {{blank}} at home.');
+        expect(q1.question).toBe('1. Yesterday I {{blank}} at home.');
+        expect(q1.prompt).not.toContain('was / were');
         expect(q1.options).toHaveLength(2);
         expect(q1.options[0].text).toBe('was');
         expect(q1.options[0].isCorrect).toBe(true);
@@ -596,9 +603,12 @@ describe('slideValidation - Direct Schema & Architectural Invariant Tests', () =
         expect(q1.options[1].text).toBe('were');
         expect(q1.options[1].isCorrect).toBe(false);
 
-        // 3. Pregunta 2: Item activo evaluado
+        // 4. Pregunta 2: Invariante {{blank}} emitido desde prompt
         const q2 = slide.interaction.questions[1];
         expect(q2.mode).toBe('single_choice');
+        expect(q2.prompt).toBe('2. They {{blank}} happy to see us.');
+        expect(q2.question).toBe('2. They {{blank}} happy to see us.');
+        expect(q2.prompt).not.toContain('was / were');
         expect(q2.options).toHaveLength(2);
         expect(q2.options[0].text).toBe('was');
         expect(q2.options[0].isCorrect).toBe(false);

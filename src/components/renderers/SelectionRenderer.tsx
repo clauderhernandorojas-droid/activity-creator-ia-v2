@@ -13,6 +13,34 @@ interface Props {
   onChange?: (updated: SelectionBlock) => void;
 }
 
+/**
+ * Renders a question statement, replacing '{{blank}}' placeholders with a clean visual underline.
+ */
+const renderQuestionStatement = (rawText: string) => {
+  if (!rawText) return null;
+  if (!rawText.includes('{{blank}}')) {
+    return rawText;
+  }
+  const parts = rawText.split('{{blank}}');
+  return (
+    <span>
+      {parts.map((part, index) => (
+        <React.Fragment key={index}>
+          {part}
+          {index < parts.length - 1 && (
+            <span
+              className="inline-block border-b-2 border-slate-400 font-mono text-slate-500 px-1 mx-1 font-semibold select-none"
+              title="Espacio de selección"
+            >
+              _____
+            </span>
+          )}
+        </React.Fragment>
+      ))}
+    </span>
+  );
+};
+
 export const SelectionRenderer: React.FC<Props> = ({
   block,
   studentAnswers,
@@ -117,10 +145,10 @@ export const SelectionRenderer: React.FC<Props> = ({
   // ==========================================
   // QUESTIONNAIRE / QUIZ ACTIONS
   // ==========================================
-  const handleQuestionPromptChange = (qIndex: number, prompt: string) => {
+  const handleQuestionPromptChange = (qIndex: number, text: string) => {
     if (!onChange) return;
     const updated = [...(block.questions || [])];
-    updated[qIndex] = { ...updated[qIndex], prompt };
+    updated[qIndex] = { ...updated[qIndex], prompt: text, question: text };
     onChange({ ...block, questions: updated });
   };
 
@@ -490,7 +518,7 @@ export const SelectionRenderer: React.FC<Props> = ({
                     <div className="flex items-center gap-2 w-full flex-wrap sm:flex-nowrap">
                       <input
                         type="text"
-                        value={q.prompt}
+                        value={q.question || q.prompt || ''}
                         onChange={(e) => handleQuestionPromptChange(qIdx, e.target.value)}
                         className="flex-1 text-sm font-semibold text-slate-800 bg-white border border-slate-200 rounded-lg px-3 py-1.5 outline-none focus:border-indigo-500 min-w-[180px]"
                         placeholder="Enunciado o ítem a relacionar..."
@@ -516,8 +544,8 @@ export const SelectionRenderer: React.FC<Props> = ({
                     </div>
                   ) : (
                     <div className="flex items-center justify-between w-full">
-                      <p className="text-sm font-semibold text-slate-800">
-                        {q.prompt}
+                      <p className="text-sm font-semibold text-slate-800 leading-relaxed">
+                        {renderQuestionStatement(q.question || q.prompt || '')}
                       </p>
                       {isEvaluated && (
                         <span>

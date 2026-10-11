@@ -486,7 +486,14 @@ export const STRUCTURED_SLIDE_SCHEMA = {
                   type: 'object',
                   properties: {
                     id: { type: 'string' },
-                    prompt: { type: 'string' },
+                    prompt: {
+                      type: 'string',
+                      description: "Contextual statement or sentence containing a '{{blank}}' placeholder where the user selection must fit."
+                    },
+                    question: {
+                      type: 'string',
+                      description: "Contextual statement or sentence containing a '{{blank}}' placeholder where the user selection must fit."
+                    },
                     contextText: { type: 'string' },
                     mode: { type: 'string', enum: ['single_choice', 'multiple_choice', 'dropdown'] },
                     isExample: { type: 'boolean', description: 'true if this question/item is a solved textbook example' },
@@ -674,6 +681,15 @@ export function validateAndParseSlides(rawJsonText: string): Slide[] {
       if (!rawSlide.interaction.id) {
         rawSlide.interaction.id = `int-${Date.now()}-${idx}`;
       }
+      if (rawSlide.interaction.type === 'selection' && Array.isArray(rawSlide.interaction.questions)) {
+        for (const q of rawSlide.interaction.questions) {
+          if (q && typeof q === 'object') {
+            const statement = q.prompt || q.question || '';
+            if (!q.prompt && statement) q.prompt = statement;
+            if (!q.question && statement) q.question = statement;
+          }
+        }
+      }
     } else {
       rawSlide.interaction = null;
     }
@@ -790,9 +806,15 @@ CANONICAL ARCHETYPES:
    - "selection": For choosing between discrete candidate options:
      * CLOSED-SELECTION EXERCISES (e.g. options separated by slashes "was / were", bold contrasting words, or instructions like "Circle/Choose the correct word/number"):
        - The interaction MUST be typed as interaction.type: "selection".
-       - Model as questions[] (quiz mode) where each sentence/item is a question with mode: "single_choice" (or "dropdown"), with prompt containing the full sentence context.
-       - The discrete printed alternatives MUST directly populate the "options" array of that question (e.g. options: [{ id: "opt-1", text: "was", isCorrect: true }, { id: "opt-2", text: "were", isCorrect: false }]).
-       - If an option already appears marked, circled, or highlighted as an initial pedagogical model (solved example), it MUST be marked with isExample: true (and isCorrect: true). If the question item itself is the example, mark isExample: true on the question item as well.
+       - Model as questions[] (quiz mode) where each sentence/item is a question with mode: "single_choice" (or "dropdown").
+       - INVARIANT FOR CONTEXTUAL STATEMENTS ({{blank}} PLACEHOLDER):
+         When an exercise requires selecting between alternatives embedded inside a sentence or continuous text (demarcated by slashes, parentheses, or bold contrasting words):
+         * The field "question" (or "prompt") MUST contain the full complete sentence, replacing the decision point with the formal token {{blank}} (e.g. "Yesterday I {{blank}} at home.").
+         * It is STRICTLY FORBIDDEN to include the discrete options or typographical delimiters (such as "was / were", slashes, or brackets) inside "question" / "prompt".
+         * The discrete alternatives MUST populate exclusively the "options" array of that question (e.g. options: [{ id: "opt-1", text: "was", isCorrect: true }, { id: "opt-2", text: "were", isCorrect: false }]).
+         * If an option already appears marked, circled, or highlighted as an initial pedagogical model (solved example), it MUST be marked with isExample: true (and isCorrect: true). If the question item itself is the example, mark isExample: true on the question item as well.
+       - INVARIANT FOR LAYOUT SEGMENTATION:
+         If the entirety of the passage or exercise decomposes into the interactive items of the activity, referenceContent MUST be strictly null and layout MUST be "single_column".
      * CHECKLISTS & CANDIDATE SELECTION: When students mark, tick (✓), or choose valid candidates from a single domain ("Tick the phrases", "Which sentences are true?", "Select all that apply"):
        - Use flat options[] with allowMultiple: true/false. Preserve the full intact text in options[].text!
    - "buckets_matching": For categorization into buckets OR bijective correspondence between TWO differentiated domains (Column A <-> Column B, "Match words with definitions", "Match sentence halves"):

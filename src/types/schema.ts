@@ -124,7 +124,8 @@ export const SelectionOptionSchema = z.object({
 
 export const SelectionQuestionSchema = z.object({
   id: z.string(),
-  prompt: z.string(),
+  prompt: z.string().describe("Contextual statement or sentence containing a '{{blank}}' placeholder where the user selection must fit.").default(''),
+  question: z.string().describe("Contextual statement or sentence containing a '{{blank}}' placeholder where the user selection must fit.").optional(),
   contextText: z.string().optional(),
   mode: z.enum(['single_choice', 'multiple_choice', 'dropdown']),
   options: z.array(SelectionOptionSchema),
