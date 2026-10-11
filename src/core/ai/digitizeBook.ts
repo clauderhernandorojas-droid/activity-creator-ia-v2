@@ -772,7 +772,8 @@ CANONICAL ARCHETYPES:
    - "input_fields": For fill-in-the-blanks, Cloze sentences, or 2D fill-in grids (layoutMode: "table").
      * TABULAR QUESTIONNAIRES & FILLABLE TABLES: When the clipping presents a printed table where one or more columns or cells are blank for the student to write answers, names, or values (e.g. peer surveys, interviews, questionnaire tables with columns like "Question", "Your answer", "Partner's answer"):
        - MUST be classified as interaction.type: "input_fields" with layoutMode: "table". NEVER classify it as "writing" with a passive reference table!
-       - ZERO TABLE DUPLICATION: referenceContent MUST be strictly null and layout MUST be "single_column". DO NOT duplicate or copy the table inside referenceContent!
+       - COLUMN INTEGRITY: All columns that form part of the printed table grid in the image MUST be included inside tableHeaders and tableRows of the interaction. It is STRICTLY PROHIBITED to dismantle, split, or detach any columns of the table (such as note columns, "partner's notes", or "follow-up questions" columns) to send them as a separate referenceContent block!
+       - ZERO TABLE DUPLICATION / SINGLE TABLE: If the clipping contains a single integral table, referenceContent MUST be strictly null and layout MUST be "single_column" with all columns unified into the same interactive table. DO NOT duplicate or copy the table inside referenceContent!
        - Cells with printed prompt/query text MUST have isInput: false.
        - Cells for student input/blank columns MUST have isInput: true, with expectedAnswer and acceptedAnswers.
    - "selection": When students mark, tick (✓), or choose valid candidates from a SINGLE domain ("Tick...", "Which sentences are true?", "Select all that apply"). Preserve the full intact text in options[].text!
