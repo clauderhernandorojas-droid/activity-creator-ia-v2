@@ -256,6 +256,14 @@ export const OcrPanel: React.FC = () => {
       return 'interaction_writing';
     }
 
+    // PRIORIDAD PEDAGÓGICA INTERACTIVA:
+    // Si existen reactivos interactivos (pd.items con longitud > 0), el rol primario DEBE ser interactivo ('interaction_inputs'),
+    // incluso si el bloque contiene tablas o columnas. El material tabular/consulta coexistirá en slide.referenceContent.
+    const hasInteractiveItems = Array.isArray(pd.items) && pd.items.length > 0;
+    if (hasInteractiveItems) {
+      return 'interaction_inputs';
+    }
+
     if (
       (Array.isArray(pd.tableData) && pd.tableData.length > 0) ||
       (Array.isArray(pd.columns) && pd.columns.length > 0) ||

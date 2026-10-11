@@ -1028,31 +1028,59 @@ export function mapBlockToStructuredReference(block: ExtractedBlock): Structured
 }
 
 /**
- * Parses GitHub-flavored Markdown tables into structured headers and rows matrix.
+ * Parses Markdown tables into structured headers and rows matrix.
+ * Resilient parser: Extracts tabular content without requiring strict leading/trailing pipes,
+ * tolerating surrounding introductory or explanatory text, variable spacing, and formatting nuances.
  */
 export function parseMarkdownTable(markdown?: string | null): { headers: string[]; rows: string[][] } | null {
   if (!markdown || !markdown.includes('|')) return null;
   const lines = markdown.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-  const tableLines = lines.filter((l) => l.startsWith('|') && l.endsWith('|'));
-  if (tableLines.length < 2) return null;
 
-  const parseRow = (line: string) =>
-    line.slice(1, -1).split('|').map((c) => stripOrphanTypographicalMarkers(c.trim()));
+  // Extract candidate lines that contain at least one pipe '|'
+  const pipeLines = lines.filter((l) => l.includes('|'));
+  if (pipeLines.length < 2) return null;
 
-  const headers = parseRow(tableLines[0]);
-  const isSeparator = (line: string) => /^\|(?:\s*:?-+:?\s*\|)+$/.test(line);
+  const parseRowCells = (line: string): string[] => {
+    let clean = line.trim();
+    if (clean.startsWith('|')) clean = clean.slice(1);
+    if (clean.endsWith('|')) clean = clean.slice(0, -1);
+    return clean.split('|').map((c) => stripOrphanTypographicalMarkers(c.trim()));
+  };
 
-  const contentRowLines = tableLines.slice(1).filter((l) => !isSeparator(l));
-  if (contentRowLines.length === 0) return null;
+  const isSeparator = (line: string): boolean => {
+    const cells = parseRowCells(line);
+    return cells.length > 0 && cells.every((c) => /^:?-{2,}:?$/.test(c.replace(/\s+/g, '')));
+  };
 
-  const rows = contentRowLines.map(parseRow);
+  // Locate the separator line (e.g. |---|---| or --- | ---)
+  const sepIdx = pipeLines.findIndex(isSeparator);
+  let headers: string[] = [];
+  let contentRowLines: string[] = [];
+
+  if (sepIdx > 0) {
+    // Header is the line immediately preceding the separator
+    headers = parseRowCells(pipeLines[sepIdx - 1]);
+    contentRowLines = pipeLines.slice(sepIdx + 1).filter((l) => !isSeparator(l));
+  } else {
+    // No explicit separator line found: use first pipe line as headers and rest as content rows
+    headers = parseRowCells(pipeLines[0]);
+    contentRowLines = pipeLines.slice(1).filter((l) => !isSeparator(l));
+  }
+
+  // Filter out invalid rows (empty or all-blank cells)
+  const rows = contentRowLines
+    .map(parseRowCells)
+    .filter((cells) => cells.length > 0 && cells.some((c) => c.length > 0));
+
+  if (headers.length === 0 || rows.length === 0) return null;
+
   return { headers, rows };
 }
 
 /**
  * Pure 1:1 Universal Mapper for Reference Table (2D Matrix fallback)
  */
-export function mapBlockToReferenceTable(block: ExtractedBlock): ReferenceTableBlock {
+export function mapBlockToReferenceTable(block: ExtractedBlock): ReferenceTableBlock | ReferenceTextBlock {
   const parsed = block.parsedData || {};
 
   let headers: string[] = Array.isArray(parsed.tableHeaders) && parsed.tableHeaders.length > 0
@@ -1083,7 +1111,14 @@ export function mapBlockToReferenceTable(block: ExtractedBlock): ReferenceTableB
       }
       return stripOrphanTypographicalMarkers(String(c || '').trim());
     });
-  });
+  }).filter((r) => r.length > 0 && r.some((c) => c.length > 0));
+
+  // Fallback de seguridad: Si la extracción tabular no logró obtener al menos 1 fila de datos,
+  // NO emitir un 'table_reference' vacío (rows: []) que colapsaría el renderizador.
+  // En su lugar, degrada graciosamente a un bloque de referencia de texto ('text') legible para el alumno.
+  if (rows.length === 0) {
+    return mapBlockToReferenceText(block);
+  }
 
   return {
     type: 'table_reference',
