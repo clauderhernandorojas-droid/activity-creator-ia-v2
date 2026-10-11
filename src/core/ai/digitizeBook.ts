@@ -367,7 +367,7 @@ const STRUCTURED_EXTRACTION_SCHEMA = {
     interactionType: {
       type: 'string',
       enum: ['fill_blanks', 'multiple_choice', 'selection', 'matching', 'buckets', 'reference', 'writing'],
-      description: 'The strict pedagogical archetype of the interactive exercise. Use "writing" for free text production (paragraphs, profiles, letters, essays, reviews). Use "multiple_choice" or "selection" for checklists, ticking/marking items ("Tick (✓)...", "Check...", "Select all that apply", "Choose from the list"), matching tasks (headings to paragraphs, terms to definitions) AND identification tasks ("Underline", "Circle"). Use "buckets" for category sorting. Use "reference" for communicative activities where no digital answer is evaluated.'
+      description: 'The strict pedagogical archetype of the interactive exercise corresponding to schema.ts primitives. Use "selection" when there is a SINGLE set of candidate elements (sentences, questions, terms, statements) from which students choose, mark, or discriminate valid items ("Which sentences are true?", "Which questions ask about the past?", "Tick (✓)...", "Check...", "Select all that apply", "Choose from the list"). Model each item with its FULL INTACT TEXT in items[].prompt and expectedAnswer: "true"|"false". NEVER collapse into numbers and NEVER create synthetic permutations like ["1, 2", "1, 3"]. Use "matching" ONLY when TWO explicit, differentiated domains relate bijectively (Column A <-> Column B: headings to paragraphs, terms to definitions). Use "fill_blanks" for blank-completion or open input fields (including when consulting reference_table / tableData). Use "writing" for free text production with guidelines. Use "buckets" for category classification. Use "reference" for speaking/communicative activities evaluated offline.'
     },
     guidelines: {
       type: 'array',
@@ -569,26 +569,38 @@ REGLAS UNIVERSALES DE BANCO DE OPCIONES Y ASIGNACIÓN BIUNÍVOCA:
   * Deja 'referenceContent' vacío o null, o si aplica incluye ÚNICAMENTE breves preguntas guía disparadoras para el debate entre alumnos (ej. "• What do you notice in the pictures?\n• What could their job be?"), SIN DAR LA RESPUESTA ni datos biográficos.
 - DISCRIMINACIÓN ESTRICTA DE RECORTES VISUALES vs RECORTES TEXTUALES:
   * En 'visualImageIndices': reporta ÚNICAMENTE los números de índice 1-based (1, 2, 3...) de los recortes de entrada que contienen fotografías, retratos, ilustraciones o escenas visuales reales.
-  * REGLA DE RECORTES DE LECTURA TRANSCRITOS: Si un recorte enviado contiene un pasaje de lectura, artículo, diálogo, caja de reglas o consigna cuyo texto ha sido transcrito a 'referenceContent' (especialmente lecturas de más de 40 palabras), ESE RECORTE ES UN RECORTE FUENTE TEXTUAL Y NUNCA DEBE INCLUIRSE EN 'visualImageIndices', incluso si el recorte contiene fotos, retratos o rostros de fondo. Conservar el recorte de un artículo transcrito genera una miniatura flotante redundante e ilegible del mismo texto que el alumno ya está leyendo digitalmente.
   * Solo deben incluirse en 'visualImageIndices' recortes con material gráfico genuino que carezcan de transcripción textual directa (p. ej. fotografías o ilustraciones aisladas sin texto). Si ningún recorte contiene fotografías o ilustraciones aisladas, devuelve obligatoriamente 'visualImageIndices': [].
 - REGLA DIDÁCTICA UNIVERSAL DE TAREAS DE CORRESPONDENCIA / RELACIÓN (MATCHING):
-  * Cuando la consigna didáctica instruya relacionar, emparejar o conectar dos conjuntos finitos de elementos (por ejemplo: asociar párrafos/secciones 1-4 con encabezados A-D, conceptos con definiciones, premisas con conclusiones, mitades de oraciones):
+  * Criterio Estructural Estricto: Aplica ÚNICAMENTE cuando existan DOS dominios explícitos y diferenciados para relacionar biyectivamente (ej. Preguntas <-> Respuestas, Términos <-> Definiciones, Párrafos 1-4 <-> Encabezados A-D, Mitades de oraciones).
   * PROHIBICIÓN ESTRICTA DE 'fill_blanks': NUNCA clasifiques estas actividades como 'fill_blanks' generando huecos para escribir texto libre o arrastrar cadenas largas.
-  * MODELADO COMO SELECCIÓN / MATCHING:
+  * MODELADO COMO MATCHING:
     1. Trata el primer conjunto (ej. Párrafos 1, 2, 3, 4; o términos/conceptos) como los enunciados base en 'items' (campo 'prompt': ej. "Paragraph 1" o el concepto a definir).
     2. Trata el segundo conjunto (ej. Encabezados A, B, C, D; o definiciones) como las opciones cerradas de respuesta. DEBES poblar en cada ítem su array 'options' con todas las alternativas posibles del segundo conjunto (ej. ["A. A fresh approach", "B. Early days", "C. School dinners", "D. Global campaign"]).
     3. En cada ítem, 'expectedAnswer' DEBE ser exactamente la opción correspondiente del segundo conjunto.
     4. En 'acceptedAnswers', incluye la opción completa y cualquier variante válida (ej. solo la letra "A" o el texto completo).
-    5. 'interactionType' DEBE ser 'multiple_choice' o 'matching'.
-- REGLA DIDÁCTICA UNIVERSAL PARA TAREAS DE MARCADO / CHECKLIST / LISTAS DE VERIFICACIÓN ("Tick / Check / Mark / Select all that apply / Choose from the list"):
-  * Cuando la consigna instruya marcar, tildar, verificar con tick (✓), seleccionar afirmaciones verdaderas o elegir elementos de una lista ("Tick the phrases...", "Tick (✓)...", "Check the boxes...", "Check the sentences that are true...", "Select all that apply", "Choose from the list"):
+    5. 'interactionType' DEBE ser 'matching'.
+    6. NUNCA uses 'matching' ni dropdowns si existe un único conjunto de elementos; si el alumno debe escoger o discriminar elementos válidos dentro de una sola lista, es estrictamente 'selection'.
+
+- INVARIANTE DE PRESERVACIÓN DE TEXTO EN CANDIDATOS (digitizeBook.ts / payloadMapper.ts):
+  * Cuando una actividad presente una lista de elementos (preguntas, oraciones, términos, afirmaciones) sobre los cuales el estudiante debe tomar una decisión (ej. identificar cuáles son correctos o verdaderos, seleccionar las preguntas que cumplen una regla, o marcar de una lista):
+    1. PRESERVACIÓN DEL TEXTO ÍNTEGRO: El texto íntegro de cada elemento DEBE preservarse como la entidad interactiva (sea ítem de selección u opción con su texto completo).
+    2. PROHIBICIÓN TAXATIVA DE COLAPSO NUMÉRICO: Queda terminantemente PROHIBIDO colapsar el contenido textual en meros identificadores numéricos (ej: "1", "2", "3").
+    3. PROHIBICIÓN TAXATIVA DE PERMUTACIONES O COMBINACIONES ARTIFICIALES: Queda terminantemente PROHIBIDO sintetizar combinaciones o permutaciones artificiales (ej: "1, 2", "1, 3", "2, 3", "1 and 2", "1, 2, 4") no presentes en el material original.
+    4. Cada elemento o candidato de la lista debe modelarse como un elemento interactivo individual con su TEXTO COMPLETO original intacto. NUNCA resumas la lista en una sola pregunta con opciones sintéticas de números agrupados.
+
+- CRITERIO ESTRUCTURAL ENTRE SELECCIÓN Y MATCHING:
+  * Matching / Correspondence ('matching'): Aplica ÚNICAMENTE cuando existan DOS dominios explícitos y diferenciados para relacionar biyectivamente (ej. Pregunta <-> Respuesta, Término <-> Definición).
+  * Selection / Checklist ('selection'): Si existe un ÚNICO conjunto de candidatos dentro del cual el alumno debe escoger o discriminar uno o más elementos válidos (ej. qué oraciones son verdaderas, qué preguntas indagan sobre el pasado, checklist de afirmaciones válidas), la estructura DEBE mapearse OBLIGATORIAMENTE a la primitiva 'selection' (con los textos completos de cada elemento como opciones o ítems interactivos), NUNCA a un dropdown de emparejamiento.
+
+- REGLA DIDÁCTICA UNIVERSAL PARA TAREAS DE MARCADO / CHECKLIST / LISTAS DE VERIFICACIÓN ("Tick / Check / Mark / Select all that apply / Choose from the list / Which sentences are true? / Which questions..."):
+  * Cuando la consigna instruya marcar, tildar, verificar con tick (✓), seleccionar afirmaciones verdaderas o elegir elementos de una lista ("Tick the phrases...", "Tick (✓)...", "Check the boxes...", "Check the sentences that are true...", "Which questions ask about...", "Which sentences are correct?", "Select all that apply", "Choose from the list"):
   * PROHIBICIÓN ESTRICTA DE 'fill_blanks' Y PROHIBICIÓN DE WORDBANK FICTICIO:
     - NUNCA clasifiques estas actividades como 'fill_blanks'.
     - NUNCA crees huecos artificiales para rellenar con texto libre ("___").
     - NUNCA generes un wordBank artificial a partir de las frases o elementos a marcar.
   * MODELADO COMO SELECCIÓN / CHECKLIST:
-    1. 'interactionType' DEBE ser 'multiple_choice' o 'selection'.
-    2. 'items': Cada frase, oración o elemento a marcar debe ser un ítem interactivo limpio en 'prompt' sin ningún hueco ni guiones bajos (ej. prompt: "be married", prompt: "have children").
+    1. 'interactionType' DEBE ser 'selection'.
+    2. 'items': Cada frase, oración o elemento a discriminar/marcar debe ser un ítem interactivo limpio en 'prompt' con su texto completo, sin ningún hueco ni guiones bajos (ej. prompt: "What did you do yesterday?", prompt: "Where are you from?").
     3. 'wordBank' DEBE ser [] (vacío). NUNCA generes un banco de palabras ficticio con las opciones a marcar.
     4. Si la actividad es de reflexión personal, encuesta o no tiene respuestas únicas o fijas ("true for you", "about yourself", "your opinion"), asigna obligatoriamente 'isGraded': false.
 
@@ -610,9 +622,9 @@ UNIVERSAL TAXONOMY & STRICT CONTRACT:
 5. "wordBank": If the clipping contains a vocabulary box, word box, container, or pool of suggested ideas/topics (e.g. ['personal details', 'family', 'work']), extract them into "wordBank" as string[]. (Empty array [] if none).
    * REGLA DE PARTICIÓN 1: NUNCA incluyas cajas de palabras (Word Banks), notas de apoyo ('TIPS!'), números de página o códigos de lección dentro de 'items'.
 6. "interactionType": Must be one of: 'fill_blanks', 'multiple_choice', 'selection', 'matching', 'buckets', 'reference', 'writing'.
-   - Actividades de marcado directo, listas de verificación o checklist ('Tick (✓)...', 'Check...', 'Select all that apply') se categorizan SIEMPRE como 'multiple_choice' o 'selection' con wordBank vacío [].
+   - Actividades con un único conjunto de candidatos a elegir, marcar o discriminar ('Which sentences are true?', 'Which questions ask about...', 'Tick (✓)...', 'Check...', 'Select all that apply') se categorizan SIEMPRE como 'selection' con wordBank vacío [].
    - Actividades de redacción continua libre ('Write a profile / paragraph / summary / email / story...') usan 'writing' con 'guidelines' para las pautas guía y 'prompt'/'instruction' para la consigna central.
-   - Actividades de emparejar/relacionar dos conjuntos (párrafos con títulos, términos con definiciones, preguntas con respuestas) se categorizan SIEMPRE como 'multiple_choice' o 'matching' poblando 'options' en cada ítem.
+   - Actividades de emparejar/relacionar DOS conjuntos diferenciados (párrafos con títulos, términos con definiciones, preguntas con respuestas) se categorizan SIEMPRE como 'matching' poblando 'options' en cada ítem con el conjunto de destino.
    - Ejercicios de agrupar o clasificar términos en categorías o columnas usan 'buckets' siguiendo la Regla Universal de Clasificación por Categorías.
    - Actividades de producción abierta guiada por ideas ('Write ten questions using these ideas') usan 'fill_blanks' con ítems numerados vacíos y wordBank para los tópicos.
    - Actividades comunicativas de producción oral libre, diálogo o speaking card usan 'reference', consolidando los modelos y bancos de frases de apoyo íntegros en 'referenceContent'.
@@ -635,17 +647,19 @@ UNIVERSAL TAXONOMY & STRICT CONTRACT:
     - Extrae como estructura de datos en 'tableData': un arreglo de columnas { "header": string, "items": string[] } con los textos digitalizados limpios (eliminando tachones, subrayados o artefactos de escaneo).
     - 'title': Título del glosario o cuadro (ej. "Work Collocations", "Prepositions of Place", "Tense Contrast").
     - 'interactionType': "reference".
-    - PROHIBICIÓN ESTRICTA DE IMAGEN CRUDA: Si el contenido del diagrama fue completamente digitalizado en texto estructurado en 'tableData', 'visualImageIndices' DEBE ser [] (está estrictamente prohibido adjuntar la imagen recortada cruda como parche visual en el panel de consulta).
+    - PROHIBICIÓN ESTRICTA DE IMAGEN CRUDA: Si el contenido del diagrama fue completamente digitalizado en texto estructurado en tableData, 'visualImageIndices' DEBE ser [] (está estrictamente prohibido adjuntar la imagen recortada cruda como parche visual en el panel de consulta).
 
 CRITICAL NEGATIVE CONSTRAINTS:
+- NUNCA colapses una lista de oraciones, preguntas o términos candidatos en meros números ('1', '2', '3') ni sintetices combinaciones o permutaciones artificiales (ej. '1, 2', '1, 3', '2, 3', '1 and 2'). Cada elemento DEBE conservar su texto íntegro como opción o ítem interactivo.
+- NUNCA clasifiques actividades con un único conjunto de candidatos (ej. 'Which sentences are true?', 'Which questions ask about the past?') como emparejamiento ('matching') ni uses dropdowns; deben mapearse obligatoriamente a 'selection' con los textos completos como opciones.
+- NUNCA clasifiques tareas de marcado directo, tick (✓), verificación o checklist ("Tick...", "Check...", "Select all that apply") como 'fill_blanks' ni generes inputs de texto o un wordBank ficticio; deben modelarse como selección/checklist ('selection').
+- NUNCA clasifiques tareas de emparejar o correspondencia (Matching de dos dominios diferenciados: párrafos con encabezados, términos con definiciones, preguntas con respuestas) como 'fill_blanks'. Deben modelarse como 'matching' con el conjunto completo de alternativas en 'options' para cada ítem.
+- NUNCA clasifiques tareas de identificación o marcado ("Underline...", "Circle...", "Highlight...", "Identify the...") como 'fill_blanks' borrando palabras ni creando huecos artificiales en las oraciones; deben modelarse como 'multiple_choice' conservando la oración completa intacta en 'prompt' y presentando las palabras candidatas en 'options'.
 - NUNCA adjuntes la imagen cruda recortada en visualImageIndices si su contenido léxico o gramatical fue completamente digitalizado en texto estructurado en tableData.
 - NUNCA extraigas tópicos de apoyo conceptual (ideas/bullets como "personal details", "family", "work/study") como enunciados individuales de preguntas ni los envíes a 'referenceContent'. Mapea los tópicos a 'wordBank' y genera N ítems interactivos de respuesta abierta numerados ("1.", "2."...).
 - NUNCA extraigas listas de vocabulario, bancos de ideas, ejemplos resueltos (ej. '1 do / What / do / you ? What do you do?' o 'What do you do?') o consignas como 'referenceContent'. 'referenceContent' es exclusivamente para pasajes de lectura autónomos (artículos, historias o tablas gramaticales). Si no hay un texto de lectura real, 'referenceContent' DEBE ser estrictamente null para que la actividad ocupe el ancho completo de la diapositiva.
 - NUNCA concatenes directivas procedimentales multietapa (a, b, c, d) en un único párrafo continuo sin formato; debes estructurarlas en viñetas limpias con saltos de línea dobles y negritas ('**a)** ... \n\n **b)** ...').
 - NUNCA concatenes directivas divididas en letras (a, b, c) en una sola cadena en el título ni en la instrucción cuando (b) es audio de verificación. La tarea principal (a) es el 'title'/'instruction', la directiva de verificación auditiva (b) define 'audioLabel'/'verificationAudioUrl', y el cierre oral (c) define 'followUpPrompt'.
-- NUNCA clasifiques tareas de marcado directo, tick (✓), verificación o checklist ("Tick...", "Check...", "Select all that apply") como 'fill_blanks' ni generes inputs de texto o un wordBank ficticio; deben modelarse como selección/checklist ('multiple_choice' o 'selection').
-- NUNCA clasifiques tareas de emparejar o correspondencia (Matching de párrafos con encabezados, términos con definiciones, preguntas con respuestas) como 'fill_blanks'. Deben modelarse obligatoriamente como 'multiple_choice' con el conjunto completo de alternativas en 'options' para cada ítem.
-- NUNCA clasifiques tareas de identificación o marcado ("Underline...", "Circle...", "Highlight...", "Identify the...") como 'fill_blanks' borrando palabras ni creando huecos artificiales en las oraciones; deben modelarse como 'multiple_choice' conservando la oración completa intacta en 'prompt' y presentando las palabras candidatas en 'options'.
 - NUNCA incluyas recortes de pasajes de lectura, textos transcritos, artículos o ejercicios en 'visualImageIndices'; solo fotografías o ilustraciones genuinas sin transcripción textual directa.
 - NUNCA incluyas meta-comentarios pedagógicos, justificaciones didácticas ni notas dirigidas al profesor (ej. "This is an open-ended activity...", "This exercise is designed to encourage students..."). Todo el texto debe ser 100% material directo para el alumno.
 - NUNCA redactes descripciones en texto ni resúmenes de lo que muestran las fotos en actividades basadas en observación visual ("Look at the photos..."); la imagen real observada por el estudiante es el estímulo y no debe sustituirse por prosa descriptiva.
@@ -1006,6 +1020,7 @@ export function stripLeadingDuplicateTitle(text: string, title: string): string 
   }
   return text;
 }
+
 
 /**
  * Extracts candidate word distractors from a sentence for identification tasks
@@ -1431,9 +1446,12 @@ function sanitizeExtractedPayload(payload: ExtractedStructuredPayload): Extracte
   const items = Array.isArray(payload.items) ? payload.items : [];
   const rawInstruction = payload.instruction ? String(payload.instruction).trim() : '';
   const rawTitle = payload.title ? stripEditorialPrefix(String(payload.title).trim()) : '';
-  const isMatchingDirective = /match\b|relate\b|pair\b|emparej/i.test(`${rawTitle} ${rawInstruction}`);
-  const isIdentifyDirective = /underline\b|circle\b|highlight\b|identify\b|subraya\b|encierra\b|marca\b/i.test(`${rawTitle} ${rawInstruction}`);
-  const isChecklistDirective = /tick\b|check\b|marcar?\b|select\s+all\b|choose\s+from\b|verdader[ao]s?\s+para\s+ti|true\s+for\s+you|about\s+yourself/i.test(`${rawTitle} ${rawInstruction}`);
+  const rawContextDirective = `${rawTitle} ${rawInstruction}`;
+
+  const isSelectionDirective = /tick\b|check\b|marcar?\b|select\s+all\b|choose\s+from\b|which\s+(?:sentences?|questions?|statements?|phrases?|items?|options?|words?|ideas?)\b|which\s+of\b|are\s+(?:true|correct)\b|true\s+or\s+false\b|choose\s+the\s+(?:correct|true)\b|select\s+the\s+(?:correct|true)\b|verdader[ao]s?\s+para\s+ti|true\s+for\s+you|about\s+yourself/i.test(rawContextDirective);
+  const isExplicitMatchingDirective = /match\b|relate\b|pair\b|connect\b|emparej\w*|relacion\w*/i.test(rawContextDirective) || payload.interactionType === 'matching';
+  const isIdentifyDirective = /underline\b|circle\b|highlight\b|identify\b|subraya\b|encierra\b|marca\b/i.test(rawContextDirective);
+  const isChecklistDirective = isSelectionDirective || /tick\b|check\b|marcar?\b|select\s+all\b|choose\s+from\b|verdader[ao]s?\s+para\s+ti|true\s+for\s+you|about\s+yourself/i.test(rawContextDirective);
 
   // Detect open production directive ("Write ten questions. Use these ideas...")
   const openProductionRegex = /\b(?:write|make|ask|create|formulate|produce)\s+(?:(?:at\s+least|about|approx\w*)\s+)?(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|\d{1,2})\s+(questions|sentences|phrases|things|items)\b/i;
@@ -1456,11 +1474,19 @@ function sanitizeExtractedPayload(payload: ExtractedStructuredPayload): Extracte
     ])
   ).filter(Boolean);
 
+  const isBijectiveMatching = Boolean(
+    isExplicitMatchingDirective &&
+    !isSelectionDirective &&
+    matchingPool.length >= 2 &&
+    items.length >= 2
+  );
+
   const sanitizedItems = items.map((it, idx) => {
     const rawPrompt = stripOrphanTypographicalMarkers(String(it.prompt || '').trim());
     const explanation = stripOrphanTypographicalMarkers(String(it.explanation || '').trim());
     const isPureNumber = /^(?:item\s*)?\d+[.)]?$/i.test(rawPrompt) || rawPrompt === '';
-    let prompt = isPureNumber && explanation
+    
+    let prompt = (isPureNumber && explanation)
       ? (rawPrompt ? `${rawPrompt} _______ : ${explanation}` : `${idx + 1}. _______ : ${explanation}`)
       : (rawPrompt || `Item ${idx + 1}`);
     const expectedAnswer = stripOrphanTypographicalMarkers(String(it.expectedAnswer || '').trim()) || (isOpenProductionTask ? '' : `Respuesta ${idx + 1}`);
@@ -1480,7 +1506,7 @@ function sanitizeExtractedPayload(payload: ExtractedStructuredPayload): Extracte
 
     let itemOptions: string[] | undefined = Array.isArray(it.options) && it.options.length > 1
       ? it.options.map((o) => stripOrphanTypographicalMarkers(String(o).trim())).filter(Boolean)
-      : (isMatchingDirective && matchingPool.length > 1 ? matchingPool : (Array.isArray(it.options) ? it.options.map((o) => stripOrphanTypographicalMarkers(String(o).trim())).filter(Boolean) : undefined));
+      : (isBijectiveMatching && matchingPool.length > 1 ? matchingPool : (Array.isArray(it.options) ? it.options.map((o) => stripOrphanTypographicalMarkers(String(o).trim())).filter(Boolean) : undefined));
 
     // If identification task and options are missing or insufficient, extract sentence words as distractors
     if (isIdentifyDirective && (!itemOptions || itemOptions.length <= 1)) {
@@ -1668,7 +1694,7 @@ function sanitizeExtractedPayload(payload: ExtractedStructuredPayload): Extracte
   }
 
   // Discard fictitious wordBank on checklists or selection tasks
-  if (isChecklistDirective || payload.interactionType === 'selection' || (payload.interactionType === 'multiple_choice' && !isMatchingDirective)) {
+  if (isChecklistDirective || payload.interactionType === 'selection' || (payload.interactionType === 'multiple_choice' && !isBijectiveMatching)) {
     activeWordBank = [];
   }
 
@@ -1877,10 +1903,13 @@ function sanitizeExtractedPayload(payload: ExtractedStructuredPayload): Extracte
       if (isWritingTask) {
         return 'writing';
       }
-      if (isChecklistDirective || payload.interactionType === 'selection') {
+      if (isSelectionDirective || payload.interactionType === 'selection') {
         return 'selection';
       }
-      if ((isMatchingDirective || isIdentifyDirective) && finalItems.length > 0 && !isOpenProductionTask) {
+      if (isBijectiveMatching && finalItems.length > 0 && !isOpenProductionTask) {
+        return 'matching';
+      }
+      if (isIdentifyDirective && finalItems.length > 0 && !isOpenProductionTask) {
         return 'multiple_choice';
       }
       return finalInteractionType;

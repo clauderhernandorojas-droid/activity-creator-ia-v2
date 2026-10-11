@@ -424,9 +424,14 @@ export function mapBlockToBuckets(block: ExtractedBlock): BucketsMatchingBlock {
  */
 export function mapBlockToSelection(block: ExtractedBlock): SelectionBlock {
   const parsed = block.parsedData || {};
+  const contextDirective = `${parsed.title || ''} ${parsed.instruction || ''}`;
+  const rawItems: any[] = Array.isArray(parsed.items) ? parsed.items : [];
 
   // Case 1: Structured questions already present
   if (Array.isArray(parsed.questions) && parsed.questions.length > 0) {
+    const isMatchingDirective = /match\b|relate\b|pair\b|connect\b|emparej\w*|relacion\w*/i.test(contextDirective) ||
+      parsed.interactionType === 'matching';
+
     const questions = parsed.questions.map((q: any) => {
       const options: SelectionOption[] = (q.options || []).map((opt: any) => {
         const rawOpt = typeof opt === 'string' ? opt.trim() : String(opt.text || opt.label || '').trim();
@@ -440,10 +445,16 @@ export function mapBlockToSelection(block: ExtractedBlock): SelectionBlock {
         };
       });
 
+      // Strict Criterio Estructural: 'dropdown' applies ONLY if explicitly matching between two domains
+      const safeMode: 'single_choice' | 'multiple_choice' | 'dropdown' =
+        q.mode === 'dropdown' && !isMatchingDirective
+          ? 'single_choice'
+          : ((q.mode || 'single_choice') as 'single_choice' | 'multiple_choice' | 'dropdown');
+
       return {
         id: generateId('q'),
         prompt: stripOrphanTypographicalMarkers(String(q.prompt || q.question || '').trim()),
-        mode: (q.mode || 'single_choice') as 'single_choice' | 'multiple_choice' | 'dropdown',
+        mode: safeMode,
         options
       };
     });
@@ -486,35 +497,71 @@ export function mapBlockToSelection(block: ExtractedBlock): SelectionBlock {
   }
 
   // Case 2: Structured items with candidate options
-  const rawItems: any[] = Array.isArray(parsed.items) ? parsed.items : [];
-
   if (rawItems.length > 0) {
-    const contextDirective = `${parsed.title || ''} ${parsed.instruction || ''}`;
-    const isChecklist = /tick\b|check\b|marcar?\b|select\s+all\b|choose\s+from\b|true\s+for\s+you|verdader[ao]s?\s+para\s+ti|about\s+yourself/i.test(contextDirective) ||
-      parsed.interactionType === 'selection';
+    const isSelectionDirective = /tick\b|check\b|marcar?\b|select\s+all\b|choose\s+from\b|which\s+(?:sentences?|questions?|statements?|phrases?|items?|options?|words?|ideas?)\b|which\s+of\b|are\s+(?:true|correct)\b|true\s+or\s+false\b|choose\s+the\s+(?:correct|true)\b|select\s+the\s+(?:correct|true)\b|verdader[ao]s?\s+para\s+ti|true\s+for\s+you|about\s+yourself/i.test(contextDirective);
 
-    const isMatching = /match\b|relate\b|pair\b|emparej/i.test(contextDirective) ||
+    const isExplicitMatching = /match\b|relate\b|pair\b|connect\b|emparej\w*|relacion\w*/i.test(contextDirective) ||
       parsed.interactionType === 'matching';
 
     const isIdentifyTask = /underline\b|circle\b|highlight\b|identify\b|subraya\b|encierra\b|marca\b/i.test(contextDirective);
 
     const hasPerItemOptions = rawItems.some((it) => Array.isArray(it?.options) && it.options.length > 1);
 
-    // If it's a checklist or simple candidate items without nested options and not a matching/identify task:
-    // Map directly to Flat Selection Mode (Tarjetas interactivas con checkbox)
-    if (isChecklist || (!hasPerItemOptions && !isMatching && !isIdentifyTask)) {
+    // Global options pool from wordBank or from all items' options or expectedAnswers
+    const globalOptionsPool = Array.from(
+      new Set([
+        ...(Array.isArray(parsed.wordBank) ? parsed.wordBank.map((w: any) => String(w).trim()).filter(Boolean) : []),
+        ...rawItems.flatMap((it: any) => {
+          if (Array.isArray(it.options) && it.options.length > 0) {
+            return it.options.map((o: any) => String(o).trim()).filter(Boolean);
+          }
+          return it.expectedAnswer ? [String(it.expectedAnswer).trim()] : [];
+        }),
+      ])
+    ).filter(Boolean);
+
+    // Criterio Estructural entre Selección y Matching:
+    // Matching / Correspondence aplica ÚNICAMENTE cuando existan DOS dominios explícitos y diferenciados para relacionar biyectivamente
+    const isBijectiveMatching = Boolean(
+      isExplicitMatching &&
+      !isSelectionDirective &&
+      globalOptionsPool.length >= 2 &&
+      rawItems.length >= 2
+    );
+
+    // Selection / Checklist: Si existe un único conjunto de candidatos dentro del cual el alumno debe escoger o discriminar uno o más elementos válidos,
+    // la estructura DEBE mapearse a la primitiva 'selection' (con los textos completos como opciones), nunca a un dropdown de emparejamiento.
+    const isSingleCandidateSet = isSelectionDirective ||
+      parsed.interactionType === 'selection' ||
+      (!hasPerItemOptions && !isBijectiveMatching && !isIdentifyTask);
+
+    if (isSingleCandidateSet) {
       const flatOptions: SelectionOption[] = rawItems.map((item: any, idx: number) => {
         let text = typeof item === 'object' && item !== null
           ? String(item.prompt || item.text || `Elemento ${idx + 1}`).trim()
           : String(item).trim();
 
-        // Clean leading item numbers: "1. be married" -> "be married"
+        // Invariante de Preservación de Texto en Candidatos:
+        // Limpiar únicamente prefijos numéricos ("1. ") conservando el texto íntegro original del elemento
         text = text.replace(/^(?:item\s*)?\d+[.)]\s*/i, '').trim();
-        // Clean trailing sample letter if it was a book sample like "be married F" -> "be married"
         text = text.replace(/\s+[A-L]$/, '').trim();
         text = stripOrphanTypographicalMarkers(text);
 
-        const isCorrect = typeof item === 'object' && item !== null ? Boolean(item.isCorrect) : false;
+        const exp = typeof item === 'object' && item !== null ? String(item.expectedAnswer || '').trim().toLowerCase() : '';
+        let isCorrect = typeof item === 'object' && item !== null && typeof item.isCorrect === 'boolean'
+          ? item.isCorrect
+          : (
+              /^(?:true|correct|yes|tick|verdadero|si)$/i.test(exp)
+                ? true
+                : /^(?:false|incorrect|no|falso)$/i.test(exp)
+                ? false
+                : (Boolean(exp) && parsed.isGraded !== false)
+            );
+
+        if (parsed.isGraded === false) {
+          isCorrect = false;
+        }
+
         return {
           id: generateId('opt'),
           text: text || `Elemento ${idx + 1}`,
@@ -535,20 +582,9 @@ export function mapBlockToSelection(block: ExtractedBlock): SelectionBlock {
         questions: []
       };
     }
-    // Global options pool from wordBank or from all items' options or expectedAnswers
-    const globalOptionsPool = Array.from(
-      new Set([
-        ...(Array.isArray(parsed.wordBank) ? parsed.wordBank.map((w: any) => String(w).trim()).filter(Boolean) : []),
-        ...rawItems.flatMap((it: any) => {
-          if (Array.isArray(it.options) && it.options.length > 0) {
-            return it.options.map((o: any) => String(o).trim()).filter(Boolean);
-          }
-          return it.expectedAnswer ? [String(it.expectedAnswer).trim()] : [];
-        }),
-      ])
-    ).filter(Boolean);
 
-    const isMatchingMode = isMatching || globalOptionsPool.length >= 3;
+    // Matching o Quiz multirreactivo con opciones cerradas
+    const isMatchingMode = isBijectiveMatching;
 
     const questions = rawItems.map((item: any, idx: number) => {
       let prompt = String(item.prompt || item.text || `Pregunta ${idx + 1}`).trim();
@@ -602,9 +638,12 @@ export function mapBlockToSelection(block: ExtractedBlock): SelectionBlock {
         }
       }
 
+      // Dropdown se aplica ÚNICAMENTE cuando es matching biyectivo entre dos dominios diferenciados
       const mode: 'single_choice' | 'multiple_choice' | 'dropdown' = isMatchingMode
         ? 'dropdown'
-        : 'single_choice';
+        : (Array.isArray(item.acceptedAnswers) && item.acceptedAnswers.length > 1
+          ? 'multiple_choice'
+          : 'single_choice');
 
       return {
         id: generateId('q'),
@@ -1364,7 +1403,7 @@ export function mapBlockToRole(
     case 'interaction_inputs': {
       const isSelectionTask = parsed.interactionType === 'selection' ||
         parsed.interactionType === 'multiple_choice' ||
-        /tick\b|check\b|marcar?\b|select\s+all\b|choose\s+from\b|underline\b|circle\b|highlight\b|identify\b|subraya\b|encierra\b|marca\b|true\s+for\s+you|verdader[ao]s?\s+para\s+ti/i.test(
+        /tick\b|check\b|marcar?\b|select\s+all\b|choose\s+from\b|which\s+(?:sentences?|questions?|statements?|phrases?|items?|options?|words?|ideas?)\b|which\s+of\b|are\s+(?:true|correct)\b|true\s+or\s+false\b|choose\s+the\s+(?:correct|true)\b|select\s+the\s+(?:correct|true)\b|underline\b|circle\b|highlight\b|identify\b|subraya\b|encierra\b|marca\b|true\s+for\s+you|verdader[ao]s?\s+para\s+ti|about\s+yourself/i.test(
           `${parsed.title || ''} ${parsed.instruction || ''}`
         );
       if (isSelectionTask) {
