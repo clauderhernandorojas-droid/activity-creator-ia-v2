@@ -9,7 +9,7 @@ import type {
   ExtractedBlock 
 } from '../types/schema';
 import { digitizeBook, createManualBlock, type ManualTemplateType } from '../core/ai/digitizeBook';
-import { mapBlockToRole, convertSlideToRole, type PedagogicalRole } from '../core/ai/payloadMapper';
+import { convertSlideToRole, type PedagogicalRole } from '../core/utils/slideRoleConverter';
 import { compressImageBase64 } from '../core/utils/imageCompressor';
 import { stripEditorialPrefix } from '../core/text/textDeduplication';
 import { useSessionStore } from './useSessionStore';
@@ -83,6 +83,8 @@ interface LessonState {
   ocrProcessing: boolean;
   activeOcrAbortController: AbortController | null;
   cancelOcrProcessing: () => void;
+  ocrError: string | null;
+  clearOcrError: () => void;
   pastedImagePreview: string | null;
   pastedImages: string[];
 
@@ -177,6 +179,8 @@ export const useLessonStore = create<LessonState>()(
       lastExtractedPayload: null,
       ocrProcessing: false,
       activeOcrAbortController: null,
+      ocrError: null,
+      clearOcrError: () => set({ ocrError: null }),
       pastedImagePreview: null,
       pastedImages: [],
 
@@ -252,6 +256,7 @@ export const useLessonStore = create<LessonState>()(
         set({
           ocrProcessing: false,
           activeOcrAbortController: null,
+          ocrError: null,
         });
       },
 
@@ -267,6 +272,7 @@ export const useLessonStore = create<LessonState>()(
           lastExtractedPayload: null,
           ocrProcessing: false,
           activeOcrAbortController: null,
+          ocrError: null,
         });
       },
 
@@ -365,37 +371,26 @@ export const useLessonStore = create<LessonState>()(
         exportLessonToFile(lesson);
       },
 
-      createSlideFromBlock: (blockId, role) => {
+      createSlideFromBlock: (blockId, _role) => {
         try {
           const state = get();
-          const block = state.extractedBlocks.find((b) => b.id === blockId) || state.extractedBlocks[0];
+          const block = (state.extractedBlocks.find((b) => b.id === blockId) || state.extractedBlocks[0]) as (Slide & ExtractedBlock) | undefined;
           const newId = `slide-${Date.now()}`;
-          const title = stripEditorialPrefix(block?.parsedData?.title || 'Diapositiva Digitalizada');
-          const subtitle = block?.parsedData?.instruction || 'Contenido adaptado desde libro de texto';
-          const isGraded = block?.parsedData?.isGraded !== undefined ? Boolean(block.parsedData.isGraded) : true;
-          const mapped = block ? mapBlockToRole(block, role) : {};
+          if (!block) return newId;
 
-          let cleanRef = mapped.reference || null;
-          if (cleanRef && cleanRef.type === 'text') {
-            const words = (cleanRef.content || '').trim().split(/\s+/).filter(Boolean).length;
-            if (words >= 30) {
-              cleanRef = {
-                ...cleanRef,
-                imageUrl: undefined,
-                images: [],
-              };
-            }
-          }
+          const title = block.title || block.parsedData?.title || 'Diapositiva Digitalizada';
+          const subtitle = block.subtitle || block.parsedData?.instruction;
+          const isGraded = block.isGraded !== undefined ? block.isGraded : (block.parsedData?.isGraded !== undefined ? Boolean(block.parsedData.isGraded) : true);
 
           const newSlide: Slide = {
             id: newId,
             title,
             subtitle,
-            layout: cleanRef ? 'split_50_50' : 'single_column',
-            referenceContent: cleanRef,
-            interaction: mapped.interaction || null,
-            cachedInteraction: mapped.interaction || null,
-            notes: '',
+            layout: block.layout || (block.referenceContent ? 'split_50_50' : 'single_column'),
+            referenceContent: block.referenceContent || null,
+            interaction: block.interaction || null,
+            cachedInteraction: block.interaction || null,
+            notes: block.notes || '',
             isGraded,
           };
 
@@ -625,14 +620,15 @@ export const useLessonStore = create<LessonState>()(
           if (externalSignal.aborted) controller.abort();
         }
 
-        set({ ocrProcessing: true, activeOcrAbortController: controller });
+        set({ ocrProcessing: true, activeOcrAbortController: controller, ocrError: null });
         try {
           const extracted = await digitizeBook(images, controller.signal);
           set({
             ocrProcessing: false,
             activeOcrAbortController: null,
             extractedBlocks: extracted,
-            lastExtractedPayload: extracted
+            lastExtractedPayload: extracted,
+            ocrError: null,
           });
         } catch (err: any) {
           if (controller.signal.aborted || err?.name === 'AbortError') {
@@ -640,7 +636,11 @@ export const useLessonStore = create<LessonState>()(
             return;
           }
           console.error('Error processing images with AI:', err);
-          set({ ocrProcessing: false, activeOcrAbortController: null });
+          set({
+            ocrProcessing: false,
+            activeOcrAbortController: null,
+            ocrError: err?.message || 'Error al procesar las imágenes con IA',
+          });
         }
       },
 
@@ -660,7 +660,8 @@ export const useLessonStore = create<LessonState>()(
           pastedImages: nextImages,
           pastedImagePreview: nextImages[0] || null,
           ocrProcessing: true,
-          activeOcrAbortController: controller
+          activeOcrAbortController: controller,
+          ocrError: null,
         });
 
         try {
@@ -672,7 +673,8 @@ export const useLessonStore = create<LessonState>()(
             ocrProcessing: false,
             activeOcrAbortController: null,
             extractedBlocks: extracted,
-            lastExtractedPayload: extracted
+            lastExtractedPayload: extracted,
+            ocrError: null,
           });
         } catch (err: any) {
           if (controller.signal.aborted || err?.name === 'AbortError') {
@@ -680,7 +682,11 @@ export const useLessonStore = create<LessonState>()(
             return;
           }
           console.error('Error processing images with AI:', err);
-          set({ ocrProcessing: false, activeOcrAbortController: null });
+          set({
+            ocrProcessing: false,
+            activeOcrAbortController: null,
+            ocrError: err?.message || 'Error al procesar la imagen con IA',
+          });
         }
       },
 
@@ -763,49 +769,106 @@ export const useLessonStore = create<LessonState>()(
           return;
         }
 
-        const manualBlock = createManualBlock(template === 'sequence' ? 'input_fields' : template);
-        const role: PedagogicalRole = 
-          template === 'reference_table' ? 'reference_table' :
-          template === 'buckets' ? 'interaction_buckets' :
-          template === 'selection' ? 'interaction_selection' :
-          template === 'sequence' ? 'interaction_sequence' :
-          template === 'writing' ? 'interaction_writing' : 'interaction_inputs';
+        if (template === 'reference_table') {
+          const refBlock: ReferenceBlock = {
+            type: 'reference_table',
+            id: `ref-table-${Date.now()}`,
+            title: 'Grammar Reference Table',
+            instruction: 'Study the table below:',
+            columns: [
+              { header: 'Form', items: ['Affirmative', 'Negative', 'Question'] },
+              { header: 'Structure', items: ['Subject + Verb', 'Subject + Aux + not', 'Aux + Subject + Verb'] }
+            ]
+          };
+          state.updateReferenceBlock(slideId, refBlock);
+          return;
+        }
 
-        const mapped = mapBlockToRole(manualBlock, role);
-        if (mapped.reference) {
-          state.updateReferenceBlock(slideId, mapped.reference);
+        if (template === 'buckets') {
+          const intBlock: InteractionBlock = {
+            type: 'buckets_matching',
+            id: `int-buckets-${Date.now()}`,
+            instruction: 'Categorize each item into the correct category:',
+            buckets: [
+              { id: 'b1', label: 'Category A', color: '#4f46e5' },
+              { id: 'b2', label: 'Category B', color: '#059669' }
+            ],
+            tokens: [
+              { id: 't1', text: 'Item 1', correctBucketId: 'b1' },
+              { id: 't2', text: 'Item 2', correctBucketId: 'b2' }
+            ]
+          };
+          state.updateInteractionBlock(slideId, intBlock);
+          return;
         }
-        if (mapped.interaction) {
-          state.updateInteractionBlock(slideId, mapped.interaction);
+
+        if (template === 'selection') {
+          const intBlock: InteractionBlock = {
+            type: 'selection',
+            id: `int-sel-${Date.now()}`,
+            instruction: 'Choose the correct option:',
+            questions: [
+              {
+                id: 'q1',
+                prompt: 'Select the correct statement:',
+                mode: 'single_choice',
+                options: [
+                  { id: 'opt1', text: 'Option A (Correct)', isCorrect: true },
+                  { id: 'opt2', text: 'Option B', isCorrect: false }
+                ]
+              }
+            ]
+          };
+          state.updateInteractionBlock(slideId, intBlock);
+          return;
         }
+
+        if (template === 'sequence') {
+          const intBlock: InteractionBlock = {
+            type: 'sequence',
+            id: `int-seq-${Date.now()}`,
+            instruction: 'Put the sentences in order:',
+            items: [
+              { id: 'seq-1', text: 'First sentence', correctOrder: 1 },
+              { id: 'seq-2', text: 'Second sentence', correctOrder: 2 },
+              { id: 'seq-3', text: 'Third sentence', correctOrder: 3 }
+            ]
+          };
+          state.updateInteractionBlock(slideId, intBlock);
+          return;
+        }
+
+        if (template === 'writing') {
+          const intBlock: InteractionBlock = {
+            type: 'writing',
+            id: `int-write-${Date.now()}`,
+            instruction: 'Write a short text following the guidelines:',
+            prompt: 'Write your answer here...',
+            guidelines: ['Use complete sentences', 'Check spelling and grammar']
+          };
+          state.updateInteractionBlock(slideId, intBlock);
+          return;
+        }
+
+        // Default: input_fields
+        const intBlock: InteractionBlock = {
+          type: 'input_fields',
+          id: `int-inputs-${Date.now()}`,
+          instruction: 'Complete the sentences with the correct word:',
+          layoutMode: 'list',
+          listItems: [
+            { id: 'item-1', prompt: '1. She _______ (live) in London for three years.', expectedAnswer: 'has lived', acceptedAnswers: ['has lived', 'lived'] },
+            { id: 'item-2', prompt: '2. We _______ (already / see) that documentary.', expectedAnswer: 'have already seen', acceptedAnswers: ['have already seen'] }
+          ]
+        };
+        state.updateInteractionBlock(slideId, intBlock);
       },
 
-      assignExtractedBlock: (slideId, blockId, role) => {
+      assignExtractedBlock: (slideId, blockId, _role) => {
         try {
           const state = get();
-          const block = state.extractedBlocks.find((b) => b.id === blockId);
-          if (!block) return;
-
-          const mapped = mapBlockToRole(block, role);
-          const isGraded = block.parsedData?.isGraded !== undefined ? Boolean(block.parsedData.isGraded) : undefined;
-          const blockTitle = block.parsedData?.title;
-          const blockInstruction = block.parsedData?.instruction;
-
-          const refRaw = String(block.parsedData?.referenceContent || block.parsedData?.content || (block as any).referenceText || block.rawText || '').trim();
-          const wordCount = refRaw.split(/\s+/).filter(Boolean).length;
-          const isTranscribedReadingArticle = wordCount >= 30;
-
-          const hasExplicitVisuals = Array.isArray(block.parsedData?.images) && block.parsedData.images.length > 0;
-
-          const blockImages = (
-            isTranscribedReadingArticle
-              ? [] // Descartar recortes si el bloque es un artículo de lectura completo transcrito (>= 30 palabras)
-              : (hasExplicitVisuals
-                ? block.parsedData!.images!
-                : (Array.isArray(block.sourceImages)
-                  ? block.sourceImages
-                  : (block.sourceImageSnippetUrl ? [block.sourceImageSnippetUrl] : [])))
-          ).filter(Boolean);
+          const source = state.extractedBlocks.find((b) => b.id === blockId) as (Slide & ExtractedBlock) | undefined;
+          if (!source) return;
 
           set((s) => ({
             ...recordHistory(s),
@@ -813,50 +876,19 @@ export const useLessonStore = create<LessonState>()(
               ...s.lesson,
               slides: s.lesson.slides.map((slide) => {
                 if (slide.id !== slideId) return slide;
-                const shouldUpdateTitle = blockTitle && (!slide.title || slide.title === 'Nueva diapositiva' || slide.title === 'Diapositiva Digitalizada');
-                const shouldUpdateSubtitle = blockInstruction && (!slide.subtitle || slide.subtitle === 'Instrucción o contexto breve' || slide.subtitle === 'Contenido adaptado desde libro de texto');
-                
-                let refContent = mapped.reference;
-                if (refContent && refContent.type === 'text') {
-                  const refWords = (refContent.content || '').trim().split(/\s+/).filter(Boolean).length;
-                  if (refWords >= 30) {
-                    refContent = {
-                      ...refContent,
-                      images: [],
-                      imageUrl: undefined,
-                    };
-                  }
-                }
 
-                if (!refContent && slide.referenceContent && slide.referenceContent.type === 'text') {
-                  const currentWords = (slide.referenceContent.content || '').trim().split(/\s+/).filter(Boolean).length;
-                  if (currentWords >= 30) {
-                    refContent = {
-                      ...slide.referenceContent,
-                      images: [],
-                      imageUrl: undefined,
-                    };
-                  } else if (blockImages.length > 0 && (!slide.referenceContent.images || slide.referenceContent.images.length === 0)) {
-                    refContent = {
-                      ...slide.referenceContent,
-                      images: blockImages,
-                      imageUrl: blockImages[0],
-                    };
-                  }
-                }
-
-                const nextLayout = (refContent || slide.referenceContent) && (mapped.interaction || slide.interaction)
-                  ? 'split_50_50'
-                  : slide.layout;
+                const refContent = source.referenceContent !== undefined ? source.referenceContent : slide.referenceContent;
+                const interaction = source.interaction !== undefined ? source.interaction : slide.interaction;
+                const nextLayout = refContent && interaction ? 'split_50_50' : slide.layout;
 
                 return {
                   ...slide,
                   layout: nextLayout,
-                  ...(shouldUpdateTitle ? { title: blockTitle } : {}),
-                  ...(shouldUpdateSubtitle ? { subtitle: blockInstruction } : {}),
-                  ...(isGraded !== undefined ? { isGraded } : {}),
-                  ...(refContent ? { referenceContent: refContent } : {}),
-                  ...(mapped.interaction ? { interaction: mapped.interaction, cachedInteraction: mapped.interaction } : {}),
+                  ...(source.title ? { title: source.title } : {}),
+                  ...(source.subtitle ? { subtitle: source.subtitle } : {}),
+                  ...(source.isGraded !== undefined ? { isGraded: source.isGraded } : {}),
+                  referenceContent: refContent,
+                  ...(interaction ? { interaction, cachedInteraction: interaction } : {}),
                 };
               }),
             },

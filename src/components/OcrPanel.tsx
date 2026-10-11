@@ -25,7 +25,7 @@ import {
 } from 'lucide-react';
 import type { ExtractedBlock } from '../types/schema';
 import type { ManualTemplateType } from '../core/ai/digitizeBook';
-import { mapBlockToRole, parseStructuredReferenceColumns, type PedagogicalRole } from '../core/ai/payloadMapper';
+import { type PedagogicalRole } from '../core/utils/slideRoleConverter';
 import { compressImageBase64 } from '../core/utils/imageCompressor';
 
 export const OcrPanel: React.FC = () => {
@@ -34,6 +34,8 @@ export const OcrPanel: React.FC = () => {
     extractedBlocks,
     ocrProcessing,
     cancelOcrProcessing,
+    ocrError,
+    clearOcrError,
     pastedImages,
     addPastedImage,
     removePastedImage,
@@ -219,73 +221,25 @@ export const OcrPanel: React.FC = () => {
     });
   };
 
-  // Derive default role directly from detected type without setState in effect
+  // Derive default role directly from native Slide typed properties without regexes
   const defaultRole: PedagogicalRole = (() => {
     if (!activeBlock) return 'interaction_inputs';
-    const pd = activeBlock.parsedData || {};
-    const hasInteractiveTable = Boolean(
-      (Array.isArray(pd.tableRows) && pd.tableRows.some((row: any[]) => Array.isArray(row) && row.some((cell: any) => cell?.isInput))) ||
-      pd.layoutMode === 'table' ||
-      (activeBlock.detectedType === 'table' && pd.interactionType === 'fill_blanks')
-    );
-    if (hasInteractiveTable) {
-      return 'interaction_inputs';
+    const interaction = (activeBlock as any).interaction;
+    const ref = (activeBlock as any).referenceContent;
+    if (interaction) {
+      switch (interaction.type) {
+        case 'selection': return 'interaction_selection';
+        case 'buckets_matching': return 'interaction_buckets';
+        case 'sequence': return 'interaction_sequence';
+        case 'writing': return 'interaction_writing';
+        case 'input_fields': return 'interaction_inputs';
+      }
     }
-
-    const isSelectionOrChecklistDirective = /tick\b|check\b|marcar?\b|select\s+all\b|choose\s+from\b|underline\b|circle\b|highlight\b|identify\b|subraya\b|encierra\b|marca\b|true\s+for\s+you|verdader[ao]s?\s+para\s+ti/i.test(
-      `${pd.title || ''} ${pd.instruction || ''}`
-    );
-    if (
-      pd.interactionType === 'multiple_choice' ||
-      pd.interactionType === 'selection' ||
-      pd.interactionType === 'matching' ||
-      isSelectionOrChecklistDirective
-    ) {
-      return 'interaction_selection';
-    }
-    if (pd.interactionType === 'classification' || pd.interactionType === 'drag_drop') {
-      return 'interaction_buckets';
-    }
-    const isWritingTask = Boolean(
-      pd.interactionType === 'writing' ||
-      (activeBlock.detectedType as string) === 'writing' ||
-      /write\b|writing\b|redacta\b|redacción\b|redactar\b/i.test(`${pd.title || ''} ${pd.instruction || ''}`) ||
-      (Array.isArray(pd.guidelines) && pd.guidelines.length > 0)
-    );
-    if (isWritingTask) {
-      return 'interaction_writing';
-    }
-
-    // PRIORIDAD PEDAGÓGICA INTERACTIVA:
-    // Si existen reactivos interactivos (pd.items con longitud > 0), el rol primario DEBE ser interactivo ('interaction_inputs'),
-    // incluso si el bloque contiene tablas o columnas. El material tabular/consulta coexistirá en slide.referenceContent.
-    const hasInteractiveItems = Array.isArray(pd.items) && pd.items.length > 0;
-    if (hasInteractiveItems) {
-      return 'interaction_inputs';
-    }
-
-    if (
-      (Array.isArray(pd.tableData) && pd.tableData.length > 0) ||
-      (Array.isArray(pd.columns) && pd.columns.length > 0) ||
-      (parseStructuredReferenceColumns(pd.referenceContent || pd.content || activeBlock.rawText).length > 0)
-    ) {
-      return 'reference_table';
-    }
-
-    if (pd.interactionType === 'reference' || activeBlock.detectedType === 'paragraph') {
+    if (ref) {
+      if (ref.type === 'reference_table' || ref.type === 'table_reference') return 'reference_table';
       return 'reference_text';
     }
-
-    switch (activeBlock.detectedType) {
-      case 'table':
-        return 'reference_table';
-      case 'vocabulary':
-        return 'interaction_buckets';
-      case 'dialogue':
-        return 'interaction_sequence';
-      default:
-        return 'interaction_inputs';
-    }
+    return 'interaction_inputs';
   })();
 
   const selectedRole = selectedRoleOverride || defaultRole;
@@ -504,6 +458,22 @@ export const OcrPanel: React.FC = () => {
             </button>
           </div>
         </header>
+
+        {ocrError && (
+          <div className="mx-6 mt-4 p-3.5 bg-rose-50 border border-rose-200 rounded-2xl flex items-start justify-between gap-3 text-rose-800 text-xs shadow-2xs">
+            <div className="flex items-start gap-2.5">
+              <span className="font-bold text-rose-900 flex-shrink-0">⚠️ Error de Validación de Esquema:</span>
+              <span className="whitespace-pre-line text-rose-700 font-mono text-[11px]">{ocrError}</span>
+            </div>
+            <button
+              onClick={clearOcrError}
+              className="text-rose-400 hover:text-rose-700 font-bold p-1 rounded transition cursor-pointer"
+              title="Cerrar advertencia"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        )}
 
         {/* Modal Body: 2-Column Responsive Grid */}
         <div className="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-6 overflow-hidden p-6 bg-slate-50/40">
@@ -935,7 +905,10 @@ export const OcrPanel: React.FC = () => {
 
                 {/* Structured Preview Box */}
                 {(() => {
-                  const mappedPreview = mapBlockToRole(activeBlock, selectedRole);
+                  const mappedPreview = {
+                    reference: (activeBlock as any)?.referenceContent || null,
+                    interaction: (activeBlock as any)?.interaction || null,
+                  };
 
                   return (
                     <div className="flex-1 min-h-0 overflow-y-auto rounded-xl border border-slate-200 bg-slate-50/70 p-3.5 space-y-2.5">

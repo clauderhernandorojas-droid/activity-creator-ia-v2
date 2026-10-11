@@ -4,9 +4,8 @@ import { useLessonStore } from '../../store/useLessonStore';
 import { REFERENCE_RENDERER_REGISTRY } from '../renderers/registry';
 import { StructuredReferenceRenderer } from '../renderers/StructuredReferenceRenderer';
 import { TextReferenceRenderer } from '../renderers/TextReferenceRenderer';
-import { SlideErrorBoundary } from '../common/SlideErrorBoundary';
 import { BookOpen, X } from 'lucide-react';
-import { parseHierarchicalReference, parseStructuredReferenceColumns } from '../../core/ai/payloadMapper';
+import { parseHierarchicalReference, parseStructuredReferenceColumns } from '../../core/utils/referenceParser';
 import type { ReferenceBlock, StructuredReferenceBlock } from '../../types/schema';
 
 export const ReferenceDrawer: React.FC = () => {

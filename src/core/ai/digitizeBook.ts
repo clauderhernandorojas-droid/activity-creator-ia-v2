@@ -1,4 +1,9 @@
-import type { ExtractedBlock, ExtractedStructuredPayload } from '../../types/schema';
+import { 
+  type ExtractedBlock, 
+  type ExtractedStructuredPayload,
+  type Slide,
+  SlideSchema
+} from '../../types/schema';
 import { GoogleGenAI } from '@google/genai';
 import {
   isDuplicateReferenceContent,
@@ -324,364 +329,456 @@ export function consolidateBlocks(blocks: ExtractedBlock[], sourceUrl?: string):
 }
 
 /**
- * Structured Output schema for Google Gemini SDK and OpenRouter.
+ * Strict Structured Output schema (JSON Schema) for Google Gemini SDK and OpenRouter.
+ * Direct 1:1 alignment with Slide, ReferenceBlock, and InteractionBlock in schema.ts.
  */
-const STRUCTURED_EXTRACTION_SCHEMA = {
+export const STRUCTURED_SLIDE_SCHEMA = {
   type: 'object',
   properties: {
-    title: { type: 'string', description: 'Concise formal activity title (e.g. "Speaking: Tell other students about yourself")' },
-    instruction: {
-      type: 'string',
-      description: 'The explicit pedagogical directive, task instruction, or rubric prompt present in the clipping (e.g. "Work in groups. Tell other students about yourself. Use the phrases from 1 or your own ideas"). MUST NEVER BE EMPTY if the image contains an instructional order or directive. For multi-stage directives (phases a, b, c, d), preserve clean structured formatting with double linebreaks and bold headers: "**a)** ... \n\n **b)** ...". Cuando un ejercicio de producción presente un paso inicial de redacción (a) seguido de una fase de interacción, discusión o trabajo en pares/grupos (b), la fase inicial debe poblar "instruction" y la fase subsiguiente de discusión debe poblar exclusivamente "followUpPrompt".'
-    },
-    isGraded: {
-      type: 'boolean',
-      description: 'Default true. If the exercise instruction corresponds to a personal survey, opinion, self-reflection, or discussion task where there are no absolute correct/wrong answers (e.g. contains phrases like "true for you", "about yourself", "your opinion", "discuss in pairs", "write ten questions using these ideas"), extract as false.'
-    },
-    verificationAudioUrl: {
-      type: 'string',
-      description: 'Audio URL or placeholder path (e.g. "/audio/R1.2.mp3" or "/audio/track.mp3") if the exercise instruction or prompt mentions listening to check or verify answers (e.g. "Listen and check", "Listen and check your answers", "R1.2", "CD1 Track X"). Omit or empty string if not mentioned.'
-    },
-    audioLabel: {
-      type: 'string',
-      description: 'Audio track code or label present in the exercise heading or instruction (e.g. "R1.2", "CD1 Track 5", "Track 1.24"). Omit or empty string if not mentioned.'
-    },
-    followUpPrompt: {
-      type: 'string',
-      description: 'Communicative follow-up directive, speaking practice, or peer discussion task (e.g. subsection "b: Work in pairs. Ask each other questions" or "c: Work in pairs. Ask and answer"). Cuando un ejercicio de producción presente un paso inicial de redacción (a) seguido de una fase de interacción, discusión o trabajo en pares/grupos (b), la fase inicial debe poblar "instruction" y la fase subsiguiente de discusión debe poblar exclusivamente "followUpPrompt". NUNCA concatenes ambos incisos en una sola cadena en "instruction". Omit or empty string if no follow-up task.'
-    },
-    visualImageIndices: {
+    slides: {
       type: 'array',
-      items: { type: 'integer' },
-      description: '1-based index numbers (1, 2, 3...) of the input image clippings that contain actual photographs, illustrations, drawings, or visual realia. CRITICAL: NEVER include clippings that contain reading passages, texts, stories, dialogues, instructions, or exercises whose text was transcribed into referenceContent or items. Return empty array [] if no clippings contain real photos.'
-    },
-    referenceContent: {
-      type: 'string',
-      description: 'Passive consultation material: STRICTLY and EXCLUSIVELY literal transcription of an independent reading passage, article, narrative story, formal multi-turn dialogue, grammar reference chart, or context sentences/questions (e.g. questions 1-4) analyzed by the student. MUST BE NULL/omitted if no autonomous text or reference context exists. STRICT PROHIBITION OF SYNTHETIC CONTENT: NEVER generate synthetic explanations, pedagogical summaries, didactic goals, advice, guidelines, tips, or summaries not visibly printed in the image. If there is no printed reading passage or context material, referenceContent MUST BE null.'
-    },
-    wordBank: {
-      type: 'array',
-      items: { type: 'string' },
-      description: 'List of vocabulary words, or conceptual support topics / idea prompts (e.g. "personal details", "family", "work/study") if an explicit word box, topic box, or idea bank is present in the image. CRITICAL: NEVER put context sentences, reading passages, or questions (1-4) analyzed by the student into wordBank. Otherwise empty array [].'
-    },
-    interactionType: {
-      type: 'string',
-      enum: ['fill_blanks', 'multiple_choice', 'selection', 'matching', 'buckets', 'reference', 'writing'],
-      description: 'The strict pedagogical archetype of the interactive exercise corresponding to schema.ts primitives. Use "selection" when there is a SINGLE set of candidate elements (sentences, questions, terms, statements) from which students choose, mark, or discriminate valid items ("Which sentences are true?", "Which questions ask about the past?", "Tick (✓)...", "Check...", "Select all that apply", "Choose from the list"). Model each item with its FULL INTACT TEXT in items[].prompt and expectedAnswer: "true"|"false". NEVER collapse into numbers and NEVER create synthetic permutations like ["1, 2", "1, 3"]. Use "matching" ONLY when TWO explicit, differentiated domains relate bijectively (Column A <-> Column B: headings to paragraphs, terms to definitions). Use "fill_blanks" for blank-completion or open input fields (including when consulting reference_table / tableData). Use "writing" for free text production with guidelines AND reflective grammar analysis questions without printed blanks ("How are the question forms in 1 and 2 different?", "Why do we use...", "What is the difference between...", "Explain how..."). In analysis tasks, put context sentences/questions into referenceContent (NEVER wordBank) and DO NOT synthesize explanation sentences with blanks. Use "buckets" for category classification. Use "reference" for speaking/communicative activities evaluated offline.'
-    },
-    guidelines: {
-      type: 'array',
-      items: { type: 'string' },
-      description: 'Guiding procedural steps, questions, or rubric points (e.g. steps a, b, c, d or checklist) for writing activities.'
-    },
-    minWords: {
-      type: 'integer',
-      description: 'Minimum required word count if specified in the exercise prompt (e.g. "at least 50 words").'
-    },
-    maxWords: {
-      type: 'integer',
-      description: 'Maximum word count if specified in the exercise prompt.'
-    },
-    buckets: {
-      type: 'array',
-      items: { type: 'string' },
-      description: 'Target categories or preposition names if interactionType is buckets, otherwise omit or empty array'
-    },
-    tableHeaders: {
-      type: 'array',
-      items: { type: 'string' },
-      description: 'Column header titles if the exercise is structured as a 2D table or double-entry grid, otherwise omit or empty array'
-    },
-    tableRows: {
-      type: 'array',
-      items: {
-        type: 'array',
-        items: {
-          type: 'object',
-          properties: {
-            text: { type: 'string', description: 'Fixed guidance or read-only text in cell' },
-            isInput: { type: 'boolean', description: 'True if student must complete or fill this cell' },
-            expectedAnswer: { type: 'string', description: 'Canonical answer deduced by teacher if isInput is true' },
-            acceptedAnswers: { type: 'array', items: { type: 'string' }, description: 'Valid variants including expectedAnswer' },
-            isExample: { type: 'boolean', description: 'True if cell is already filled as a model/sample in the book' },
-            hint: { type: 'string', description: 'Optional clue or tip' }
-          },
-          required: ['text', 'isInput', 'isExample']
-        }
-      },
-      description: '2D matrix of cells if the exercise is structured as a table or grid, otherwise omit or empty array'
-    },
-    tableData: {
-      type: 'array',
+      description: 'List of pedagogically structured slides extracted from the textbook clippings.',
       items: {
         type: 'object',
         properties: {
-          header: { type: 'string', description: 'Column header name or lexical category (e.g. "Verb", "Work Collocations", "Preposition")' },
-          items: { type: 'array', items: { type: 'string' }, description: 'Clean list of phrases, words, or expressions under this column' }
-        },
-        required: ['header', 'items']
-      },
-      description: 'Structured reference table, collocations chart, or vocabulary diagram (e.g. Work Collocations, Grammar reference table). Use this when the clipping contains lexical diagrams, ovals, grouped lists, preposition rules, or resolved vocabulary charts intended for consultation without questions to answer.'
-    },
-    items: {
-      type: 'array',
-      items: {
-        type: 'object',
-        properties: {
-          prompt: {
+          id: { type: 'string', description: 'Unique identifier (e.g. "slide-1")' },
+          title: { type: 'string', description: 'Concise formal activity title (e.g. "Speaking: Personal Information", "Grammar: Past Simple")' },
+          subtitle: { type: 'string', description: 'Brief pedagogical subtitle or directive (e.g. "Work in pairs. Ask and answer")' },
+          layout: {
             type: 'string',
-            description: 'Visible definition, sentence with blank, or numbered line read by the student. For open production tasks ("Write ten questions using these ideas..."), generate the N numbered items ("1.", "2."...) with open response and map suggested idea topics to wordBank.'
+            enum: ['single_column', 'split_50_50', 'header_stacked'],
+            description: 'split_50_50 when referenceContent is present; single_column when referenceContent is null.'
           },
-          expectedAnswer: {
-            type: 'string',
-            description: 'Canonical resolved solution deduced by you as teacher, or empty string "" for open personalized production tasks.'
-          },
-          acceptedAnswers: {
-            type: 'array',
-            items: { type: 'string' },
-            description: 'List of all valid variations (contractions, spelling). Must contain expectedAnswer if non-empty.'
-          },
-          isExample: {
+          isGraded: {
             type: 'boolean',
-            description: 'True if this row is already filled as a sample in the book (e.g. item 1 or 5), otherwise false'
+            description: 'false for open discussions, surveys, personal reflections, opinions or speaking/writing without fixed answers. true for objectively evaluable exercises.'
           },
-          explanation: {
-            type: 'string',
-            description: 'Concise 1-line pedagogical justification for the grammar rule or clue'
+          notes: { type: 'string', description: 'Optional teaching or editorial notes' },
+          referenceContent: {
+            type: 'object',
+            description: 'Passive consultation material: literal reading passage, dialogue, grammar rule table, or vocabulary collocation chart. MUST be null if no independent passive reading text is printed in the clipping.',
+            properties: {
+              type: {
+                type: 'string',
+                enum: ['text', 'reference_table', 'table_reference', 'media'],
+                description: 'Discriminator for reference block.'
+              },
+              id: { type: 'string', description: 'Unique ID (e.g. "ref-1")' },
+              title: { type: 'string', description: 'Title of the reading passage or reference chart' },
+              content: {
+                type: 'string',
+                description: 'Literal text of reading passage, story, or dialogue. Preserve paragraphs with double line breaks.'
+              },
+              category: {
+                type: 'string',
+                enum: ['reading', 'grammar_note', 'instructions', 'dialogue'],
+                description: 'Category of reference text.'
+              },
+              instruction: { type: 'string', description: 'Instruction for reference table if applicable' },
+              columns: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    header: { type: 'string' },
+                    items: { type: 'array', items: { type: 'string' } }
+                  },
+                  required: ['header', 'items']
+                },
+                description: 'Columns of vocabulary, collocations, or grammar categories for reference_table'
+              },
+              headers: {
+                type: 'array',
+                items: { type: 'string' },
+                description: 'Column headers for table_reference'
+              },
+              rows: {
+                type: 'array',
+                items: {
+                  type: 'array',
+                  items: { type: 'string' }
+                },
+                description: '2D row cells for table_reference'
+              },
+              caption: { type: 'string' },
+              verificationAudioUrl: { type: 'string' },
+              audioLabel: { type: 'string' },
+              followUpPrompt: { type: 'string' }
+            },
+            required: ['type', 'id']
           },
-          options: {
-            type: 'array',
-            items: { type: 'string' },
-            description: 'Candidate answer options if interactionType is multiple_choice'
+          interaction: {
+            type: 'object',
+            description: 'Active interactive exercise evaluated by student. MUST be null if slide is pure reference or speaking card with offline conversation.',
+            properties: {
+              type: {
+                type: 'string',
+                enum: ['input_fields', 'selection', 'buckets_matching', 'sequence', 'writing'],
+                description: 'Discriminator for the interaction primitive.'
+              },
+              id: { type: 'string', description: 'Unique ID (e.g. "int-1")' },
+              instruction: {
+                type: 'string',
+                description: 'The explicit pedagogical directive or task prompt read by the student. MUST NEVER BE EMPTY.'
+              },
+              verificationAudioUrl: { type: 'string', description: 'URL or path to verification audio track if mentioned (e.g. "/audio/R1.2.mp3")' },
+              audioLabel: { type: 'string', description: 'Track code or label (e.g. "R1.2", "CD1 Track 5")' },
+              followUpPrompt: { type: 'string', description: 'Communicative follow-up directive, speaking practice, or peer discussion task' },
+              // input_fields
+              layoutMode: {
+                type: 'string',
+                enum: ['list', 'table', 'inline_paragraph'],
+                description: 'Layout mode for input_fields. Use "table" for 2D fill-in grids, "list" for numbered sentences.'
+              },
+              wordBank: {
+                type: 'array',
+                items: { type: 'string' },
+                description: 'Optional pool of words or options for cloze completion'
+              },
+              listItems: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    id: { type: 'string' },
+                    prompt: { type: 'string', description: 'The sentence or question containing the blank or prompt' },
+                    prefix: { type: 'string' },
+                    suffix: { type: 'string' },
+                    expectedAnswer: { type: 'string', description: 'Canonical solved answer' },
+                    acceptedAnswers: { type: 'array', items: { type: 'string' }, description: 'All acceptable variants including contractions' },
+                    hint: { type: 'string' },
+                    explanation: { type: 'string' },
+                    isExample: { type: 'boolean', description: 'true if item was already solved as a sample in the textbook' }
+                  },
+                  required: ['id', 'prompt', 'acceptedAnswers']
+                }
+              },
+              tableHeaders: {
+                type: 'array',
+                items: { type: 'string' },
+                description: 'Headers for 2D table layout'
+              },
+              tableRows: {
+                type: 'array',
+                items: {
+                  type: 'array',
+                  items: {
+                    type: 'object',
+                    properties: {
+                      text: { type: 'string' },
+                      isInput: { type: 'boolean' },
+                      inputId: { type: 'string' },
+                      expectedAnswer: { type: 'string' },
+                      acceptedAnswers: { type: 'array', items: { type: 'string' } },
+                      isExample: { type: 'boolean' },
+                      hint: { type: 'string' }
+                    },
+                    required: ['text', 'isInput']
+                  }
+                }
+              },
+              paragraphTemplate: { type: 'string' },
+              paragraphInputs: { type: 'object' },
+              // selection
+              questions: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    id: { type: 'string' },
+                    prompt: { type: 'string' },
+                    contextText: { type: 'string' },
+                    mode: { type: 'string', enum: ['single_choice', 'multiple_choice', 'dropdown'] },
+                    options: {
+                      type: 'array',
+                      items: {
+                        type: 'object',
+                        properties: {
+                          id: { type: 'string' },
+                          text: { type: 'string' },
+                          isCorrect: { type: 'boolean' },
+                          feedback: { type: 'string' }
+                        },
+                        required: ['id', 'text']
+                      }
+                    }
+                  },
+                  required: ['id', 'prompt', 'mode', 'options']
+                }
+              },
+              options: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    id: { type: 'string' },
+                    text: { type: 'string', description: 'Full intact text of candidate option or item to mark' },
+                    isCorrect: { type: 'boolean', description: 'true if this candidate should be checked/selected' },
+                    feedback: { type: 'string' }
+                  },
+                  required: ['id', 'text']
+                },
+                description: 'Flat list of candidate options for checklist or multi-selection tasks (e.g. "Tick the phrases", "Which sentences are true?")'
+              },
+              allowMultiple: { type: 'boolean' },
+              // buckets_matching
+              buckets: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    id: { type: 'string' },
+                    label: { type: 'string' },
+                    description: { type: 'string' },
+                    color: { type: 'string' }
+                  },
+                  required: ['id', 'label']
+                }
+              },
+              tokens: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    id: { type: 'string' },
+                    text: { type: 'string' },
+                    correctBucketId: { type: 'string' },
+                    isExample: { type: 'boolean' },
+                    hint: { type: 'string' }
+                  },
+                  required: ['id', 'text', 'correctBucketId']
+                }
+              },
+              targetSlots: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    id: { type: 'string' },
+                    label: { type: 'string' }
+                  },
+                  required: ['id', 'label']
+                }
+              },
+              sourceItems: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    id: { type: 'string' },
+                    text: { type: 'string' },
+                    correctTargetId: { type: 'string' },
+                    isExample: { type: 'boolean' }
+                  },
+                  required: ['id', 'text']
+                }
+              },
+              // sequence
+              items: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    id: { type: 'string' },
+                    text: { type: 'string' },
+                    correctOrder: { type: 'integer' },
+                    speaker: { type: 'string' },
+                    hint: { type: 'string' }
+                  },
+                  required: ['id', 'text', 'correctOrder']
+                }
+              },
+              // writing
+              prompt: { type: 'string', description: 'Central guiding prompt or question for open production/analysis' },
+              guidelines: { type: 'array', items: { type: 'string' }, description: 'Guiding checklist, steps or rubric points' },
+              minWords: { type: 'integer' },
+              maxWords: { type: 'integer' },
+              placeholder: { type: 'string' },
+              evaluationRubric: { type: 'string' }
+            },
+            required: ['type', 'id', 'instruction']
           }
         },
-        required: ['prompt', 'expectedAnswer', 'acceptedAnswers', 'isExample', 'explanation']
-      },
-      description: 'Interactive exercise items ONLY. Never include word banks, page codes, or TIPS in items.'
+        required: ['id', 'title', 'layout']
+      }
     }
   },
-  required: ['title', 'instruction', 'wordBank', 'interactionType', 'items']
+  required: ['slides']
 };
 
+/** Backward compatibility alias */
+export const STRUCTURED_EXTRACTION_SCHEMA = STRUCTURED_SLIDE_SCHEMA;
+
 /**
- * Builds the strict, unambiguous pedagogical System Prompt.
+ * Custom error thrown when Vision API output fails schema validation.
+ */
+export class SchemaValidationError extends Error {
+  public issues: any[];
+  public rawPayload: any;
+
+  constructor(message: string, issues: any[], rawPayload: any) {
+    super(message);
+    this.name = 'SchemaValidationError';
+    this.issues = issues;
+    this.rawPayload = rawPayload;
+  }
+}
+
+/**
+ * Validates raw model output strictly against canonical SlideSchema.
+ * Throws explicit SchemaValidationError if validation fails.
+ */
+export function validateAndParseSlides(rawJsonText: string): Slide[] {
+  const cleanJson = rawJsonText.replace(/```(?:json)?/gi, '').replace(/```/g, '').trim();
+  let parsedJson: any;
+  try {
+    parsedJson = JSON.parse(cleanJson);
+  } catch (err: any) {
+    throw new SchemaValidationError(`El modelo devolvió un JSON con sintaxis inválida: ${err.message}`, [], rawJsonText);
+  }
+
+  const rawSlides: any[] = Array.isArray(parsedJson?.slides)
+    ? parsedJson.slides
+    : Array.isArray(parsedJson)
+    ? parsedJson
+    : [parsedJson];
+
+  if (rawSlides.length === 0) {
+    throw new SchemaValidationError('El modelo devolvió un arreglo vacío de diapositivas', [], parsedJson);
+  }
+
+  const validatedSlides: Slide[] = [];
+
+  for (let idx = 0; idx < rawSlides.length; idx++) {
+    const rawSlide = rawSlides[idx];
+    if (!rawSlide || typeof rawSlide !== 'object') {
+      throw new SchemaValidationError(`La diapositiva en el índice ${idx} no es un objeto válido`, [], rawSlide);
+    }
+
+    if (!rawSlide.id) {
+      rawSlide.id = `slide-${Date.now()}-${idx}`;
+    }
+
+    if (rawSlide.referenceContent && typeof rawSlide.referenceContent === 'object') {
+      if (!rawSlide.referenceContent.id) {
+        rawSlide.referenceContent.id = `ref-${Date.now()}-${idx}`;
+      }
+    } else {
+      rawSlide.referenceContent = null;
+    }
+
+    if (rawSlide.interaction && typeof rawSlide.interaction === 'object') {
+      if (!rawSlide.interaction.id) {
+        rawSlide.interaction.id = `int-${Date.now()}-${idx}`;
+      }
+    } else {
+      rawSlide.interaction = null;
+    }
+
+    if (!rawSlide.layout) {
+      rawSlide.layout = rawSlide.referenceContent ? 'split_50_50' : 'single_column';
+    }
+
+    const parseResult = SlideSchema.safeParse(rawSlide);
+
+    if (!parseResult.success) {
+      const issues = parseResult.error.issues;
+      const issuesFormatted = issues.map((iss) => `• [${iss.path.join('.')}]: ${iss.message}`).join('\n');
+      console.error(`[digitizeBook] Error formal de validación SlideSchema en diapositiva ${idx}:\n`, issuesFormatted, rawSlide);
+
+      throw new SchemaValidationError(
+        `Error de validación formal de Slide: el modelo generó una estructura incompatible:\n${issuesFormatted}`,
+        issues,
+        rawSlide
+      );
+    }
+
+    validatedSlides.push(parseResult.data);
+  }
+
+  return validatedSlides;
+}
+
+/**
+ * Wraps a fully validated Slide into an ExtractedBlock for smooth transitional compatibility.
+ */
+export function slideToExtractedBlock(
+  slide: Slide,
+  primaryImage: string,
+  imageList: string[]
+): ExtractedBlock & Slide {
+  const interaction = slide.interaction;
+  const ref = slide.referenceContent;
+
+  const detectedType: ExtractedBlock['detectedType'] =
+    interaction?.type === 'buckets_matching'
+      ? 'vocabulary'
+      : ref?.type === 'reference_table' || ref?.type === 'table_reference' || (interaction?.type === 'input_fields' && interaction.layoutMode === 'table')
+      ? 'table'
+      : interaction?.type === 'writing' || (!interaction && Boolean(ref))
+      ? 'paragraph'
+      : 'numbered_list';
+
+  return {
+    ...slide,
+    rawText: [slide.title, slide.subtitle, ref?.title, interaction?.instruction].filter(Boolean).join('\n\n'),
+    detectedType,
+    confidence: 1.0,
+    sourceImageSnippetUrl: primaryImage || undefined,
+    sourceImages: imageList.length > 0 ? imageList : undefined,
+    parsedData: {
+      ...slide,
+      title: slide.title,
+      instruction: interaction?.instruction || slide.subtitle || '',
+      isGraded: slide.isGraded !== undefined ? slide.isGraded : true,
+      referenceContent: ref?.type === 'text' ? ref.content : undefined,
+      interactionType: interaction?.type === 'input_fields' ? 'fill_blanks' : interaction?.type,
+      items: interaction?.type === 'input_fields' ? interaction.listItems : undefined,
+    },
+  };
+}
+
+/**
+ * Builds the strict, unambiguous pedagogical System Prompt enforcing native Slide structured outputs.
  */
 function buildExtractionPrompt(imageCount: number): string {
   return `You are an expert ELT (English Language Teaching) author, textbook editor, and master teacher.
+You must analyze the provided ${imageCount} clipping(s) and emit directly a JSON object containing an array of "slides" matching the canonical ELT Slide schema.
 
-CRITICAL PEDAGOGICAL DIRECTIVE (AUTONOMOUS RESOLUTION):
-"Actúa como un profesor experto y autor editorial de ELT. Si el ejercicio recortado no contiene una clave de respuestas explícita o visible (por ejemplo: ejercicios de gramática para conjugar verbos entre paréntesis, transformar oraciones, completar con preposiciones o deducir vocabulario por contexto), DEBES RESOLVER TÚ MISMO el ejercicio aplicando las reglas formales de la gramática inglesa según el nivel pedagógico detectado."
+ROOT RESPONSE FORMAT:
+{
+  "slides": [
+    {
+      "id": "slide-1",
+      "title": "Concise formal activity title",
+      "subtitle": "Pedagogical directive or subtitle",
+      "layout": "split_50_50" or "single_column",
+      "isGraded": true or false,
+      "referenceContent": null or { ...ReferenceBlock... },
+      "interaction": null or { ...InteractionBlock... }
+    }
+  ]
+}
 
-The exercise provided across ${imageCount} clipping(s) MUST ARRIVE 100% COMPLETELY SOLVED AND READY BY DEFAULT.
-Under NO circumstances should any interactive item have an empty expectedAnswer (""), unassigned target, or unresolved question.
+CANONICAL ARCHETYPES:
+1. "referenceContent" (Passive consultation material):
+   - Set to null if the clipping does not contain an independent printed reading passage, dialogue, or grammar chart.
+   - Use type: "text" for reading articles, stories, dialogues, or context questions analyzed by students.
+   - Use type: "reference_table" for vocabulary collocation tables or grammar rules with columns.
+   - STRICT FIDELITY: Strictly transcribe literal text. NEVER generate synthetic summaries or pedagogical explanations.
 
-REGLAS UNIVERSALES DE BANCO DE OPCIONES Y ASIGNACIÓN BIUNÍVOCA:
-- Regla Universal de Banco de Opciones: Cuando la imagen contenga un contenedor o lista de opciones (wordBank), el valor de expectedAnswer de cada ítem interactivo DEBE ser exactamente uno de los elementos presentes en dicho conjunto (ya consistan en una sola palabra o en cadenas multitérmino). NUNCA utilices texto perteneciente a enunciados o definiciones como valor de respuesta esperada.
-- Regla Universal de Muestras Impresas: Si en el documento original un ítem ya presenta de forma visible uno de los elementos del wordBank asignado a su posición de respuesta, clasifícalo obligatoriamente como isExample: true con dicho elemento en expectedAnswer.
-- Regla Universal de Contenido de Ítem: En cada elemento interactivo, \`prompt\` DEBE contener el texto informativo, premisa o definición que el usuario necesita leer para deducir la respuesta. NUNCA asignes como \`prompt\` únicamente el número secuencial del ítem.
-- Regla Universal de Clasificación por Categorías (Buckets): Cuando un ejercicio instruya asociar o clasificar un conjunto de elementos dentro de categorías contenedoras (interacción 'buckets'):
-  * \`buckets\`: Debe contener exclusivamente la lista de nombres de las categorías de destino (ej. las columnas o cajas clasificadoras).
-  * \`items\`: Debe contener la lista de todos los elementos o términos individuales que deben ser clasificados. Para cada ítem:
-    - \`prompt\`: El término o expresión a clasificar.
-    - \`expectedAnswer\`: El nombre exacto de la categoría (bucket) a la que pertenece.
-    - \`isExample\`: true si el término ya viene clasificado como muestra en el documento original.
-- Regla Universal de Tablas/Cuadrículas: Si el ejercicio se presenta estructuralmente como una matriz o tabla de doble entrada con filas y columnas:
-  * Genera \`tableHeaders\` con los títulos de las columnas.
-  * Genera \`tableRows\` como una matriz de celdas bidimensionales.
-  * Si una celda contiene texto fijo o de guía que el alumno debe leer, márcala con \`isInput: false\` y su contenido en \`text\`.
-  * Si una celda es un espacio en blanco para responder, márcala con \`isInput: true\` y su respuesta canónica en \`expectedAnswer\`.
-  * Si una celda de respuesta ya viene resuelta en el libro como modelo, márcala con \`isInput: true\`, \`isExample: true\` y su contenido en \`expectedAnswer\`.
-- Regla Universal de Referencia Cruzada: Si un recorte de ejercicio contiene una instrucción que remite a otro material (ej. 'Look again at...', 'Based on...', 'Read the text and answer...'):
-  * El material o bloque al que se remite DEBE serializarse íntegramente dentro de \`referenceContent\` (como texto pasivo de consulta).
-  * Únicamente las preguntas, oraciones o reactivos derivados de la instrucción activa deben serializarse en \`items\` interactivos.
-  * NUNCA fusiones las preguntas del material de referencia con las preguntas de la tarea activa en una sola lista de items interactivos.
-- Regla Universal de Formato y Estructura en Referencias: Al capturar contenido para \`referenceContent\` (pasajes de lectura, diálogos, explicaciones o listas de consulta):
-  * DEBES preservar fielmente la estructura visual y los saltos de línea del documento original.
-  * Separa párrafos o secciones temáticas utilizando saltos de línea explícitos dobles (\`\\n\\n\`).
-  * En líneas de diálogo (ej. 'Speaker A: ...\\nSpeaker B: ...'), listas numeradas, viñetas o reglas paso a paso, preserva cada elemento en su línea respectiva mediante saltos de línea (\`\\n\`), evitando que el texto se colapse en un único bloque apelmazado.
-- Regla Universal de Extracción Estricta de instruction y title:
-  * Si en la imagen existe una directiva pedagógica, orden o consigna de trabajo (p. ej. "Work in groups. Tell other students about yourself. Use the phrases from 1 or your own ideas"), DEBE poblar obligatoriamente el campo 'instruction'. NUNCA dejes 'instruction' vacío si existe una consigna.
-  * 'title' debe ser un título conciso y representativo (ej. "Speaking: Tell other students about yourself"), reservando la directiva completa para 'instruction'.
-- Regla Universal de Prohibición de Meta-Comentarios Pedagógicos:
-  * NUNCA generes explicaciones pedagógicas, metatexto editorial ni justificaciones dirigidas al profesor (ej. "This is an open-ended activity designed to...", "In this activity students will...", "Students can discuss...").
-  * El contenido de 'referenceContent' y de toda la diapositiva DEBE ser exclusivamente material didáctico directo para el estudiante (lecturas, modelos conversacionales, tablas, listas de frases).
-- Regla de Sin Repetición de Encabezado en 'referenceContent':
-  * Si 'title' ya contiene el título o la sección del ejercicio (ej. "Speaking: Tell other students about yourself"), NUNCA repitas ese mismo título como primera línea o encabezado (# o ##) dentro de 'referenceContent'. Ve directamente al contenido didáctico, vocabulario o modelo conversacional.
-- Regla de Estructura Limpia para Preguntas y Tareas Abiertas:
-  * Si la consigna instruye nombrar, listar, reflexionar o describir elementos abiertos (ej. "Write the names of five famous people and why you like them", "List three things you did..."):
-  * NUNCA redactes párrafos descriptivos abstractos ni explicaciones discursivas.
-  * Provee una plantilla limpia y estructurada con viñetas o líneas modelo directamente para el estudiante (ej. "1. [Name] — Why: ...\n2. [Name] — Why: ..."), facilitando la producción guiada.
-- Regla Universal de Consolidación Multirrecorte en Formato 'reference':
-  * Si se proporcionan múltiples recortes donde uno contiene una tarea comunicativa/speaking y el otro contiene vocabulario, listas de frases de apoyo o contexto previo referenciado en la instrucción (ej. "Use the phrases from 1"):
-    1. 'instruction': La directiva completa de la tarea comunicativa.
-    2. 'referenceContent': DEBE consolidar AMBOS recortes de manera organizada y legible:
-       - Primero: El banco de frases o vocabulario de apoyo (las frases del recorte complementario estructuradas con viñetas o saltos de línea bajo un título claro como 'Useful phrases:' o 'Support vocabulary:').
-       - Segundo: El modelo conversacional o diálogo de ejemplo (los bocadillos/globos de diálogo o modelo provisto).
-    3. NUNCA descartes el recorte complementario de vocabulario o frases. La regla de no duplicación aplica exclusivamente para evitar duplicar oraciones entre referenceContent y reactivos evaluables en ejercicios mecánicos ('fill_blanks'/'multiple_choice'); NUNCA debe descartar material en actividades 'reference'.
-- Regla Universal de Actividades No Calificables / Encuestas Personales:
-  * isGraded: Por defecto debe ser true. Si la consigna del ejercicio corresponde a una encuesta personal, opinión o reflexión subjetiva donde no existen respuestas correctas o incorrectas absolutas (p. ej., contiene frases como "true for you", "about yourself", "your opinion", "discuss in pairs", "write ten questions using these ideas"), debe extraerse obligatoriamente con "isGraded": false.
-- REGLA ONTOLÓGICA DE PRODUCCIÓN ESCRITA LIBRE (interactionType: 'writing'):
-  * Cuando la consigna principal del ejercicio solicite explícitamente redactar un párrafo, perfil, historia, carta, reseña, resumen, email o texto continuo libre ("Write a profile / paragraph / summary / description / email / story / review..."):
-    1. Mapear a interactionType: 'writing'.
-    2. PRESERVACIÓN UNIVERSAL DE PASOS: NUNCA descartes ningún inciso o paso procedimental secundario (a, b, c, 1, 2, 3). Extrae las pautas y preguntas guía dentro de 'guidelines' como un array de strings limpios.
-    3. Si el ejercicio contiene una fase complementaria (como discusión en parejas, preguntas de seguimiento o puesta en común: ej. "Work in pairs. Read your partner's profile and ask two questions", "Share with the class"): asígnala explícitamente al campo 'followUpPrompt'.
-    4. Asignar la consigna central a 'instruction' y el enunciado a 'prompt'.
-    5. 'referenceContent' se mantiene en null a menos que exista un texto de lectura autónomo externo que el alumno deba consultar.
-    6. 'isGraded': false (la redacción se evalúa de forma formativa con retroalimentación IA en lugar de calificación fija).
-- REGLA DIDÁCTICA UNIVERSAL PARA PREGUNTAS DE ANÁLISIS CONCEPTUAL Y PREGUNTAS ABIERTAS CON CONTEXTO (interactionType: 'writing'):
-  * Cuando la actividad plantee una pregunta de reflexión, análisis gramatical o indagación abierta sin espacios para rellenar impresos en el material original (ej. "How are the question forms in 1 and 2 different from 3 and 4?", "Why do we use...?", "What is the difference between...?", "Explain how the meaning changes..."):
-    1. CLASIFICACIÓN FORMAL OBLIGATORIA: Mapear a interactionType: 'writing' (producción de respuesta abierta reflexiva con feedback formativo), NUNCA a 'fill_blanks'.
-    2. CANAL DE CONSULTA (referenceContent): El bloque de oraciones, preguntas numeradas (ej. preguntas 1-4) o frases de muestra que sirven de insumo/contexto para el análisis DEBE asignarse íntegramente al canal pasivo 'referenceContent' (como texto estructurado con sus saltos de línea).
-    3. PROHIBICIÓN TAXATIVA DE WORDBANK: Queda TERMINANTEMENTE PROHIBIDO volcar las oraciones o preguntas de contexto dentro de 'wordBank'. Un wordBank es exclusivamente un banco de palabras/términos breves para cloze; jamás debe contener oraciones completas de análisis.
-    4. PROHIBICIÓN TAXATIVA DE ORACIONES EXPLICATIVAS SINTÉTICAS CON HUECOS: Tienes terminantemente PROHIBIDO redactar o sintetizar oraciones explicativas de la respuesta dentro del cuerpo del ejercicio (ej. "In 1 and 2 we use _______ while in 3 and 4 we use _______") para luego forzar huecos interactivos. Redactar la solución teórica destruye el propósito pedagógico de indagación del estudiante.
-    5. 'instruction': La consigna completa del ejercicio (ej. "Look at questions 1-4. How are the question forms in 1 and 2 different from 3 and 4?").
-    6. 'prompt': La pregunta o enunciado guía central para el estudiante.
-    7. 'isGraded': false (evaluación formativa cualitativa).
-- REGLA DE PARTICIÓN DE INSTRUCCIONES MULTIFASE EN TAREAS DE PRODUCCIÓN (WritingBlock):
-  * Cuando un ejercicio de producción presente un paso inicial de redacción (a) seguido de una fase de interacción, discusión o trabajo en pares/grupos (b):
-    1. La fase inicial de redacción (inciso a) debe poblar exclusivamente 'instruction'.
-    2. La fase subsiguiente de discusión, revisión o puesta en común en pares (inciso b o c) debe poblar estrictamente 'followUpPrompt'.
-    3. NUNCA concatenes ambos incisos en una sola cadena en 'instruction'. Desacopla ambas fases para que la consigna de escritura no contenga el texto del follow-up.
-- PRINCIPIO DIDÁCTICO DE PRODUCCIÓN ABIERTA ("Write N items using these ideas / prompts"):
-  * Cuando la consigna instruya al estudiante a redactar un número específico de preguntas u oraciones a partir de una lista de tópicos/ideas sugeridas (ej. "Write ten questions. Use these ideas...", "Make eight sentences about..."):
-    1. TÓPICOS DE APOYO: Mapea la lista de ideas/tópicos (ej. "personal details, family, work/study, hobbies, free time") a 'wordBank' o a la descripción/instrucción del bloque. NUNCA los extraigas como 'referenceContent' (lo que abriría un panel lateral espurio) ni como enunciados ('prompt') individuales de cada ítem de pregunta.
-    2. ÍTEMS DEL EJERCICIO: Genera exactamente los N ítems interactivos requeridos como líneas de respuesta abierta numeradas (ej. prompt: "1.", prompt: "2." ... prompt: "10."), con expectedAnswer: "" (o la pregunta modelo resuelta si el libro provee un ejemplo impreso en el ítem 1) y acceptedAnswers: [].
-    3. Al ser producción comunicativa personalizada, asigna isGraded: false e interactionType: 'fill_blanks'.
-- REGLA DE TRANSCRIPCIÓN ESTRICTA DE referenceContent (FIDELIDAD TEXTUAL Y PROHIBICIÓN DE CONTENIDO SINTÉTICO):
-  * 'referenceContent' (material de lectura o consulta) debe ser EXCLUSIVAMENTE una transcripción literal de un texto de lectura o consulta visible e impreso en el recorte (artículos, crónicas, narraciones, diálogos formales con hablantes identificados o tablas completas de reglas gramaticales).
-  * PROHIBICIÓN TAXATIVA DE CONTENIDO SINTÉTICO: Tienes estrictamente prohibido generar resúmenes, metas pedagógicas, explicaciones didácticas, justificaciones, consejos de redacción, estrategias o notas de estudio que no estén presentes de forma literal e impresa en la imagen original.
-  * Si el material recortado no incluye un pasaje de lectura impreso independiente, 'referenceContent' DEBE SER ESTRICTAMENTE null o "". Esto garantiza deterministamente que la actividad ocupe el 100% del ancho de la diapositiva sin paneles laterales espurios.
-  * PROHIBICIÓN TAXATIVA: Listas de vocabulario, bancos de ideas/tópicos (ej. 'personal details, family, work...'), ejemplos resueltos, respuestas modelo o instrucciones NUNCA son 'referenceContent'.
-- FORMATEO ESTRUCTURADO DE DIRECTIVAS MULTIETAPA (a, b, c, d):
-  * Cuando una actividad comunicativa, de speaking o procedimental contenga una secuencia de fases o pasos (a, b, c, d):
-    - Preserva la estructura en viñetas limpias con saltos de línea dobles y negritas para cada paso:
-      '**a)** Read the instructions and choose... \n\n **b)** Work in pairs and ask... \n\n **c)** Tell the class about your partner.'
-    - NUNCA compactes ni concatenes múltiples fases alfabéticas en un único párrafo continuo sin formato ni saltos de línea.
-- REGLA UNIVERSAL DE PARTICIÓN DE DIRECTIVAS SUBDIVIDIDAS (a, b, c):
-  * Cuando una actividad contenga directivas divididas en letras o fases donde (b) sea audio de verificación:
-    - La tarea principal (a) (ej. "Make questions from the prompts"): define el 'title' y la consigna ('instruction') del bloque interactivo.
-    - La directiva de verificación con audio (b) (ej. "Listen and check [R1.2]"): define 'audioLabel' (ej. "R1.2") y la activación de 'verificationAudioUrl'. NUNCA la concatenes en el título ni en la instrucción principal.
-    - La instrucción de producción oral o cierre (c) (ej. "Ask each other the questions"): corresponde estrictamente al campo de instrucción secundaria / 'followUpPrompt'.
-    - NUNCA concatenes a, b y c en una sola cadena en el título ni en la instrucción principal.
-- PRINCIPIO DE INTERACCIÓN HUMANA / COMUNICATIVA (Formato 'reference'):
-  * Si la actividad didáctica tiene como objetivo la producción oral libre, la conversación en parejas/grupos o el intercambio comunicativo entre estudiantes (donde la tarea pedagógica ocurre fuera de la pantalla y el software no debe capturar una respuesta evaluable), clasifícala siempre como interactionType: 'reference' (Speaking Card).
-  * Los diálogos o ejemplos modelo deben conservarse íntegros como material de consulta y guía para los alumnos dentro de 'referenceContent'; NUNCA deben convertirse artificialmente en ejercicios de rellenar espacios ('fill_blanks') ni generar huecos sintéticos.
-- PRINCIPIO DE ESTÍMULO VISUAL (Visual Prompts):
-  * En actividades inductivas, de predicción, descripción o conversación basadas en observación de imágenes o fotografías ("Look at the pictures / photos", "Discuss what you see", "Look at the people in the photo..."):
-  * NUNCA redactes descripciones en prosa, resúmenes ni desveles en texto lo que muestran las imágenes. Redactar lo que hay en la foto anula el propósito pedagógico inductivo para el estudiante.
-  * La diapositiva debe presentar únicamente la consigna pedagógica ('instruction') y, si el recorte lo incluye, preguntas disparadoras de discusión para los alumnos (ej. "Where are they? What are they doing?").
-  * Toda la información visual debe provenir exclusivamente de la imagen real observada directamente por el estudiante en la pantalla.
-- REGLA DE PREGUNTAS INDUCTIVAS / PREDICTIVAS:
-  * Si la consigna pedagógica contiene preguntas de opinión, predicción, deducción o inferencia basada en imágenes (ej. "do you think?", "predict", "guess", "why do you think...?", "what do you think they do?"):
-  * NUNCA redactes respuestas factuales, datos enciclopédicos, biografías resumidas ni explicaciones informativas que resuelvan la pregunta (ej. NO escribas "Jamie Oliver is a famous British chef..."). Revelar quién es la persona o qué muestra la imagen destruye la tarea inductiva del estudiante.
-  * El estudiante debe formular sus propias ideas a partir de la observación directa y debatir con sus pares.
-  * Deja 'referenceContent' vacío o null, o si aplica incluye ÚNICAMENTE breves preguntas guía disparadoras para el debate entre alumnos (ej. "• What do you notice in the pictures?\n• What could their job be?"), SIN DAR LA RESPUESTA ni datos biográficos.
-- DISCRIMINACIÓN ESTRICTA DE RECORTES VISUALES vs RECORTES TEXTUALES:
-  * En 'visualImageIndices': reporta ÚNICAMENTE los números de índice 1-based (1, 2, 3...) de los recortes de entrada que contienen fotografías, retratos, ilustraciones o escenas visuales reales.
-  * Solo deben incluirse en 'visualImageIndices' recortes con material gráfico genuino que carezcan de transcripción textual directa (p. ej. fotografías o ilustraciones aisladas sin texto). Si ningún recorte contiene fotografías o ilustraciones aisladas, devuelve obligatoriamente 'visualImageIndices': [].
-- REGLA DIDÁCTICA UNIVERSAL DE TAREAS DE CORRESPONDENCIA / RELACIÓN (MATCHING):
-  * Criterio Estructural Estricto: Aplica ÚNICAMENTE cuando existan DOS dominios explícitos y diferenciados para relacionar biyectivamente (ej. Preguntas <-> Respuestas, Términos <-> Definiciones, Párrafos 1-4 <-> Encabezados A-D, Mitades de oraciones).
-  * PROHIBICIÓN ESTRICTA DE 'fill_blanks': NUNCA clasifiques estas actividades como 'fill_blanks' generando huecos para escribir texto libre o arrastrar cadenas largas.
-  * MODELADO COMO MATCHING:
-    1. Trata el primer conjunto (ej. Párrafos 1, 2, 3, 4; o términos/conceptos) como los enunciados base en 'items' (campo 'prompt': ej. "Paragraph 1" o el concepto a definir).
-    2. Trata el segundo conjunto (ej. Encabezados A, B, C, D; o definiciones) como las opciones cerradas de respuesta. DEBES poblar en cada ítem su array 'options' con todas las alternativas posibles del segundo conjunto (ej. ["A. A fresh approach", "B. Early days", "C. School dinners", "D. Global campaign"]).
-    3. En cada ítem, 'expectedAnswer' DEBE ser exactamente la opción correspondiente del segundo conjunto.
-    4. En 'acceptedAnswers', incluye la opción completa y cualquier variante válida (ej. solo la letra "A" o el texto completo).
-    5. 'interactionType' DEBE ser 'matching'.
-    6. NUNCA uses 'matching' ni dropdowns si existe un único conjunto de elementos; si el alumno debe escoger o discriminar elementos válidos dentro de una sola lista, es estrictamente 'selection'.
+2. "interaction" (Active evaluated exercise):
+   - "input_fields": For fill-in-the-blanks, Cloze sentences, or 2D fill-in grids (layoutMode: "table").
+   - "selection": When students mark, tick (✓), or choose valid candidates from a SINGLE domain ("Tick...", "Which sentences are true?", "Select all that apply"). Preserve the full intact text in options[].text!
+   - "buckets_matching": For categorization into buckets OR bijective correspondence between TWO differentiated domains (Column A <-> Column B).
+   - "sequence": For ordering disordered sentences or dialogue lines into chronological sequence.
+   - "writing": For free written production (paragraphs, emails, profiles) AND reflective grammar analysis questions without printed blanks ("How are the question forms in 1 and 2 different?"). Set isGraded: false.
 
-- INVARIANTE DE PRESERVACIÓN DE TEXTO EN CANDIDATOS (digitizeBook.ts / payloadMapper.ts):
-  * Cuando una actividad presente una lista de elementos (preguntas, oraciones, términos, afirmaciones) sobre los cuales el estudiante debe tomar una decisión (ej. identificar cuáles son correctos o verdaderos, seleccionar las preguntas que cumplen una regla, o marcar de una lista):
-    1. PRESERVACIÓN DEL TEXTO ÍNTEGRO: El texto íntegro de cada elemento DEBE preservarse como la entidad interactiva (sea ítem de selección u opción con su texto completo).
-    2. PROHIBICIÓN TAXATIVA DE COLAPSO NUMÉRICO: Queda terminantemente PROHIBIDO colapsar el contenido textual en meros identificadores numéricos (ej: "1", "2", "3").
-    3. PROHIBICIÓN TAXATIVA DE PERMUTACIONES O COMBINACIONES ARTIFICIALES: Queda terminantemente PROHIBIDO sintetizar combinaciones o permutaciones artificiales (ej: "1, 2", "1, 3", "2, 3", "1 and 2", "1, 2, 4") no presentes en el material original.
-    4. Cada elemento o candidato de la lista debe modelarse como un elemento interactivo individual con su TEXTO COMPLETO original intacto. NUNCA resumas la lista en una sola pregunta con opciones sintéticas de números agrupados.
-
-- CRITERIO ESTRUCTURAL ENTRE SELECCIÓN Y MATCHING:
-  * Matching / Correspondence ('matching'): Aplica ÚNICAMENTE cuando existan DOS dominios explícitos y diferenciados para relacionar biyectivamente (ej. Pregunta <-> Respuesta, Término <-> Definición).
-  * Selection / Checklist ('selection'): Si existe un ÚNICO conjunto de candidatos dentro del cual el alumno debe escoger o discriminar uno o más elementos válidos (ej. qué oraciones son verdaderas, qué preguntas indagan sobre el pasado, checklist de afirmaciones válidas), la estructura DEBE mapearse OBLIGATORIAMENTE a la primitiva 'selection' (con los textos completos de cada elemento como opciones o ítems interactivos), NUNCA a un dropdown de emparejamiento.
-
-- REGLA DIDÁCTICA UNIVERSAL PARA TAREAS DE MARCADO / CHECKLIST / LISTAS DE VERIFICACIÓN ("Tick / Check / Mark / Select all that apply / Choose from the list / Which sentences are true? / Which questions..."):
-  * Cuando la consigna instruya marcar, tildar, verificar con tick (✓), seleccionar afirmaciones verdaderas o elegir elementos de una lista ("Tick the phrases...", "Tick (✓)...", "Check the boxes...", "Check the sentences that are true...", "Which questions ask about...", "Which sentences are correct?", "Select all that apply", "Choose from the list"):
-  * PROHIBICIÓN ESTRICTA DE 'fill_blanks' Y PROHIBICIÓN DE WORDBANK FICTICIO:
-    - NUNCA clasifiques estas actividades como 'fill_blanks'.
-    - NUNCA crees huecos artificiales para rellenar con texto libre ("___").
-    - NUNCA generes un wordBank artificial a partir de las frases o elementos a marcar.
-  * MODELADO COMO SELECCIÓN / CHECKLIST:
-    1. 'interactionType' DEBE ser 'selection'.
-    2. 'items': Cada frase, oración o elemento a discriminar/marcar debe ser un ítem interactivo limpio en 'prompt' con su texto completo, sin ningún hueco ni guiones bajos (ej. prompt: "What did you do yesterday?", prompt: "Where are you from?").
-    3. 'wordBank' DEBE ser [] (vacío). NUNCA generes un banco de palabras ficticio con las opciones a marcar.
-    4. Si la actividad es de reflexión personal, encuesta o no tiene respuestas únicas o fijas ("true for you", "about yourself", "your opinion"), asigna obligatoriamente 'isGraded': false.
-
-- REGLA DIDÁCTICA UNIVERSAL PARA TAREAS DE IDENTIFICACIÓN / MARCADO ("Underline / Circle / Highlight / Identify"):
-  * Cuando la consigna instruya identificar, subrayar, encerrar en un círculo o resaltar elementos lingüísticos sobre oraciones o preguntas existentes (ej. "Underline the question words", "Circle the correct verbs", "Identify the past forms", "Highlight the adjectives"):
-  * PROHIBICIÓN ESTRICTA DE 'fill_blanks': NUNCA clasifiques estas actividades como 'fill_blanks', NUNCA borres palabras de las oraciones y NUNCA generes huecos artificiales con '___'.
-  * MODELADO COMO SELECCIÓN / MULTIPLE CHOICE:
-    1. 'interactionType' DEBE ser 'multiple_choice'.
-    2. 'prompt': Conserva la oración o pregunta completa INTACTA, con todas sus palabras, sin ningún hueco ni guiones bajos (ej. "2. When did he get married?").
-    3. 'options': Presenta las palabras candidatas a identificar. Incluye la palabra o estructura objetivo correcta junto a 2 o 3 palabras clave extraídas de la misma oración como distractores (ej. ["When", "did", "he", "married"]).
-    4. 'expectedAnswer': La palabra, partícula o estructura gramatical objetivo a identificar (ej. "When").
-    5. 'acceptedAnswers': [expectedAnswer].
-
-UNIVERSAL TAXONOMY & STRICT CONTRACT:
-1. "title": Concise formal activity or section title.
-2. "instruction": The explicit pedagogical directive, task instruction, or rubric prompt present in the clipping (e.g. "Work in groups. Tell other students about yourself. Use the phrases from 1 or your own ideas"). MUST NEVER BE EMPTY if the clipping contains an instructional directive. En secuencias procedimentales multietapa (a, b, c, d), formatea cada paso con saltos de línea y negrita: '**a)** ... \n\n **b)** ...'.
-3. "visualImageIndices": Array of 1-based indices (1, 2, 3...) of clippings containing actual photos/illustrations. Empty array [] if none. Exclude text-only clippings.
-4. "referenceContent": Passive consultation material. Put reading passages, articles, dialogues, speech bubbles, instructional guidance ('TIPS!'), or consolidated support phrases/vocabulary here that provide reference context and DO NOT require an interactive answer. (null if none). Preserva fielmente la estructura visual y saltos de línea del documento original ('\n\n' entre párrafos y '\n' entre turnos de diálogo o listas). NUNCA repitas el título aquí ni agregues meta-explicaciones ni descripciones de fotos ni spoilers a preguntas predictivas. CRÍTICO: Listas de ideas/tópicos, vocabulario suelto, ejemplos resueltos o consignas NUNCA son referenceContent; si no hay un texto de lectura autónomo, pon estrictamente null.
-5. "wordBank": If the clipping contains a vocabulary box, word box, container, or pool of suggested ideas/topics (e.g. ['personal details', 'family', 'work']), extract them into "wordBank" as string[]. (Empty array [] if none).
-   * REGLA DE PARTICIÓN 1: NUNCA incluyas cajas de palabras (Word Banks), notas de apoyo ('TIPS!'), números de página o códigos de lección dentro de 'items'.
-6. "interactionType": Must be one of: 'fill_blanks', 'multiple_choice', 'selection', 'matching', 'buckets', 'reference', 'writing'.
-   - Actividades con un único conjunto de candidatos a elegir, marcar o discriminar ('Which sentences are true?', 'Which questions ask about...', 'Tick (✓)...', 'Check...', 'Select all that apply') se categorizan SIEMPRE como 'selection' con wordBank vacío [].
-   - Actividades de redacción continua libre ('Write a profile / paragraph / summary / email / story...') usan 'writing' con 'guidelines' para las pautas guía y 'prompt'/'instruction' para la consigna central.
-   - Actividades de emparejar/relacionar DOS conjuntos diferenciados (párrafos con títulos, términos con definiciones, preguntas con respuestas) se categorizan SIEMPRE como 'matching' poblando 'options' en cada ítem con el conjunto de destino.
-   - Ejercicios de agrupar o clasificar términos en categorías o columnas usan 'buckets' siguiendo la Regla Universal de Clasificación por Categorías.
-   - Actividades de producción abierta guiada por ideas ('Write ten questions using these ideas') usan 'fill_blanks' con ítems numerados vacíos y wordBank para los tópicos.
-   - Actividades comunicativas de producción oral libre, diálogo o speaking card usan 'reference', consolidando los modelos y bancos de frases de apoyo íntegros en 'referenceContent'.
-7. "items": Array of interactive items ONLY (empty [] if interactionType is 'reference'):
-   - "prompt": The visible text, sentence with blank, or numbered item line ("1.", "2."...) that the student reads. Para tareas de producción abierta ("Write ten questions..."), genera los N ítems ("1.", "2."...).
-   - "expectedAnswer": The canonical resolved solution deduced by you as an expert teacher, or empty string "" for open-formulation personalized production items.
-   - "acceptedAnswers": List of valid variations (contractions, spelling, or synonyms).
-   - "isExample": Booleano. Must follow the Regla Universal de Muestras Impresas: las filas o ítems que ya presentan una respuesta visible de muestra impresa en el material original deben clasificarse obligatoriamente como "isExample": true con dicho elemento en expectedAnswer.
-   - "explanation": Brief 1-line pedagogical justification of the grammar rule or clue.
-   - "options": (If multiple choice or matching) array of choices to select from.
-8. "tableHeaders" y "tableRows": Si el ejercicio se presenta como una cuadrícula o tabla interactiva de doble entrada, genera las columnas en "tableHeaders" y la matriz de celdas en "tableRows" siguiendo la Regla Universal de Tablas/Cuadrículas.
-9. "isGraded": Booleano. Por defecto debe ser true. Si la consigna del ejercicio corresponde a una encuesta personal, opinión, reflexión subjetiva o producción abierta libre (p. ej., contiene frases como "true for you", "about yourself", "your opinion", "discuss in pairs", "write ten questions using these ideas"), debe extraerse con "isGraded": false.
-10. "verificationAudioUrl" y "audioLabel": Si la consigna o el recorte contiene referencias a audio de verificación (ej. "Listen and check", "Listen and check your answers", pistas tipo "R1.2", "CD1 Track X", "1.24"):
-    - Mapea el identificador o pista a 'audioLabel' (ej. "R1.2", "CD1 Track 5").
-    - Reserva 'verificationAudioUrl' con una ruta local o placeholder (ej. "/audio/R1.2.mp3").
-    - Si no contiene referencias a audio de verificación, omite estos campos.
-11. "followUpPrompt": Si la actividad contiene directivas subdivididas en fases (a, b, c) con audio en b, asigna la instrucción de producción oral o cierre (c) (ej. "Ask each other the questions", "Compare in pairs", "Work in pairs. Ask and answer") estrictamente a este campo. NUNCA concatenes a, b y c en el título o en la instrucción principal.
-12. "tableData": REGLA ONTOLÓGICA DE REFERENCIA ESTRUCTURADA / CUADROS DE VOCABULARIO:
-    Si el recorte o material complementario contiene diagramas léxicos (óvalos de colocaciones, listas agrupadas por categorías, reglas preposicionales, tablas de vocabulario resuelto o cuadros gramaticales) destinados exclusivamente a la consulta y sin preguntas para responder por parte del estudiante:
-    - Extrae como estructura de datos en 'tableData': un arreglo de columnas { "header": string, "items": string[] } con los textos digitalizados limpios (eliminando tachones, subrayados o artefactos de escaneo).
-    - 'title': Título del glosario o cuadro (ej. "Work Collocations", "Prepositions of Place", "Tense Contrast").
-    - 'interactionType': "reference".
-    - PROHIBICIÓN ESTRICTA DE IMAGEN CRUDA: Si el contenido del diagrama fue completamente digitalizado en texto estructurado en tableData, 'visualImageIndices' DEBE ser [] (está estrictamente prohibido adjuntar la imagen recortada cruda como parche visual en el panel de consulta).
-
-CRITICAL NEGATIVE CONSTRAINTS:
-- NUNCA colapses una lista de oraciones, preguntas o términos candidatos en meros números ('1', '2', '3') ni sintetices combinaciones o permutaciones artificiales (ej. '1, 2', '1, 3', '2, 3', '1 and 2'). Cada elemento DEBE conservar su texto íntegro como opción o ítem interactivo.
-- NUNCA clasifiques actividades con un único conjunto de candidatos (ej. 'Which sentences are true?', 'Which questions ask about the past?') como emparejamiento ('matching') ni uses dropdowns; deben mapearse obligatoriamente a 'selection' con los textos completos como opciones.
-- NUNCA clasifiques tareas de marcado directo, tick (✓), verificación o checklist ("Tick...", "Check...", "Select all that apply") como 'fill_blanks' ni generes inputs de texto o un wordBank ficticio; deben modelarse como selección/checklist ('selection').
-- NUNCA clasifiques tareas de emparejar o correspondencia (Matching de dos dominios diferenciados: párrafos con encabezados, términos con definiciones, preguntas con respuestas) como 'fill_blanks'. Deben modelarse como 'matching' con el conjunto completo de alternativas en 'options' para cada ítem.
-- NUNCA clasifiques tareas de identificación o marcado ("Underline...", "Circle...", "Highlight...", "Identify the...") como 'fill_blanks' borrando palabras ni creando huecos artificiales en las oraciones; deben modelarse como 'multiple_choice' conservando la oración completa intacta en 'prompt' y presentando las palabras candidatas en 'options'.
-- NUNCA adjuntes la imagen cruda recortada en visualImageIndices si su contenido léxico o gramatical fue completamente digitalizado en texto estructurado en tableData.
-- NUNCA extraigas tópicos de apoyo conceptual (ideas/bullets como "personal details", "family", "work/study") como enunciados individuales de preguntas ni los envíes a 'referenceContent'. Mapea los tópicos a 'wordBank' y genera N ítems interactivos de respuesta abierta numerados ("1.", "2."...).
-- NUNCA extraigas listas de vocabulario, bancos de ideas, ejemplos resueltos (ej. '1 do / What / do / you ? What do you do?' o 'What do you do?') o consignas como 'referenceContent'. 'referenceContent' es exclusivamente para pasajes de lectura autónomos (artículos, historias o tablas gramaticales). Si no hay un texto de lectura real, 'referenceContent' DEBE ser estrictamente null para que la actividad ocupe el ancho completo de la diapositiva.
-- NUNCA concatenes directivas procedimentales multietapa (a, b, c, d) en un único párrafo continuo sin formato; debes estructurarlas en viñetas limpias con saltos de línea dobles y negritas ('**a)** ... \n\n **b)** ...').
-- NUNCA concatenes directivas divididas en letras (a, b, c) en una sola cadena en el título ni en la instrucción cuando (b) es audio de verificación. La tarea principal (a) es el 'title'/'instruction', la directiva de verificación auditiva (b) define 'audioLabel'/'verificationAudioUrl', y el cierre oral (c) define 'followUpPrompt'.
-- NUNCA incluyas recortes de pasajes de lectura, textos transcritos, artículos o ejercicios en 'visualImageIndices'; solo fotografías o ilustraciones genuinas sin transcripción textual directa.
-- NUNCA incluyas meta-comentarios pedagógicos, justificaciones didácticas ni notas dirigidas al profesor (ej. "This is an open-ended activity...", "This exercise is designed to encourage students..."). Todo el texto debe ser 100% material directo para el alumno.
-- NUNCA redactes descripciones en texto ni resúmenes de lo que muestran las fotos en actividades basadas en observación visual ("Look at the photos..."); la imagen real observada por el estudiante es el estímulo y no debe sustituirse por prosa descriptiva.
-- NUNCA redactes respuestas factuales, biografías ni datos enciclopédicos que resuelvan preguntas inductivas o de predicción ("Why is X famous, do you think?", "What do you think their job is?"); deja 'referenceContent' sin spoilers para que los alumnos piensen y debatan.
-- NUNCA repitas el título principal de la actividad como primera línea o encabezado dentro de 'referenceContent'.
-- NUNCA uses párrafos descriptivos abstractos para actividades que solicitan listas o mención de elementos; usa plantillas con viñetas o líneas modelo (ej. '1. ... — Why: ...').
-- NUNCA descartes recortes complementarios de vocabulario o frases en actividades 'reference'; deben consolidarse en 'referenceContent' junto al modelo conversacional.
-- NUNCA conviertas diálogos, role-plays o ejemplos modelo de actividades comunicativas / speaking en ejercicios de rellenar espacios ('fill_blanks') generando huecos sintéticos. Deben preservarse íntegros como material de consulta y guía ('referenceContent' con interactionType: 'reference').
-- NUNCA dupliques en 'referenceContent' las mismas frases, oraciones o reactivos que forman parte de los ítems interactivos de ejercicios evaluables mecánicos.
-- NUNCA conviertas encabezados de tabla ni códigos editoriales en ítems interactivos.
-- NUNCA fusiones las preguntas o el texto del material de referencia con las preguntas de la tarea activa en una sola lista de ítems interactivos.
-- Cada ítem interactivo debe ser un ítem real que el alumno debe completar o resolver.
-- Devuelve estrictamente el objeto JSON conforme al esquema estructurado.`;
+AUTONOMOUS RESOLUTION:
+- Act as an expert ELT teacher: all exercises MUST arrive 100% COMPLETELY SOLVED by default.
+- Every interactive item must have its expectedAnswer resolved according to formal English grammar.
+- Never invent synthetic numeric permutations (e.g. "1, 2"). Preserve full candidate texts.
+- Output ONLY the valid JSON strictly matching the schema.`;
 }
 
 /**
@@ -690,7 +787,7 @@ CRITICAL NEGATIVE CONSTRAINTS:
 export async function digitizeBook(
   images: string | string[],
   signal?: AbortSignal
-): Promise<ExtractedBlock[]> {
+): Promise<(ExtractedBlock & Slide)[]> {
   if (signal?.aborted) {
     const err = new Error('Operación cancelada por el usuario');
     err.name = 'AbortError';
@@ -701,7 +798,7 @@ export async function digitizeBook(
   const primaryImage = imageList[0] || '';
 
   if (imageList.length === 0) {
-    return cloneSampleBlocks(primaryImage);
+    return cloneSampleBlocks(primaryImage) as any;
   }
 
   const promptText = buildExtractionPrompt(imageList.length);
@@ -752,6 +849,7 @@ export async function digitizeBook(
             contents,
             config: {
               responseMimeType: 'application/json',
+              responseSchema: STRUCTURED_SLIDE_SCHEMA,
               temperature: 0.1,
               abortSignal: signal,
             },
@@ -765,9 +863,8 @@ export async function digitizeBook(
 
           const rawText = response.text?.trim();
           if (rawText) {
-            const cleanJson = rawText.replace(/```(?:json)?/gi, '').replace(/```/g, '').trim();
-            const parsed = JSON.parse(cleanJson) as ExtractedStructuredPayload;
-            return [buildExtractedBlockFromPayload(parsed, primaryImage, imageList)];
+            const validatedSlides = validateAndParseSlides(rawText);
+            return validatedSlides.map((slide) => slideToExtractedBlock(slide, primaryImage, imageList));
           }
         } catch (modelErr: any) {
           if (signal?.aborted || modelErr?.name === 'AbortError') {
@@ -829,9 +926,9 @@ export async function digitizeBook(
             response_format: {
               type: 'json_schema',
               json_schema: {
-                name: 'activity_extraction',
-                strict: true,
-                schema: STRUCTURED_EXTRACTION_SCHEMA,
+                name: 'slide_extraction',
+                strict: false,
+                schema: STRUCTURED_SLIDE_SCHEMA,
               },
             },
             temperature: 0.1,
@@ -848,9 +945,8 @@ export async function digitizeBook(
           const data = await response.json();
           const rawContent = data.choices?.[0]?.message?.content;
           if (rawContent) {
-            const cleanJson = rawContent.replace(/```(?:json)?/gi, '').replace(/```/g, '').trim();
-            const parsed = JSON.parse(cleanJson) as ExtractedStructuredPayload;
-            return [buildExtractedBlockFromPayload(parsed, primaryImage, imageList)];
+            const validatedSlides = validateAndParseSlides(rawContent);
+            return validatedSlides.map((slide) => slideToExtractedBlock(slide, primaryImage, imageList));
           }
         } else {
           console.warn(`[digitizeBook] OpenRouter model "${orModel}" returned HTTP ${response.status}, trying next candidate...`);
@@ -871,7 +967,7 @@ export async function digitizeBook(
   }
 
   // Fallback to manual template if all Vision APIs are unavailable
-  return cloneSampleBlocks(primaryImage, imageList);
+  return cloneSampleBlocks(primaryImage, imageList) as any;
 }
 
 /**

@@ -6,11 +6,6 @@ import { StructuredReferenceRenderer } from './renderers/StructuredReferenceRend
 import { TextReferenceRenderer } from './renderers/TextReferenceRenderer';
 import { SlideErrorBoundary } from './common/SlideErrorBoundary';
 import confetti from 'canvas-confetti';
-import { 
-  type PedagogicalRole,
-  parseHierarchicalReference,
-  parseStructuredReferenceColumns 
-} from '../core/ai/payloadMapper';
 import type { ReferenceBlock, ReferenceMediaBlock, StructuredReferenceBlock } from '../types/schema';
 import { renderFormattedMarkdown } from '../core/text/markdownRenderer';
 import { isSubstantialTextOverlap, isConcatenationOfItems, stripEditorialPrefix } from '../core/text/textDeduplication';

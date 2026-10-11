@@ -5,7 +5,7 @@ import { evaluateWriting, type WritingFeedback } from '../../core/ai/evaluateWri
 import { VerificationAudioPlayer } from '../common/VerificationAudioPlayer';
 import { renderFormattedMarkdown } from '../../core/text/markdownRenderer';
 import { isSubstantialTextOverlap, isConcatenationOfItems, stripOrphanTypographicalMarkers } from '../../core/text/textDeduplication';
-import { partitionWritingInstruction, generateDeterministicGuidelines } from '../../core/ai/payloadMapper';
+import { partitionWritingInstruction, generateDeterministicGuidelines } from '../../core/utils/writingUtils';
 import { 
   Sparkles, 
   CheckCircle2, 
