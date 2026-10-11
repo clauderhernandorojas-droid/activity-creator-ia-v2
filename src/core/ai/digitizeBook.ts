@@ -763,12 +763,18 @@ ROOT RESPONSE FORMAT:
 CANONICAL ARCHETYPES:
 1. "referenceContent" (Passive consultation material):
    - Set to null if the clipping does not contain an independent printed reading passage, dialogue, or grammar chart.
+   - ZERO TABLE DUPLICATION: If the activity is purely an interactive table (interaction.layoutMode: "table"), DO NOT duplicate the table inside referenceContent. In purely interactive table activities, referenceContent MUST be strictly null and layout MUST be "single_column".
    - Use type: "text" for reading articles, stories, dialogues, or context questions analyzed by students.
    - Use type: "reference_table" for vocabulary collocation tables or grammar rules with columns.
    - STRICT FIDELITY: Strictly transcribe literal text. NEVER generate synthetic summaries or pedagogical explanations.
 
 2. "interaction" (Active evaluated exercise):
    - "input_fields": For fill-in-the-blanks, Cloze sentences, or 2D fill-in grids (layoutMode: "table").
+     * TABULAR QUESTIONNAIRES & FILLABLE TABLES: When the clipping presents a printed table where one or more columns or cells are blank for the student to write answers, names, or values (e.g. peer surveys, interviews, questionnaire tables with columns like "Question", "Your answer", "Partner's answer"):
+       - MUST be classified as interaction.type: "input_fields" with layoutMode: "table". NEVER classify it as "writing" with a passive reference table!
+       - ZERO TABLE DUPLICATION: referenceContent MUST be strictly null and layout MUST be "single_column". DO NOT duplicate or copy the table inside referenceContent!
+       - Cells with printed prompt/query text MUST have isInput: false.
+       - Cells for student input/blank columns MUST have isInput: true, with expectedAnswer and acceptedAnswers.
    - "selection": When students mark, tick (✓), or choose valid candidates from a SINGLE domain ("Tick...", "Which sentences are true?", "Select all that apply"). Preserve the full intact text in options[].text!
    - "buckets_matching": For categorization into buckets OR bijective correspondence between TWO differentiated domains (Column A <-> Column B).
    - "sequence": For ordering disordered sentences or dialogue lines into chronological sequence.
