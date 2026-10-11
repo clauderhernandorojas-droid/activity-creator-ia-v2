@@ -6,12 +6,8 @@ import { StructuredReferenceRenderer } from './renderers/StructuredReferenceRend
 import { TextReferenceRenderer } from './renderers/TextReferenceRenderer';
 import { SlideErrorBoundary } from './common/SlideErrorBoundary';
 import confetti from 'canvas-confetti';
-import type { ReferenceBlock, ReferenceMediaBlock, StructuredReferenceBlock } from '../types/schema';
+import type { ReferenceBlock, ReferenceMediaBlock } from '../types/schema';
 import type { PedagogicalRole } from '../core/utils/slideRoleConverter';
-import { 
-  parseHierarchicalReference, 
-  parseStructuredReferenceColumns 
-} from '../core/utils/referenceParser';
 import { renderFormattedMarkdown } from '../core/text/markdownRenderer';
 import { isSubstantialTextOverlap, isConcatenationOfItems, stripEditorialPrefix } from '../core/text/textDeduplication';
 import { ReferenceImageModal } from './modals/ReferenceImageModal';
@@ -131,58 +127,7 @@ export const Canvas: React.FC = () => {
 
   const isEditMode = mode === 'edit';
 
-  // Dynamic resolution for reference content:
-  // If the persisted block is not explicitly 'reference_table' (e.g. 'reference_text' or 'text'),
-  // dynamically execute parseStructuredReferenceColumns on its text content.
-  // If 2 or more valid clusters with subordinate items exist, promote directly to StructuredReferenceBlock
-  // and instantiate StructuredReferenceRenderer. Otherwise fallback to TextReferenceRenderer.
-  const effectiveReferenceBlock: ReferenceBlock | null = (() => {
-    const ref = currentSlide.referenceContent;
-    if (!ref) return null;
-
-    if (ref.type === 'reference_table') {
-      return ref;
-    }
-
-    if (ref.type === 'table_reference' || ref.type === 'media') {
-      return ref;
-    }
-
-    const rawText = typeof (ref as any).content === 'string'
-      ? (ref as any).content
-      : Array.isArray((ref as any).paragraphs)
-      ? (ref as any).paragraphs.join('\n\n')
-      : typeof (ref as any).rawText === 'string'
-      ? (ref as any).rawText
-      : '';
-
-    if (rawText && rawText.trim().length > 0) {
-      const parsedHierarchical = parseHierarchicalReference(rawText);
-      const parsedCols = parseStructuredReferenceColumns(rawText);
-      const validClusters = parsedCols.filter(
-        (col: { header: string; items: string[] }) => col && Array.isArray(col.items) && col.items.length > 0
-      );
-
-      if (validClusters.length >= 2) {
-        const extractedTitle =
-          parsedHierarchical.title ||
-          ref.title ||
-          currentSlide.title ||
-          'Cuadro de Referencia';
-
-        const promotedBlock: StructuredReferenceBlock = {
-          type: 'reference_table',
-          id: ref.id,
-          title: extractedTitle,
-          instruction: (ref as any).instruction || '',
-          columns: validClusters,
-        };
-        return promotedBlock;
-      }
-    }
-
-    return ref;
-  })();
+  const effectiveReferenceBlock: ReferenceBlock | null = currentSlide.referenceContent || null;
 
   const hasReference = Boolean(
     effectiveReferenceBlock && (

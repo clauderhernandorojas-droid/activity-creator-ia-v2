@@ -474,13 +474,13 @@ export const TextReferenceRenderer: React.FC<Props> = ({
                 )}
               </div>
             ) : (!isOriginReadingClipping && activeImages.length === 1) ? (
-              /* Single image with long editorial reading text: sleek right float (only for genuine independent illustrations) */
-              <div className="sm:float-right sm:ml-5 sm:mb-3 mb-4 w-full sm:w-auto max-w-full sm:max-w-[46%] flex-shrink-0">
-                <div className="bg-slate-50/80 p-2 border border-slate-200/90 rounded-2xl shadow-md shadow-slate-200/50 h-56 sm:h-64 flex items-center justify-center overflow-hidden relative group transition-all">
+              /* Single image: Clean top block so reading paragraphs occupy full 100% width and flow vertically */
+              <div className="w-full mb-4">
+                <div className="bg-slate-50/80 p-2 border border-slate-200/90 rounded-2xl shadow-xs max-h-64 sm:max-h-72 flex items-center justify-center overflow-hidden">
                   <img
                     src={activeImages[0]}
                     alt={block.title || 'Estímulo visual'}
-                    className="w-full h-full object-contain rounded-xl block select-none"
+                    className="max-h-60 sm:max-h-68 w-auto object-contain rounded-xl block select-none"
                     loading="lazy"
                   />
                 </div>
@@ -488,17 +488,17 @@ export const TextReferenceRenderer: React.FC<Props> = ({
             ) : null}
 
             {block.content && (
-              <div className="space-y-4 font-normal text-slate-800 leading-relaxed text-sm sm:text-[15px] whitespace-pre-line break-words">
+              <div className="w-full flex flex-col space-y-4 font-normal text-slate-800 leading-relaxed text-sm sm:text-base whitespace-pre-line break-words">
                 {paragraphs.length > 0 ? (
                   paragraphs.map((paragraph, idx) => (
-                    <p key={idx} className="whitespace-pre-line break-words leading-relaxed">
+                    <div key={idx} className="w-full whitespace-pre-line break-words leading-relaxed">
                       {renderFormattedMarkdown(paragraph)}
-                    </p>
+                    </div>
                   ))
                 ) : (
-                  <p className="whitespace-pre-line break-words leading-relaxed">
+                  <div className="w-full whitespace-pre-line break-words leading-relaxed">
                     {renderFormattedMarkdown(block.content)}
-                  </p>
+                  </div>
                 )}
               </div>
             )}

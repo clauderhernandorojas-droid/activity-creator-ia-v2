@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React from 'react';
 import { useSessionStore } from '../../store/useSessionStore';
 import { useLessonStore } from '../../store/useLessonStore';
 import { REFERENCE_RENDERER_REGISTRY } from '../renderers/registry';
@@ -6,8 +6,7 @@ import { StructuredReferenceRenderer } from '../renderers/StructuredReferenceRen
 import { TextReferenceRenderer } from '../renderers/TextReferenceRenderer';
 import { BookOpen, X } from 'lucide-react';
 import { SlideErrorBoundary } from '../common/SlideErrorBoundary';
-import { parseHierarchicalReference, parseStructuredReferenceColumns } from '../../core/utils/referenceParser';
-import type { ReferenceBlock, StructuredReferenceBlock } from '../../types/schema';
+import type { ReferenceBlock } from '../../types/schema';
 
 export const ReferenceDrawer: React.FC = () => {
   const { currentSlideId, isReferenceDrawerOpen, setIsReferenceDrawerOpen, mode } = useSessionStore();
@@ -15,39 +14,7 @@ export const ReferenceDrawer: React.FC = () => {
 
   const currentSlide = lesson.slides.find((s) => s.id === currentSlideId);
   const rawReference = currentSlide?.referenceContent;
-
-  const effectiveReference: ReferenceBlock | null = useMemo(() => {
-    if (!rawReference) return null;
-    if (rawReference.type === 'reference_table' || rawReference.type === 'table_reference' || rawReference.type === 'media') {
-      return rawReference;
-    }
-    const rawText = typeof (rawReference as any).content === 'string'
-      ? (rawReference as any).content
-      : Array.isArray((rawReference as any).paragraphs)
-      ? (rawReference as any).paragraphs.join('\n\n')
-      : typeof (rawReference as any).rawText === 'string'
-      ? (rawReference as any).rawText
-      : '';
-
-    if (rawText && rawText.trim().length > 0) {
-      const parsedHierarchical = parseHierarchicalReference(rawText);
-      const parsedCols = parseStructuredReferenceColumns(rawText);
-      const validClusters = parsedCols.filter(
-        (col) => col && Array.isArray(col.items) && col.items.length > 0
-      );
-      if (validClusters.length >= 2) {
-        const promoted: StructuredReferenceBlock = {
-          type: 'reference_table',
-          id: rawReference.id,
-          title: parsedHierarchical.title || rawReference.title || currentSlide?.title || 'Cuadro de Referencia',
-          instruction: (rawReference as any).instruction || '',
-          columns: validClusters,
-        };
-        return promoted;
-      }
-    }
-    return rawReference;
-  }, [rawReference, currentSlide?.title]);
+  const effectiveReference: ReferenceBlock | null = rawReference || null;
 
   if (!isReferenceDrawerOpen || !effectiveReference || !currentSlide) return null;
 
