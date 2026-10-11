@@ -509,6 +509,105 @@ describe('slideValidation - Direct Schema & Architectural Invariant Tests', () =
     });
   });
 
+  // =========================================================================
+  // CASO H: Alternativas Cerradas / Elección Discreta ("Circle the correct word")
+  // =========================================================================
+  describe('Caso H: Alternativas Cerradas (Circle the correct word / opciones delimitadas)', () => {
+    it('debe validar ejercicio de alternativas cerradas como selection (quiz mode) con isExample en la opción modelo', () => {
+      const rawSlideJson = JSON.stringify({
+        slides: [
+          {
+            id: 'slide-closed-sel-1',
+            title: 'Past Simple: was / were',
+            subtitle: 'Circle the correct word in each sentence.',
+            layout: 'single_column',
+            isGraded: true,
+            referenceContent: null,
+            interaction: {
+              id: 'int-closed-sel-1',
+              type: 'selection',
+              instruction: 'Circle the correct word to complete each sentence.',
+              questions: [
+                {
+                  id: 'q-1',
+                  prompt: '1. Yesterday I was / were at home.',
+                  mode: 'single_choice',
+                  isExample: true,
+                  options: [
+                    {
+                      id: 'opt-1-a',
+                      text: 'was',
+                      isCorrect: true,
+                      isExample: true,
+                      feedback: 'Correct past form for I'
+                    },
+                    {
+                      id: 'opt-1-b',
+                      text: 'were',
+                      isCorrect: false,
+                      feedback: 'Incorrect: were is used with you/we/they'
+                    }
+                  ]
+                },
+                {
+                  id: 'q-2',
+                  prompt: '2. They was / were happy to see us.',
+                  mode: 'single_choice',
+                  options: [
+                    {
+                      id: 'opt-2-a',
+                      text: 'was',
+                      isCorrect: false
+                    },
+                    {
+                      id: 'opt-2-b',
+                      text: 'were',
+                      isCorrect: true
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        ]
+      });
+
+      const slides = validateAndParseSlides(rawSlideJson);
+      expect(slides).toHaveLength(1);
+
+      const slide = slides[0];
+
+      // 1. Invariante: Cero degradación a input_fields (debe ser selection)
+      expect(slide.interaction?.type).toBe('selection');
+      expect(slide.interaction?.type).not.toBe('input_fields');
+
+      if (slide.interaction?.type === 'selection') {
+        expect(slide.interaction.questions).toHaveLength(2);
+
+        // 2. Pregunta 1: Ejemplo resuelto
+        const q1 = slide.interaction.questions[0];
+        expect(q1.mode).toBe('single_choice');
+        expect(q1.isExample).toBe(true);
+        expect(q1.options).toHaveLength(2);
+        expect(q1.options[0].text).toBe('was');
+        expect(q1.options[0].isCorrect).toBe(true);
+        expect(q1.options[0].isExample).toBe(true);
+
+        expect(q1.options[1].text).toBe('were');
+        expect(q1.options[1].isCorrect).toBe(false);
+
+        // 3. Pregunta 2: Item activo evaluado
+        const q2 = slide.interaction.questions[1];
+        expect(q2.mode).toBe('single_choice');
+        expect(q2.options).toHaveLength(2);
+        expect(q2.options[0].text).toBe('was');
+        expect(q2.options[0].isCorrect).toBe(false);
+        expect(q2.options[1].text).toBe('were');
+        expect(q2.options[1].isCorrect).toBe(true);
+      }
+    });
+  });
+
 });
 
 

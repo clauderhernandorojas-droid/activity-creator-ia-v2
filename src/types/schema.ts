@@ -119,6 +119,7 @@ export const SelectionOptionSchema = z.object({
   text: z.string(),
   isCorrect: z.boolean().optional(),
   feedback: z.string().optional(),
+  isExample: z.boolean().optional(),
 });
 
 export const SelectionQuestionSchema = z.object({
@@ -127,6 +128,7 @@ export const SelectionQuestionSchema = z.object({
   contextText: z.string().optional(),
   mode: z.enum(['single_choice', 'multiple_choice', 'dropdown']),
   options: z.array(SelectionOptionSchema),
+  isExample: z.boolean().optional(),
 });
 
 export const SelectionBlockSchema = z.object({

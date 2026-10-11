@@ -489,6 +489,7 @@ export const STRUCTURED_SLIDE_SCHEMA = {
                     prompt: { type: 'string' },
                     contextText: { type: 'string' },
                     mode: { type: 'string', enum: ['single_choice', 'multiple_choice', 'dropdown'] },
+                    isExample: { type: 'boolean', description: 'true if this question/item is a solved textbook example' },
                     options: {
                       type: 'array',
                       items: {
@@ -497,7 +498,8 @@ export const STRUCTURED_SLIDE_SCHEMA = {
                           id: { type: 'string' },
                           text: { type: 'string' },
                           isCorrect: { type: 'boolean' },
-                          feedback: { type: 'string' }
+                          feedback: { type: 'string' },
+                          isExample: { type: 'boolean', description: 'true if this option is already marked or circled as a solved textbook model/sample' }
                         },
                         required: ['id', 'text']
                       }
@@ -514,7 +516,8 @@ export const STRUCTURED_SLIDE_SCHEMA = {
                     id: { type: 'string' },
                     text: { type: 'string', description: 'Full intact text of candidate option or item to mark' },
                     isCorrect: { type: 'boolean', description: 'true if this candidate should be checked/selected' },
-                    feedback: { type: 'string' }
+                    feedback: { type: 'string' },
+                    isExample: { type: 'boolean', description: 'true if this option is already marked or circled as a solved textbook model/sample' }
                   },
                   required: ['id', 'text']
                 },
@@ -771,6 +774,7 @@ CANONICAL ARCHETYPES:
 
 2. "interaction" (Active evaluated exercise):
    - "input_fields": For fill-in-the-blanks, Cloze sentences, or 2D fill-in grids (layoutMode: "table").
+     * STRICT PROHIBITION AGAINST DEGRADING CLOSED SELECTION: It is STRICTLY FORBIDDEN to degrade closed-selection exercises (e.g. options separated by slashes "was / were", bold contrasting words, or instructions like "Circle/Choose the correct word/number") into free-text input fields ("input_fields"). Never fragment sentences artificially or force the student to type what they were only meant to select!
      * MISSING LETTERS / VOWELS EXERCISES (e.g. "Write the vowels", "Fill in the missing letters"):
        - NO MICROSCOPIC LETTER FRAGMENTATION: DO NOT fragment words into multiple tiny single-letter inputs (e.g. NEVER generate separate inputs for each missing letter in "v_ll_yb_ll"). Each interactive input field MUST correspond to the whole completed word that the student writes (expectedAnswer: "volleyball"). The prompt or prefix can show the partial word pattern (e.g. "v_ll_yb_ll").
        - PRESERVE COLLOCATION / SENTENCE STRUCTURE: Keep the root verb or phrase (e.g. "play", "go", "go to") as a clear textual prefix or prompt of the item.
@@ -783,7 +787,14 @@ CANONICAL ARCHETYPES:
        - ZERO TABLE DUPLICATION / SINGLE TABLE: If the clipping contains a single integral table, referenceContent MUST be strictly null and layout MUST be "single_column" with all columns unified into the same interactive table. DO NOT duplicate or copy the table inside referenceContent!
        - Cells with printed prompt/query text MUST have isInput: false.
        - Cells for student input/blank columns MUST have isInput: true, with expectedAnswer and acceptedAnswers.
-   - "selection": When students mark, tick (✓), or choose valid candidates from a SINGLE domain ("Tick...", "Which sentences are true?", "Select all that apply"). Preserve the full intact text in options[].text!
+   - "selection": For choosing between discrete candidate options:
+     * CLOSED-SELECTION EXERCISES (e.g. options separated by slashes "was / were", bold contrasting words, or instructions like "Circle/Choose the correct word/number"):
+       - The interaction MUST be typed as interaction.type: "selection".
+       - Model as questions[] (quiz mode) where each sentence/item is a question with mode: "single_choice" (or "dropdown"), with prompt containing the full sentence context.
+       - The discrete printed alternatives MUST directly populate the "options" array of that question (e.g. options: [{ id: "opt-1", text: "was", isCorrect: true }, { id: "opt-2", text: "were", isCorrect: false }]).
+       - If an option already appears marked, circled, or highlighted as an initial pedagogical model (solved example), it MUST be marked with isExample: true (and isCorrect: true). If the question item itself is the example, mark isExample: true on the question item as well.
+     * CHECKLISTS & CANDIDATE SELECTION: When students mark, tick (✓), or choose valid candidates from a single domain ("Tick the phrases", "Which sentences are true?", "Select all that apply"):
+       - Use flat options[] with allowMultiple: true/false. Preserve the full intact text in options[].text!
    - "buckets_matching": For categorization into buckets OR bijective correspondence between TWO differentiated domains (Column A <-> Column B, "Match words with definitions", "Match sentence halves"):
      * PRESERVE VERBATIM VISUAL IDENTIFIERS: Always preserve literal printed visual identifiers from the textbook (letters "a", "b", "c", numbers "1", "2", "3", or verbatim labels) in tokens and buckets/targetSlots. Do NOT omit them and do NOT invent synthetic names.
      * MATCHING HEADINGS / LABELS TO PARAGRAPHS: When the instruction explicitly directs to match or assign headings, titles, or labels to numbered sections or paragraphs (e.g. "Match headings a-d with paragraphs 1-4", "Match words with definitions"):
