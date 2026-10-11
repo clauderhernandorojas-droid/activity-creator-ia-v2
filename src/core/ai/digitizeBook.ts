@@ -357,17 +357,17 @@ const STRUCTURED_EXTRACTION_SCHEMA = {
     },
     referenceContent: {
       type: 'string',
-      description: 'Passive consultation material: STRICTLY and EXCLUSIVELY literal transcription of an independent reading passage, article, narrative story, formal multi-turn dialogue, or grammar reference chart visibly printed on the page. MUST BE NULL/omitted if no autonomous reading text exists. STRICT PROHIBITION OF SYNTHETIC CONTENT: NEVER generate synthetic explanations, pedagogical summaries, didactic goals, advice, guidelines, tips, or summaries not visibly printed in the image. If there is no printed reading passage, referenceContent MUST BE null.'
+      description: 'Passive consultation material: STRICTLY and EXCLUSIVELY literal transcription of an independent reading passage, article, narrative story, formal multi-turn dialogue, grammar reference chart, or context sentences/questions (e.g. questions 1-4) analyzed by the student. MUST BE NULL/omitted if no autonomous text or reference context exists. STRICT PROHIBITION OF SYNTHETIC CONTENT: NEVER generate synthetic explanations, pedagogical summaries, didactic goals, advice, guidelines, tips, or summaries not visibly printed in the image. If there is no printed reading passage or context material, referenceContent MUST BE null.'
     },
     wordBank: {
       type: 'array',
       items: { type: 'string' },
-      description: 'List of vocabulary words, or conceptual support topics / idea prompts (e.g. "personal details", "family", "work/study") if an explicit word box, topic box, or idea bank is present in the image. Otherwise empty array [].'
+      description: 'List of vocabulary words, or conceptual support topics / idea prompts (e.g. "personal details", "family", "work/study") if an explicit word box, topic box, or idea bank is present in the image. CRITICAL: NEVER put context sentences, reading passages, or questions (1-4) analyzed by the student into wordBank. Otherwise empty array [].'
     },
     interactionType: {
       type: 'string',
       enum: ['fill_blanks', 'multiple_choice', 'selection', 'matching', 'buckets', 'reference', 'writing'],
-      description: 'The strict pedagogical archetype of the interactive exercise corresponding to schema.ts primitives. Use "selection" when there is a SINGLE set of candidate elements (sentences, questions, terms, statements) from which students choose, mark, or discriminate valid items ("Which sentences are true?", "Which questions ask about the past?", "Tick (✓)...", "Check...", "Select all that apply", "Choose from the list"). Model each item with its FULL INTACT TEXT in items[].prompt and expectedAnswer: "true"|"false". NEVER collapse into numbers and NEVER create synthetic permutations like ["1, 2", "1, 3"]. Use "matching" ONLY when TWO explicit, differentiated domains relate bijectively (Column A <-> Column B: headings to paragraphs, terms to definitions). Use "fill_blanks" for blank-completion or open input fields (including when consulting reference_table / tableData). Use "writing" for free text production with guidelines. Use "buckets" for category classification. Use "reference" for speaking/communicative activities evaluated offline.'
+      description: 'The strict pedagogical archetype of the interactive exercise corresponding to schema.ts primitives. Use "selection" when there is a SINGLE set of candidate elements (sentences, questions, terms, statements) from which students choose, mark, or discriminate valid items ("Which sentences are true?", "Which questions ask about the past?", "Tick (✓)...", "Check...", "Select all that apply", "Choose from the list"). Model each item with its FULL INTACT TEXT in items[].prompt and expectedAnswer: "true"|"false". NEVER collapse into numbers and NEVER create synthetic permutations like ["1, 2", "1, 3"]. Use "matching" ONLY when TWO explicit, differentiated domains relate bijectively (Column A <-> Column B: headings to paragraphs, terms to definitions). Use "fill_blanks" for blank-completion or open input fields (including when consulting reference_table / tableData). Use "writing" for free text production with guidelines AND reflective grammar analysis questions without printed blanks ("How are the question forms in 1 and 2 different?", "Why do we use...", "What is the difference between...", "Explain how..."). In analysis tasks, put context sentences/questions into referenceContent (NEVER wordBank) and DO NOT synthesize explanation sentences with blanks. Use "buckets" for category classification. Use "reference" for speaking/communicative activities evaluated offline.'
     },
     guidelines: {
       type: 'array',
@@ -528,6 +528,15 @@ REGLAS UNIVERSALES DE BANCO DE OPCIONES Y ASIGNACIÓN BIUNÍVOCA:
     4. Asignar la consigna central a 'instruction' y el enunciado a 'prompt'.
     5. 'referenceContent' se mantiene en null a menos que exista un texto de lectura autónomo externo que el alumno deba consultar.
     6. 'isGraded': false (la redacción se evalúa de forma formativa con retroalimentación IA en lugar de calificación fija).
+- REGLA DIDÁCTICA UNIVERSAL PARA PREGUNTAS DE ANÁLISIS CONCEPTUAL Y PREGUNTAS ABIERTAS CON CONTEXTO (interactionType: 'writing'):
+  * Cuando la actividad plantee una pregunta de reflexión, análisis gramatical o indagación abierta sin espacios para rellenar impresos en el material original (ej. "How are the question forms in 1 and 2 different from 3 and 4?", "Why do we use...?", "What is the difference between...?", "Explain how the meaning changes..."):
+    1. CLASIFICACIÓN FORMAL OBLIGATORIA: Mapear a interactionType: 'writing' (producción de respuesta abierta reflexiva con feedback formativo), NUNCA a 'fill_blanks'.
+    2. CANAL DE CONSULTA (referenceContent): El bloque de oraciones, preguntas numeradas (ej. preguntas 1-4) o frases de muestra que sirven de insumo/contexto para el análisis DEBE asignarse íntegramente al canal pasivo 'referenceContent' (como texto estructurado con sus saltos de línea).
+    3. PROHIBICIÓN TAXATIVA DE WORDBANK: Queda TERMINANTEMENTE PROHIBIDO volcar las oraciones o preguntas de contexto dentro de 'wordBank'. Un wordBank es exclusivamente un banco de palabras/términos breves para cloze; jamás debe contener oraciones completas de análisis.
+    4. PROHIBICIÓN TAXATIVA DE ORACIONES EXPLICATIVAS SINTÉTICAS CON HUECOS: Tienes terminantemente PROHIBIDO redactar o sintetizar oraciones explicativas de la respuesta dentro del cuerpo del ejercicio (ej. "In 1 and 2 we use _______ while in 3 and 4 we use _______") para luego forzar huecos interactivos. Redactar la solución teórica destruye el propósito pedagógico de indagación del estudiante.
+    5. 'instruction': La consigna completa del ejercicio (ej. "Look at questions 1-4. How are the question forms in 1 and 2 different from 3 and 4?").
+    6. 'prompt': La pregunta o enunciado guía central para el estudiante.
+    7. 'isGraded': false (evaluación formativa cualitativa).
 - REGLA DE PARTICIÓN DE INSTRUCCIONES MULTIFASE EN TAREAS DE PRODUCCIÓN (WritingBlock):
   * Cuando un ejercicio de producción presente un paso inicial de redacción (a) seguido de una fase de interacción, discusión o trabajo en pares/grupos (b):
     1. La fase inicial de redacción (inciso a) debe poblar exclusivamente 'instruction'.
@@ -1370,8 +1379,10 @@ export function isAutonomousReadingContent(text: string | null): boolean {
   if (words.length < 25) {
     const isDialogue = /(?:Speaker\s+[A-Z]|A:|B:|John:|Mary:)/i.test(trimmed);
     const isTable = trimmed.includes('|') && trimmed.includes('\n');
-    if (!isDialogue && !isTable) {
-      return false; // Under 25 words and not dialogue/table => not an autonomous reading passage
+    const isNumberedContextList = lines.length >= 2 && lines.some((l) => /^\(?\d+[.)]/.test(l));
+    const hasQuestions = lines.some((l) => l.includes('?'));
+    if (!isDialogue && !isTable && !isNumberedContextList && !hasQuestions) {
+      return false; // Under 25 words and not dialogue/table/context list => not an autonomous reading passage
     }
   }
 
@@ -1719,9 +1730,12 @@ function sanitizeExtractedPayload(payload: ExtractedStructuredPayload): Extracte
     });
   }
 
-  // 0. FREE WRITING TASKS ("Write a profile / paragraph / summary / description / email...")
+  // 0. FREE WRITING OR REFLECTIVE GRAMMAR ANALYSIS TASKS
   const writingDirectiveRegex = /\b(?:write|draft|compose|produce)\s+(?:an?\s+)?(?:profile|paragraph|summary|description|email|letter|story|review|essay|biography|post|short\s+text|text)\b/i;
-  const isWritingTask = writingDirectiveRegex.test(`${rawTitle} ${rawInstruction}`) || payload.interactionType === 'writing';
+  const isAnalysisQuestionDirective = /\b(?:how\s+(?:are|do|is|can)|why\s+(?:do|does|is|are|did)|what\s+is\s+the\s+difference|explain\s+(?:how|why|the\s+difference)|in\s+what\s+way|compare\s+(?:the\s+)?(?:questions?|sentences?|forms?))\b/i.test(rawContextDirective);
+  const isWritingTask = writingDirectiveRegex.test(rawContextDirective) ||
+    isAnalysisQuestionDirective ||
+    payload.interactionType === 'writing';
   let finalGuidelines: string[] = Array.isArray(payload.guidelines) && payload.guidelines.length > 0
     ? payload.guidelines.map((g) => stripOrphanTypographicalMarkers(String(g).trim())).filter(Boolean)
     : [];
@@ -1729,6 +1743,15 @@ function sanitizeExtractedPayload(payload: ExtractedStructuredPayload): Extracte
   if (isWritingTask) {
     finalInteractionType = 'writing';
     finalIsGraded = false; // Writing tasks receive formative feedback rather than binary scores
+
+    // Rescue context sentences or questions mistakenly extracted into wordBank
+    if (activeWordBank.length > 0) {
+      const hasSentencesInWordBank = activeWordBank.some((w) => w.includes('?') || w.split(/\s+/).length >= 4);
+      if (hasSentencesInWordBank && !referenceContent) {
+        referenceContent = activeWordBank.join('\n');
+      }
+      activeWordBank = [];
+    }
 
     // Extract procedural steps / guidelines deterministically
     if (finalGuidelines.length === 0) {
@@ -1743,7 +1766,7 @@ function sanitizeExtractedPayload(payload: ExtractedStructuredPayload): Extracte
       const stepMatches = `${rawInstruction}\n${cleanedRawRef || ''}`.match(/(?:^|\n|\s)(?:\*{0,2}\(?[a-fA-F][).:]\*{0,2})\s+([^\n]+)/g);
       if (stepMatches && stepMatches.length > 1) {
         finalGuidelines = stepMatches.map((m) => stripOrphanTypographicalMarkers(m.replace(/^[*\s(a-fA-F).:]+/, '').trim())).filter(Boolean);
-      } else if (sanitizedItems.length > 0) {
+      } else if (sanitizedItems.length > 0 && !isAnalysisQuestionDirective) {
         finalGuidelines = sanitizedItems
           .map((it) => stripOrphanTypographicalMarkers(it.prompt.replace(/^\d+[.)]\s*/, '').trim()))
           .filter((p) => p && !/^\d+$/.test(p));
@@ -1777,7 +1800,7 @@ function sanitizeExtractedPayload(payload: ExtractedStructuredPayload): Extracte
     }
 
     finalItems = [];
-    if (!isAutonomousReadingContent(cleanedRawRef)) {
+    if (!isAutonomousReadingContent(cleanedRawRef) && !(cleanedRawRef && (cleanedRawRef.includes('?') || /^\(?\d+[.)]/m.test(cleanedRawRef)))) {
       referenceContent = null; // Full stage width
     }
   } else if (isOpenProductionTask) {

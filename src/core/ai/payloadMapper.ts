@@ -825,7 +825,7 @@ export function mapBlockToWriting(block: ExtractedBlock): WritingBlock {
     }
   }
 
-  if (!guidelines && Array.isArray(parsed.wordBank) && parsed.wordBank.length > 0) {
+  if (!guidelines && Array.isArray(parsed.wordBank) && parsed.wordBank.length > 0 && !parsed.wordBank.some((w: any) => String(w).includes('?'))) {
     guidelines = parsed.wordBank.map((w: any) => `Use topic/idea: ${stripOrphanTypographicalMarkers(String(w).trim())}`);
   }
 
@@ -1360,10 +1360,21 @@ export function mapBlockToRole(
   const isSynthetic = isSyntheticPedagogicalText(rawRefText);
   const isAutonomous = isAutonomousReadingContent(rawRefText);
   const refWords = rawRefText.split(/\s+/).filter(Boolean).length;
+  const lines = rawRefText.split(/\n+/).map((l) => l.trim()).filter(Boolean);
+  const isNumberedContextList = lines.length >= 2 && lines.some((l) => /^\(?\d+[.)]/.test(l));
+  const hasContextQuestions = lines.some((l) => l.includes('?'));
 
-  // Strict invariant: Only genuine, non-synthetic printed reading passages (>= 30 words) count as reading content
+  // Strict invariant: genuine reading passages or context sentences/questions count as reading content
   const hasReadingContent = Boolean(
-    !isDuplicate && !isSynthetic && isAutonomous && refWords >= 30 && rawRefText.length > 0
+    !isDuplicate &&
+    !isSynthetic &&
+    rawRefText.length > 0 &&
+    (
+      (isAutonomous && refWords >= 20) ||
+      ((isNumberedContextList || hasContextQuestions) && refWords >= 8) ||
+      (parsed.interactionType === 'writing' && refWords >= 8) ||
+      refWords >= 30
+    )
   );
 
   const textToAnalyze = String(parsed.referenceContent || parsed.content || block.rawText || '').trim();

@@ -333,4 +333,85 @@ Guidelines:
     });
   });
 
+  // =========================================================================
+  // CASO D: Pregunta abierta de análisis con referencia de contexto
+  // =========================================================================
+  describe('Caso D: Pregunta abierta de análisis con referencia', () => {
+    it('debe mapear a writing, preservar las 4 preguntas en referenceContent y dejar wordBank vacío', () => {
+      const contextQuestions = `1. Where do you live?
+2. What are you studying?
+3. Did you go out last night?
+4. Have you seen that new film?`;
+
+      const block: ExtractedBlock = {
+        id: 'block-analysis-1',
+        rawText: `Grammar Analysis:
+1. Where do you live?
+2. What are you studying?
+3. Did you go out last night?
+4. Have you seen that new film?
+
+How are the question forms in 1 and 2 different from 3 and 4?`,
+        detectedType: 'numbered_list',
+        confidence: 0.95,
+        parsedData: {
+          title: 'Question Forms Analysis',
+          instruction: 'Look at questions 1-4. How are the question forms in 1 and 2 different from 3 and 4?',
+          prompt: 'How are the question forms in 1 and 2 different from 3 and 4?',
+          referenceContent: contextQuestions,
+          interactionType: 'writing',
+          wordBank: []
+        }
+      };
+
+      const result = mapBlockToRole(block, 'interaction_writing');
+
+      // 1. Comprobar que la interacción es estrictamente de tipo 'writing' con la consigna original
+      expect(result.interaction).toBeDefined();
+      expect(result.interaction?.type).toBe('writing');
+      const writing = result.interaction as any;
+      expect(writing.prompt).toBe('How are the question forms in 1 and 2 different from 3 and 4?');
+      expect(writing.instruction).toContain('Look at questions 1-4');
+
+      // 2. Comprobar que las 4 preguntas de contexto van al canal pasivo referenceContent (tipo 'text')
+      expect(result.reference).toBeDefined();
+      expect(result.reference?.type).toBe('text');
+      const ref = result.reference as any;
+      expect(ref.content).toContain('1. Where do you live?');
+      expect(ref.content).toContain('2. What are you studying?');
+      expect(ref.content).toContain('3. Did you go out last night?');
+      expect(ref.content).toContain('4. Have you seen that new film?');
+
+      // 3. Comprobar que wordBank queda vacío (undefined o [])
+      expect(writing.wordBank).toBeUndefined();
+    });
+
+    it('debe rescatar preguntas de contexto si fueron volcadas erróneamente en wordBank', () => {
+      const blockWithSpuriousWordBank: ExtractedBlock = {
+        id: 'block-analysis-rescue',
+        rawText: 'Look at questions 1-4...',
+        detectedType: 'numbered_list',
+        confidence: 0.9,
+        parsedData: {
+          title: 'Grammar Analysis',
+          instruction: 'Explain why the question forms in 1 and 2 are different from 3 and 4:',
+          prompt: 'Explain the difference between questions 1-2 and 3-4.',
+          referenceContent: `1. Where do you live?
+2. What are you studying?
+3. Did you go out last night?
+4. Have you seen that film?`,
+          interactionType: 'writing',
+          wordBank: ['1. Where do you live?', '2. What are you studying?'] // Spurious
+        }
+      };
+
+      const result = mapBlockToRole(blockWithSpuriousWordBank, 'interaction_writing');
+      expect(result.interaction?.type).toBe('writing');
+      expect(result.reference?.type).toBe('text');
+      expect((result.reference as any).content).toContain('1. Where do you live?');
+      expect((result.interaction as any).wordBank).toBeUndefined();
+    });
+  });
+
 });
+
