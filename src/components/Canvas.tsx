@@ -513,6 +513,7 @@ export const Canvas: React.FC = () => {
                 {/* Right Column: Interactive Activity */}
                 <div className="w-full lg:w-7/12 space-y-4">
                   <InteractionComponent
+                    key={currentSlide.id}
                     block={currentSlide.interaction}
                     studentAnswers={studentAnswers}
                     evaluation={studentEvaluation}
@@ -526,6 +527,7 @@ export const Canvas: React.FC = () => {
               /* Primary Interactive Block takes the full stage */
               <div className="w-full">
                 <InteractionComponent
+                  key={currentSlide.id}
                   block={currentSlide.interaction}
                   studentAnswers={studentAnswers}
                   evaluation={studentEvaluation}

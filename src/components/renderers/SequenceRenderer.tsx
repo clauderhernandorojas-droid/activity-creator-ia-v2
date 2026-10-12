@@ -3,6 +3,7 @@ import type { SequenceBlock, SequenceItem } from '../../types/schema';
 import { useSessionStore, type SessionEvaluation } from '../../store/useSessionStore';
 import { Plus, Trash2, ChevronUp, ChevronDown, CheckCircle2, XCircle } from 'lucide-react';
 import { VerificationAudioPlayer } from '../common/VerificationAudioPlayer';
+import { shuffleSequenceItems } from '../../core/utils/sequenceShuffle';
 
 interface Props {
   block: SequenceBlock;
@@ -24,11 +25,34 @@ export const SequenceRenderer: React.FC<Props> = ({
   const isVerificationActive = useSessionStore((s) => s.isVerificationAudioActive);
   const setVerificationAudioActive = useSessionStore((s) => s.setVerificationAudioActive);
   const hasVerificationAudio = Boolean(block.verificationAudioUrl && block.verificationAudioUrl.trim().length > 0);
-  const userOrder: string[] =
+
+  // Validate studentAnswers['sequence_order']
+  const isValidSavedOrder =
     Array.isArray(studentAnswers['sequence_order']) &&
-    studentAnswers['sequence_order'].length === block.items.length
-      ? (studentAnswers['sequence_order'] as string[])
-      : block.items.map((it) => it.id);
+    studentAnswers['sequence_order'].length === block.items.length &&
+    studentAnswers['sequence_order'].every((id: string) =>
+      block.items.some((it) => it.id === id)
+    );
+
+  // Memoized fallback ensures items never render in exact solution order on initial render
+  const initialFallbackOrder = React.useMemo(() => {
+    return shuffleSequenceItems(block.items);
+  }, [block.items]);
+
+  // When in student mode and no valid order exists (initial mount or after "Reiniciar" reset),
+  // generate a fresh non-solution shuffle and register it in student answers
+  React.useEffect(() => {
+    if (isEditMode) return;
+
+    if (!isValidSavedOrder) {
+      const freshShuffled = shuffleSequenceItems(block.items);
+      onAnswerChange?.('sequence_order', freshShuffled);
+    }
+  }, [isValidSavedOrder, block.items, isEditMode, onAnswerChange]);
+
+  const userOrder: string[] = isValidSavedOrder
+    ? (studentAnswers['sequence_order'] as string[])
+    : initialFallbackOrder;
 
   const moveItem = (index: number, direction: 'up' | 'down') => {
     if (evaluation.isSubmitted) return;

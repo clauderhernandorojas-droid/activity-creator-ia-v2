@@ -9,7 +9,7 @@ export function evaluateSequence(
     Array.isArray(studentAnswers['sequence_order']) &&
     studentAnswers['sequence_order'].length === block.items.length
       ? (studentAnswers['sequence_order'] as string[])
-      : block.items.map((i) => i.id);
+      : [];
 
   const maxScore = block.items.length;
   const details: Record<string, boolean> = {};
