@@ -618,6 +618,93 @@ describe('slideValidation - Direct Schema & Architectural Invariant Tests', () =
     });
   });
 
+  // =========================================================================
+  // CASO I: Segmentación Multi-Slide y Resolución de Referencias Cruzadas
+  // =========================================================================
+  describe('Caso I: Segmentación Multi-Slide y Resolución de Referencias Cruzadas', () => {
+    it('debe validar dos slides independientes emitidos desde una misma captura con referencias resueltas', () => {
+      const rawMultiSlideJson = JSON.stringify({
+        slides: [
+          // Actividad 1: Presentación / Selección de vocabulario
+          {
+            id: 'slide-ex-1',
+            title: 'Exercise 1: Action Verbs',
+            subtitle: 'Choose the correct action verbs from the options.',
+            layout: 'single_column',
+            isGraded: true,
+            referenceContent: null,
+            interaction: {
+              id: 'int-ex-1',
+              type: 'selection',
+              instruction: 'Choose the verbs mentioned in the audio:',
+              options: [
+                { id: 'v-1', text: 'play football', isCorrect: true },
+                { id: 'v-2', text: 'go swimming', isCorrect: true },
+                { id: 'v-3', text: 'do judo', isCorrect: true },
+                { id: 'v-4', text: 'eat pizza', isCorrect: false }
+              ],
+              allowMultiple: true
+            }
+          },
+          // Actividad 2: Dependiente de 1 ("Put the verbs from 1 into the correct column: play, go, or do")
+          {
+            id: 'slide-ex-2',
+            title: 'Exercise 2: Verb Collocations',
+            subtitle: 'Put the verbs from 1 into the correct column.',
+            layout: 'single_column',
+            isGraded: true,
+            referenceContent: null,
+            interaction: {
+              id: 'int-ex-2',
+              type: 'buckets_matching',
+              instruction: 'Put the verbs from exercise 1 into the correct bucket (play, go, do):',
+              buckets: [
+                { id: 'b-play', label: 'play' },
+                { id: 'b-go', label: 'go' },
+                { id: 'b-do', label: 'do' }
+              ],
+              tokens: [
+                { id: 'tok-1', text: 'football', correctBucketId: 'b-play' },
+                { id: 'tok-2', text: 'swimming', correctBucketId: 'b-go' },
+                { id: 'tok-3', text: 'judo', correctBucketId: 'b-do' }
+              ]
+            }
+          }
+        ]
+      });
+
+      const slides = validateAndParseSlides(rawMultiSlideJson);
+
+      // Invariante 1: Segmentación Multi-Slide (2 actividades = 2 slides discretos, no fusionados)
+      expect(slides).toHaveLength(2);
+
+      const slide1 = slides[0];
+      const slide2 = slides[1];
+
+      expect(slide1.id).toBe('slide-ex-1');
+      expect(slide1.interaction?.type).toBe('selection');
+
+      expect(slide2.id).toBe('slide-ex-2');
+      expect(slide2.interaction?.type).toBe('buckets_matching');
+
+      // Invariante 2: Resolución de Referencias Cruzadas (slide 2 resuelve exhaustivamente los verbos de 1)
+      if (slide2.interaction?.type === 'buckets_matching') {
+        expect(slide2.interaction.buckets).toHaveLength(3);
+        expect(slide2.interaction.buckets.map((b) => b.label)).toEqual(['play', 'go', 'do']);
+
+        expect(slide2.interaction.tokens).toHaveLength(3);
+        expect(slide2.interaction.tokens[0].text).toBe('football');
+        expect(slide2.interaction.tokens[0].correctBucketId).toBe('b-play');
+
+        expect(slide2.interaction.tokens[1].text).toBe('swimming');
+        expect(slide2.interaction.tokens[1].correctBucketId).toBe('b-go');
+
+        expect(slide2.interaction.tokens[2].text).toBe('judo');
+        expect(slide2.interaction.tokens[2].correctBucketId).toBe('b-do');
+      }
+    });
+  });
+
 });
 
 

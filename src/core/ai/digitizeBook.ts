@@ -779,6 +779,16 @@ ROOT RESPONSE FORMAT:
   ]
 }
 
+MULTI-SLIDE SEGMENTATION & CROSS-REFERENCING DIRECTIVES:
+1. MULTI-SLIDE SEGMENTATION INVARIANT:
+   - When the input image contains TWO OR MORE pedagogically independent and delimited activities (e.g., sequential numbering or labeling such as "1", "2" or "a", "b", or separate exercise headers/instructions):
+     * The model MUST emit one distinct element in the "slides" array for EACH identified activity (e.g. [slide-1, slide-2, ...]).
+     * It is STRICTLY FORBIDDEN to ignore visible activities or to arbitrarily merge separate, independent exercises into a single slide.
+2. CROSS-REFERENCING RESOLUTION INVARIANT:
+   - When an activity includes instructions or prompts that explicitly reference another section or exercise visible in the clipping (e.g., "in 1", "from the box above", "with the verbs above", "from the dialogue in 2a"):
+     * The referenced information MUST act as active resolution context to exhaustively populate all candidate options, categories (buckets), tokens, or answer pairs of the dependent activity.
+     * In the slide of the dependent activity, NEVER guess, hallucinate, or omit referenced elements that are clearly present in the capture; extract and populate them faithfully and exhaustively.
+
 CANONICAL ARCHETYPES:
 1. "referenceContent" (Passive consultation material):
    - Set to null if the clipping does not contain an independent printed reading passage, dialogue, or grammar chart.
