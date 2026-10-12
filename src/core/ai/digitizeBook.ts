@@ -347,7 +347,7 @@ export const STRUCTURED_SLIDE_SCHEMA = {
           layout: {
             type: 'string',
             enum: ['single_column', 'split_50_50', 'header_stacked'],
-            description: 'split_50_50 when referenceContent is present; single_column when referenceContent is null.'
+            description: 'split_50_50 when referenceContent is present; single_column when referenceContent is null (e.g. self-sufficient tables/grids where all content is within the table).'
           },
           isGraded: {
             type: 'boolean',
@@ -356,7 +356,7 @@ export const STRUCTURED_SLIDE_SCHEMA = {
           notes: { type: 'string', description: 'Optional teaching or editorial notes' },
           referenceContent: {
             type: 'object',
-            description: 'Passive consultation material: literal reading passage, dialogue, grammar rule table, or vocabulary collocation chart. MUST be null if no independent passive reading text is printed in the clipping.',
+            description: 'Passive consultation material: literal reading passage, dialogue, grammar rule table, or vocabulary collocation chart. MUST be null if no independent passive reading text is printed in the clipping, or in self-sufficient table/grid exercises where solved examples belong to table cells.',
             properties: {
               type: {
                 type: 'string',
@@ -1036,12 +1036,74 @@ export function validateAndParseSlides(rawJsonText: string): Slide[] {
           }
         }
       }
+
+      // En ejercicios de tipo tabla/cuadrícula interactiva autosuficientes:
+      if (
+        rawSlide.interaction.type === 'input_fields' &&
+        rawSlide.interaction.layoutMode === 'table' &&
+        Array.isArray(rawSlide.interaction.tableRows)
+      ) {
+        if (rawSlide.referenceContent) {
+          // Descartar tablas duplicadas o desacopladas indebidamente
+          if (
+            rawSlide.referenceContent.type === 'table_reference' ||
+            rawSlide.referenceContent.type === 'reference_table'
+          ) {
+            rawSlide.referenceContent = null;
+          } else if (
+            rawSlide.referenceContent.type === 'text' &&
+            typeof rawSlide.referenceContent.content === 'string'
+          ) {
+            // Verificar si el texto en referenceContent corresponde a celdas de ejemplo o elementos de la tabla
+            const refLines = rawSlide.referenceContent.content
+              .split('\n')
+              .map((l: string) => l.trim().toLowerCase())
+              .filter((l: string) => l.length > 2);
+
+            const tableTexts: string[] = [];
+            if (Array.isArray(rawSlide.interaction.tableHeaders)) {
+              rawSlide.interaction.tableHeaders.forEach((h: any) => {
+                if (typeof h === 'string' && h.trim()) tableTexts.push(h.trim().toLowerCase());
+              });
+            }
+            rawSlide.interaction.tableRows.forEach((row: any) => {
+              if (Array.isArray(row)) {
+                row.forEach((cell: any) => {
+                  if (typeof cell === 'string' && cell.trim()) tableTexts.push(cell.trim().toLowerCase());
+                  else if (cell && typeof cell === 'object') {
+                    if (cell.text && String(cell.text).trim()) tableTexts.push(String(cell.text).trim().toLowerCase());
+                    if (cell.expectedAnswer && String(cell.expectedAnswer).trim()) tableTexts.push(String(cell.expectedAnswer).trim().toLowerCase());
+                  }
+                });
+              }
+            });
+
+            const allLinesInTable =
+              refLines.length > 0 &&
+              refLines.every((line: string) =>
+                tableTexts.some((t: string) => t.includes(line) || line.includes(t))
+              );
+
+            if (allLinesInTable) {
+              rawSlide.referenceContent = null;
+            }
+          }
+        }
+
+        // En ejercicios de tipo tabla/cuadrícula donde todo el contenido está dentro de la misma tabla,
+        // el diseño de la diapositiva debe ser de una sola columna ('single_column') sin panel de lectura lateral
+        if (!rawSlide.referenceContent) {
+          rawSlide.layout = 'single_column';
+        }
+      }
     } else {
       rawSlide.interaction = null;
     }
 
-    if (!rawSlide.layout) {
-      rawSlide.layout = rawSlide.referenceContent ? 'split_50_50' : 'single_column';
+    if (!rawSlide.referenceContent) {
+      rawSlide.layout = 'single_column';
+    } else if (!rawSlide.layout) {
+      rawSlide.layout = 'split_50_50';
     }
 
     const parseResult = SlideSchema.safeParse(rawSlide);
@@ -1144,6 +1206,9 @@ MULTI-SLIDE SEGMENTATION & CROSS-REFERENCING DIRECTIVES:
 CANONICAL ARCHETYPES:
 1. "referenceContent" (Passive consultation material):
    - Set to null if the clipping does not contain an independent printed reading passage, dialogue, or grammar chart.
+   - CUÁNDO NO GENERAR 'referenceContent' (EJERCICIOS AUTOSUFICIENTES):
+     * Celdas de ejemplo dentro de tablas o diagramas: Si una tabla, cuadro o lista contiene ejemplos ya resueltos (e.g. en cursiva, azul o como fila modelo), esos valores pertenecen exclusivamente a la estructura interna del ejercicio (como celdas fijas no editables con isInput: false o isExample: true). NUNCA deben extraerse ni aislarse como 'referenceContent'.
+     * En ejercicios de tipo tabla/cuadrícula donde todo el contenido está dentro de la misma tabla, el diseño de la diapositiva debe ser de una sola columna ('single_column') sin panel de lectura lateral ('referenceContent: null').
    - ZERO TABLE DUPLICATION: If the activity is purely an interactive table (interaction.layoutMode: "table"), DO NOT duplicate the table inside referenceContent. In purely interactive table activities, referenceContent MUST be strictly null and layout MUST be "single_column".
    - CONTINUOUS READING TEXTS vs COLUMNS:
      * Use type: "text" for all reading articles, narrative stories, dialogues, or continuous texts divided into paragraphs. Use standard double line breaks (\n\n) between paragraphs. NEVER fragment a continuous reading text into independent vertical columns (even if formatted in newspaper columns on the original page!).
@@ -1163,6 +1228,8 @@ CANONICAL ARCHETYPES:
        - MUST be classified as interaction.type: "input_fields" with layoutMode: "table". NEVER classify it as "writing" with a passive reference table!
        - COLUMN INTEGRITY: All columns that form part of the printed table grid in the image MUST be included inside tableHeaders and tableRows of the interaction. It is STRICTLY PROHIBITED to dismantle, split, or detach any columns of the table (such as note columns, "partner's notes", or "follow-up questions" columns) to send them as a separate referenceContent block!
        - ZERO TABLE DUPLICATION / SINGLE TABLE: If the clipping contains a single integral table, referenceContent MUST be strictly null and layout MUST be "single_column" with all columns unified into the same interactive table. DO NOT duplicate or copy the table inside referenceContent!
+       - CELDAS DE EJEMPLO DENTRO DE TABLAS O DIAGRAMAS: Si una tabla, cuadro o lista contiene ejemplos ya resueltos (e.g. en cursiva, azul o como fila modelo), esos valores pertenecen exclusivamente a la estructura interna del ejercicio (como celdas fijas no editables con isInput: false o isExample: true). NUNCA deben extraerse ni aislarse como 'referenceContent'.
+       - EJERCICIOS AUTOSUFICIENTES DE TABLA/CUADRÍCULA: En ejercicios donde todo el contenido está dentro de la misma tabla, el diseño de la diapositiva debe ser de una sola columna ('single_column') sin panel de lectura lateral ('referenceContent: null').
        - Cells with printed prompt/query text MUST have isInput: false.
        - Cells for student input/blank columns MUST have isInput: true, with expectedAnswer and acceptedAnswers.
    - "selection": For choosing between discrete candidate options:

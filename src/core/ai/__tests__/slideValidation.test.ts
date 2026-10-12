@@ -1111,6 +1111,104 @@ describe('slideValidation - Direct Schema & Architectural Invariant Tests', () =
     });
   });
 
+  // =========================================================================
+  describe('Caso M: Ejercicios Autosuficientes de Tipo Tabla/Cuadrícula (Directiva referenceContent)', () => {
+    it('elimina referenceContent si contenía celdas de ejemplo o filas de la tabla y fuerza single_column', () => {
+      const rawTableSlide = JSON.stringify({
+        slides: [
+          {
+            id: 'slide-table-self-sufficient-1',
+            title: 'Question Words Chart',
+            layout: 'split_50_50',
+            referenceContent: {
+              id: 'ref-extracted-example',
+              type: 'text',
+              content: 'Who | Asking about a person | Who is that?'
+            },
+            interaction: {
+              id: 'int-table-qw',
+              type: 'input_fields',
+              instruction: 'Complete the table with the correct question words:',
+              layoutMode: 'table',
+              tableHeaders: ['Question Word', 'Meaning / Use', 'Example'],
+              tableRows: [
+                [
+                  { text: 'Who', isInput: false, isExample: true },
+                  { text: 'Asking about a person', isInput: false },
+                  { text: 'Who is that?', isInput: false }
+                ],
+                [
+                  { text: '', isInput: true, expectedAnswer: 'Where', acceptedAnswers: ['Where'] },
+                  { text: 'Asking about a place', isInput: false },
+                  { text: 'Where do you live?', isInput: false }
+                ]
+              ]
+            }
+          }
+        ]
+      });
+
+      const slides = validateAndParseSlides(rawTableSlide);
+      expect(slides).toHaveLength(1);
+
+      const slide = slides[0];
+      // Invariante 1: Celdas de ejemplo no deben aislarse en referenceContent -> referenceContent DEBE ser null
+      expect(slide.referenceContent).toBeNull();
+      // Invariante 2: Ejercicio autosuficiente de tabla -> layout DEBE ser single_column
+      expect(slide.layout).toBe('single_column');
+      // Invariante 3: Las celdas de ejemplo permanecen intactas dentro de tableRows
+      if (slide.interaction?.type === 'input_fields') {
+        expect(slide.interaction.tableRows[0][0].text).toBe('Who');
+        expect(slide.interaction.tableRows[0][0].isInput).toBe(false);
+        expect(slide.interaction.tableRows[0][0].isExample).toBe(true);
+      }
+    });
+
+    it('elimina table_reference espurio si la interacción ya es una tabla interactiva unificada', () => {
+      const rawDuplicateTableSlide = JSON.stringify({
+        slides: [
+          {
+            id: 'slide-table-dup',
+            title: 'Verbs Grid',
+            layout: 'split_50_50',
+            referenceContent: {
+              id: 'ref-dup-table',
+              type: 'table_reference',
+              title: 'Verbs Reference',
+              headers: ['Base Form', 'Past Simple'],
+              rows: [['go', 'went']]
+            },
+            interaction: {
+              id: 'int-table-verbs',
+              type: 'input_fields',
+              instruction: 'Fill in the past simple verbs:',
+              layoutMode: 'table',
+              tableHeaders: ['Base Form', 'Past Simple'],
+              tableRows: [
+                [
+                  { text: 'go', isInput: false, isExample: true },
+                  { text: 'went', isInput: false, isExample: true }
+                ],
+                [
+                  { text: 'see', isInput: false },
+                  { text: '', isInput: true, expectedAnswer: 'saw', acceptedAnswers: ['saw'] }
+                ]
+              ]
+            }
+          }
+        ]
+      });
+
+      const slides = validateAndParseSlides(rawDuplicateTableSlide);
+      expect(slides).toHaveLength(1);
+
+      const slide = slides[0];
+      expect(slide.referenceContent).toBeNull();
+      expect(slide.layout).toBe('single_column');
+    });
+  });
+
 });
+
 
 
