@@ -135,7 +135,7 @@ export const Canvas: React.FC = () => {
       ((effectiveReferenceBlock.type as string) === 'reference_text' && (effectiveReferenceBlock as any).content?.trim().length > 0) ||
       (effectiveReferenceBlock.type === 'reference_table' && effectiveReferenceBlock.columns?.length > 0) ||
       (effectiveReferenceBlock.type === 'table_reference' && effectiveReferenceBlock.rows?.length > 0) ||
-      (effectiveReferenceBlock.type === 'media' && effectiveReferenceBlock.url?.trim().length > 0)
+      (effectiveReferenceBlock.type === 'media' && (Boolean(effectiveReferenceBlock.url?.trim()) || effectiveReferenceBlock.mediaType === 'audio'))
     )
   );
   const isImageReference = Boolean(

@@ -245,7 +245,7 @@ export const MediaReferenceRenderer: React.FC<Props> = ({
         {/* Fullscreen Lightbox Modal */}
         <ImageLightboxModal
           isOpen={isLightboxOpen}
-          imageUrl={block.url}
+          imageUrl={block.url || ''}
           title={block.title || 'Material Visual de Consulta'}
           onClose={() => setIsLightboxOpen(false)}
         />

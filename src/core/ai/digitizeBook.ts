@@ -635,6 +635,117 @@ export class SchemaValidationError extends Error {
 }
 
 /**
+ * Sanitizes referenceContent prior to SlideSchema validation.
+ * Normalizes listening tracks, media types, and missing URLs, or removes invalid blocks
+ * cleanly to prevent fatal rejection of the slide.
+ */
+export function sanitizeReferenceContent(rawRef: any, idx: number): any {
+  if (!rawRef || typeof rawRef !== 'object') {
+    return null;
+  }
+
+  const ref = { ...rawRef };
+  if (!ref.id) {
+    ref.id = `ref-${Date.now()}-${idx}`;
+  }
+
+  // 1. Identify and normalize type
+  let type = typeof ref.type === 'string' ? ref.type.toLowerCase().trim() : '';
+
+  // Handle type aliases
+  if (type === 'reference_text') type = 'text';
+  if (type === 'columns') type = 'reference_table';
+  if (type === 'listening' || type === 'audio' || type === 'image') {
+    if (!ref.mediaType) {
+      ref.mediaType = type === 'image' ? 'image' : 'audio';
+    }
+    type = 'media';
+  }
+
+  // Auto-detect type if missing
+  if (!type) {
+    if (ref.content !== undefined) type = 'text';
+    else if (ref.rows !== undefined || ref.headers !== undefined) type = 'table_reference';
+    else if (ref.columns !== undefined) type = 'reference_table';
+    else if (ref.mediaType !== undefined || ref.url !== undefined || ref.transcript !== undefined) type = 'media';
+    else return null;
+  }
+
+  ref.type = type;
+
+  // 2. Normalization according to target block type
+  if (type === 'media') {
+    let mType = typeof ref.mediaType === 'string' ? ref.mediaType.toLowerCase().trim() : '';
+    if (mType === 'listening' || mType === 'sound' || mType === 'track') {
+      mType = 'audio';
+    } else if (mType === 'picture' || mType === 'photo' || mType === 'img') {
+      mType = 'image';
+    } else if (mType !== 'audio' && mType !== 'image') {
+      const textToScan = `${ref.title || ''} ${ref.transcript || ''} ${ref.url || ''}`;
+      if (/\b(?:audio|listening|listen|track|cd|r\d+\.?\d*)\b/i.test(textToScan)) {
+        mType = 'audio';
+      } else if (/\b(?:image|photo|picture|diagram|figura)\b/i.test(textToScan)) {
+        mType = 'image';
+      } else {
+        mType = 'audio';
+      }
+    }
+    ref.mediaType = mType;
+
+    let url = typeof ref.url === 'string' ? ref.url.trim() : '';
+    if (!url) {
+      if (ref.mediaType === 'audio') {
+        url = 'placeholder:audio-track';
+      } else {
+        if (!ref.title && !ref.transcript) {
+          return null;
+        }
+        url = '';
+      }
+    }
+    ref.url = url;
+
+    if (!ref.url && !ref.title && !ref.transcript) {
+      return null;
+    }
+
+    return ref;
+  }
+
+  if (type === 'text') {
+    if (typeof ref.content !== 'string' || !ref.content.trim()) {
+      if (typeof ref.title === 'string' && ref.title.trim()) {
+        ref.content = ref.title.trim();
+      } else {
+        return null;
+      }
+    }
+    if (!ref.category) ref.category = 'grammar_note';
+    return ref;
+  }
+
+  if (type === 'table_reference') {
+    if (!Array.isArray(ref.headers)) ref.headers = [];
+    if (!Array.isArray(ref.rows)) ref.rows = [];
+    if (ref.headers.length === 0 && ref.rows.length === 0) {
+      return null;
+    }
+    return ref;
+  }
+
+  if (type === 'reference_table') {
+    if (!Array.isArray(ref.columns)) ref.columns = [];
+    if (!ref.title) ref.title = 'Tabla de Referencia';
+    if (ref.columns.length === 0) {
+      return null;
+    }
+    return ref;
+  }
+
+  return null;
+}
+
+/**
  * Validates raw model output strictly against canonical SlideSchema.
  * Throws explicit SchemaValidationError if validation fails.
  */
@@ -669,13 +780,7 @@ export function validateAndParseSlides(rawJsonText: string): Slide[] {
       rawSlide.id = `slide-${Date.now()}-${idx}`;
     }
 
-    if (rawSlide.referenceContent && typeof rawSlide.referenceContent === 'object') {
-      if (!rawSlide.referenceContent.id) {
-        rawSlide.referenceContent.id = `ref-${Date.now()}-${idx}`;
-      }
-    } else {
-      rawSlide.referenceContent = null;
-    }
+    rawSlide.referenceContent = sanitizeReferenceContent(rawSlide.referenceContent, idx);
 
     if (rawSlide.interaction && typeof rawSlide.interaction === 'object') {
       if (!rawSlide.interaction.id) {
@@ -714,6 +819,12 @@ export function validateAndParseSlides(rawJsonText: string): Slide[] {
 
     validatedSlides.push(parseResult.data);
   }
+
+  console.log(
+    '[digitizeBook] Raw parsed slides count:',
+    validatedSlides.length,
+    validatedSlides.map((s) => s.title || (s.interaction as any)?.instruction || s.subtitle)
+  );
 
   return validatedSlides;
 }

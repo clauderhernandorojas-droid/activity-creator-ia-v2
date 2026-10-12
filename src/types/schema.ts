@@ -43,8 +43,16 @@ export const StructuredReferenceBlockSchema = z.object({
 export const ReferenceMediaBlockSchema = z.object({
   type: z.literal('media'),
   id: z.string(),
-  mediaType: z.enum(['audio', 'image']),
-  url: z.string(),
+  mediaType: z.preprocess((val) => {
+    if (typeof val === 'string') {
+      const lower = val.toLowerCase().trim();
+      if (lower === 'listening' || lower === 'sound' || lower === 'track') return 'audio';
+      if (lower === 'picture' || lower === 'photo' || lower === 'img') return 'image';
+      if (lower === 'audio' || lower === 'image') return lower;
+    }
+    return val || 'audio';
+  }, z.enum(['audio', 'image']).default('audio')),
+  url: z.string().default('placeholder:audio-track'),
   title: z.string().optional(),
   transcript: z.string().optional(),
 });

@@ -705,6 +705,133 @@ describe('slideValidation - Direct Schema & Architectural Invariant Tests', () =
     });
   });
 
+  describe('Caso J: Tolerancia y Normalización de referenceContent (Audio Track / Listening / Delimitadores)', () => {
+    it('debe normalizar pista de escucha R1.8 con mediaType: listening y sin url sin fallar la validación', () => {
+      const rawAudioSlideJson = JSON.stringify({
+        slides: [
+          {
+            id: 'slide-audio-1',
+            title: 'Listening Practice: Track R1.8',
+            layout: 'split_50_50',
+            referenceContent: {
+              id: 'ref-audio-1',
+              type: 'media',
+              mediaType: 'listening',
+              title: 'Audio Track R1.8'
+            },
+            interaction: {
+              id: 'int-1',
+              type: 'input_fields',
+              instruction: 'Listen to R1.8 and fill in the missing words:',
+              layoutMode: 'list',
+              listItems: [
+                { id: 'item-1', prompt: 'She {{blank}} yesterday', expectedAnswer: 'called', acceptedAnswers: ['called'] }
+              ]
+            }
+          }
+        ]
+      });
+
+      const slides = validateAndParseSlides(rawAudioSlideJson);
+      expect(slides).toHaveLength(1);
+
+      const slide = slides[0];
+      expect(slide.referenceContent).not.toBeNull();
+      expect(slide.referenceContent?.type).toBe('media');
+
+      if (slide.referenceContent?.type === 'media') {
+        // Invariante 1: mediaType normalizado estrictamente a 'audio'
+        expect(slide.referenceContent.mediaType).toBe('audio');
+        // Invariante 2: url completada con placeholder canónico al no haber URL remota
+        expect(slide.referenceContent.url).toBe('placeholder:audio-track');
+        expect(slide.referenceContent.title).toBe('Audio Track R1.8');
+      }
+    });
+
+    it('acepta url vacía en media sin provocar rechazo de la diapositiva', () => {
+      const rawSlideWithEmptyUrl = JSON.stringify({
+        slides: [
+          {
+            id: 'slide-audio-empty-url',
+            title: 'Listening Task',
+            layout: 'split_50_50',
+            referenceContent: {
+              id: 'ref-audio-empty',
+              type: 'media',
+              mediaType: 'audio',
+              url: '',
+              title: 'Track 3'
+            },
+            interaction: {
+              id: 'int-2',
+              type: 'selection',
+              instruction: 'Listen and choose',
+              options: [{ id: 'o1', text: 'Option A', isCorrect: true }]
+            }
+          }
+        ]
+      });
+
+      const slides = validateAndParseSlides(rawSlideWithEmptyUrl);
+      expect(slides).toHaveLength(1);
+      expect(slides[0].referenceContent?.type).toBe('media');
+    });
+
+    it('remueve limpiamente referenceContent inválido o vacío en lugar de rechazar la diapositiva', () => {
+      const rawSlideWithGarbageRef = JSON.stringify({
+        slides: [
+          {
+            id: 'slide-garbage-ref',
+            title: 'Speaking Activity',
+            referenceContent: {
+              type: 'unsupported_junk_type',
+              data: {}
+            },
+            interaction: {
+              id: 'int-3',
+              type: 'writing',
+              instruction: 'Speak or write',
+              prompt: 'Tell about yourself',
+              guidelines: []
+            }
+          }
+        ]
+      });
+
+      const slides = validateAndParseSlides(rawSlideWithGarbageRef);
+      expect(slides).toHaveLength(1);
+      // Invariante: referenceContent se limpia a null sin romper la diapositiva
+      expect(slides[0].referenceContent).toBeNull();
+      expect(slides[0].layout).toBe('single_column');
+      expect(slides[0].interaction?.type).toBe('writing');
+    });
+
+    it('SlideSchema.safeParse valida directamente mediaType listening y url omitida', () => {
+      const directSlide = {
+        id: 'direct-slide-1',
+        title: 'Direct Parse Audio',
+        layout: 'split_50_50' as const,
+        referenceContent: {
+          id: 'ref-direct',
+          type: 'media' as const,
+          mediaType: 'listening',
+          title: 'Track R1.8'
+        },
+        interaction: null
+      };
+
+      const result = SlideSchema.safeParse(directSlide);
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.referenceContent?.type).toBe('media');
+        if (result.data.referenceContent?.type === 'media') {
+          expect(result.data.referenceContent.mediaType).toBe('audio');
+          expect(result.data.referenceContent.url).toBe('placeholder:audio-track');
+        }
+      }
+    });
+  });
+
 });
 
 
