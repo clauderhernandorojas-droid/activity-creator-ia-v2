@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { SlideSchema, SelectionBlockSchema } from '../../../types/schema';
 import { evaluateSelection } from '../../evaluators/evaluateSelection';
 import {
@@ -7,6 +7,8 @@ import {
   SchemaValidationError,
   extractDisjunctiveAlternatives,
   cleanSelectionPrompt,
+  buildExtractionPrompt,
+  detectCrossActivityReference,
 } from '../digitizeBook';
 
 describe('slideValidation - Direct Schema & Architectural Invariant Tests', () => {
@@ -2304,6 +2306,251 @@ describe('slideValidation - Direct Schema & Architectural Invariant Tests', () =
         expect(q2.options).toHaveLength(3);
         expect(q2.options.find((o) => o.text === 'a uniform')?.isCorrect).toBe(true);
         expect(q2.options.find((o) => o.text === 'a brother')?.isCorrect).toBe(false);
+      }
+    });
+  });
+
+  // =========================================================================
+  describe('Caso S: Contexto de Sesión, Grounding y Observabilidad Diagnóstica', () => {
+    it('inyecta formalmente la sección PREVIOUS_SLIDE_CONTEXT en el prompt cuando se proporciona previousSlideContext', () => {
+      const samplePrevSlide = {
+        id: 'slide-prev-1',
+        title: 'Vocabulary: Morning Activities',
+        subtitle: 'Listen and repeat',
+        layout: 'single_column' as const,
+        interaction: {
+          id: 'int-prev-1',
+          type: 'input_fields' as const,
+          instruction: 'Match verbs with nouns:',
+          layoutMode: 'list' as const,
+          wordBank: ['get up early', 'have a coffee', 'take the bus'],
+          listItems: [
+            { id: 'item-1', prompt: 'get up early', expectedAnswer: 'get up early', acceptedAnswers: ['get up early'] },
+            { id: 'item-2', prompt: 'have a coffee', expectedAnswer: 'have a coffee', acceptedAnswers: ['have a coffee'] },
+          ],
+        },
+      };
+
+      const promptWithContext = buildExtractionPrompt(1, undefined, samplePrevSlide as any);
+
+      // Invariante: La delimitación formal requerida se inyecta íntegra
+      expect(promptWithContext).toContain('PREVIOUS_SLIDE_CONTEXT: Contenido y reactivos de la diapositiva inmediatamente anterior para resolver referencias cruzadas legítimas.');
+      expect(promptWithContext).toContain('Vocabulary: Morning Activities');
+      expect(promptWithContext).toContain('get up early');
+      expect(promptWithContext).toContain('have a coffee');
+
+      // Invariante: Sin contexto previo, la sección delimitada no se inyecta
+      const promptWithoutContext = buildExtractionPrompt(1, undefined, null);
+      expect(promptWithoutContext).not.toContain('PREVIOUS_SLIDE_CONTEXT: Contenido y reactivos');
+    });
+
+    it('detectCrossActivityReference detecta patrones de referencia legítimos a ejercicios previos', () => {
+      expect(detectCrossActivityReference('Complete the sentences with the phrases in 2a.')).toContain('2a');
+      expect(detectCrossActivityReference('Use the verbs from 1 to complete the text.')).toContain('1');
+      expect(detectCrossActivityReference('Look at the dialogue in 2. Answer the questions.')).toContain('2');
+      expect(detectCrossActivityReference('Refer to exercise 3 and check your answers.')).toContain('exercise 3');
+      expect(detectCrossActivityReference('Complete the sentences with words from the box above.')).toContain('box above');
+
+      // Frases comunes no referenciales no deben producir falsos positivos
+      expect(detectCrossActivityReference('Work in pairs. Ask and answer.')).toBeNull();
+      expect(detectCrossActivityReference('Put the words in order.')).toBeNull();
+      expect(detectCrossActivityReference('Read the article and answer the questions.')).toBeNull();
+      expect(detectCrossActivityReference('Complete the sentences with the words in bold.')).toBeNull();
+    });
+
+    it('reutiliza legítimamente ítems de previousSlideContext cuando el ejercicio requiere completar a partir de una actividad previa (Grounding)', () => {
+      const samplePrevSlide = {
+        id: 'slide-prev-2a',
+        title: '2a Daily Routines',
+        layout: 'single_column' as const,
+        interaction: {
+          id: 'int-2a',
+          type: 'input_fields' as const,
+          instruction: 'Match verbs with pictures:',
+          layoutMode: 'list' as const,
+          wordBank: ['get up early', 'have a coffee', 'take the bus', 'leave work'],
+          listItems: [
+            { id: 'it-1', prompt: 'get up early', expectedAnswer: 'get up early', acceptedAnswers: ['get up early'] },
+            { id: 'it-2', prompt: 'have a coffee', expectedAnswer: 'have a coffee', acceptedAnswers: ['have a coffee'] },
+          ],
+        },
+      };
+
+      const rawExerciseSlide = JSON.stringify({
+        slides: [
+          {
+            id: 'slide-2b',
+            title: '2b Practice',
+            subtitle: 'Complete the sentences with the phrases in 2a:',
+            layout: 'single_column',
+            interaction: {
+              id: 'int-2b',
+              type: 'input_fields',
+              instruction: 'Complete the sentences with the phrases in 2a:',
+              layoutMode: 'list',
+              wordBank: [],
+              listItems: [
+                {
+                  id: 'item-1',
+                  prompt: '1. In the morning, I usually ___ before breakfast.',
+                  expectedAnswer: 'get up early',
+                  acceptedAnswers: ['get up early'],
+                },
+              ],
+            },
+          },
+        ],
+      });
+
+      const slides = validateAndParseSlides(rawExerciseSlide, samplePrevSlide as any);
+      expect(slides).toHaveLength(1);
+      const slide = slides[0];
+
+      // Invariante 1: Grounding legítimo - wordBank poblado a partir de previousSlideContext
+      if (slide.interaction?.type === 'input_fields') {
+        expect(slide.interaction.wordBank).toBeDefined();
+        expect(slide.interaction.wordBank).toContain('get up early');
+        expect(slide.interaction.wordBank).toContain('have a coffee');
+      }
+
+      // Invariante 2: Diagnóstico formal indica resolución exitosa sin referencias no resueltas
+      expect(slide.metadata?.diagnostics?.unresolvedContextReference).toBe(false);
+      expect(slide.metadata?.diagnostics?.resolvedFromPreviousContext).toBe(true);
+    });
+
+    it('emite aviso diagnóstico formal y console.warn cuando el ejercicio refiere a una actividad previa y previousSlideContext no está disponible', () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      const rawSlideWithoutContext = JSON.stringify({
+        slides: [
+          {
+            id: 'slide-orphan-ref',
+            title: 'Exercise 2b',
+            subtitle: 'Use the phrases in 2a to complete the sentences.',
+            layout: 'single_column',
+            interaction: {
+              id: 'int-orphan-1',
+              type: 'input_fields',
+              instruction: 'Use the phrases in 2a to complete the sentences:',
+              layoutMode: 'list',
+              listItems: [
+                {
+                  id: 'item-1',
+                  prompt: '1. I usually ___ at 8:00 AM.',
+                  expectedAnswer: '',
+                  acceptedAnswers: [],
+                },
+              ],
+            },
+          },
+        ],
+      });
+
+      const slides = validateAndParseSlides(rawSlideWithoutContext, null);
+      expect(slides).toHaveLength(1);
+      const slide = slides[0];
+
+      // Invariante 1: Notificación diagnóstica formal en metadatos
+      expect(slide.metadata?.diagnostics?.unresolvedContextReference).toBe(true);
+      expect(slide.metadata?.diagnostics?.warning).toContain('Actividad con referencia cruzada detectada sin diapositiva previa suministrada');
+
+      // Invariante 2: Log estructurado console.warn emitido
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('[digitizeBook] Actividad con referencia cruzada sin diapositiva previa suministrada')
+      );
+
+      warnSpy.mockRestore();
+    });
+
+    it('previene alucinación no fundamentada (Zero-Hallucination) purgando bancos sintéticos no corroborados cuando no hay contexto previo', () => {
+      const rawSlideWithHallucinatedBank = JSON.stringify({
+        slides: [
+          {
+            id: 'slide-hallucinated',
+            title: '3b Word Focus',
+            subtitle: 'Complete using the words in 3a.',
+            layout: 'single_column',
+            interaction: {
+              id: 'int-hallucinated-1',
+              type: 'input_fields',
+              instruction: 'Complete using the words in 3a:',
+              layoutMode: 'list',
+              // Banco sintético inventado por el modelo sin evidencia en el recorte ni en contexto previo
+              wordBank: ['astronomy', 'telescope', 'galaxy', 'planetarium'],
+              listItems: [
+                {
+                  id: 'item-1',
+                  prompt: '1. We saw a new ___ last night.',
+                  expectedAnswer: 'galaxy',
+                  acceptedAnswers: ['galaxy'],
+                },
+              ],
+            },
+          },
+        ],
+      });
+
+      const slides = validateAndParseSlides(rawSlideWithHallucinatedBank, null);
+      expect(slides).toHaveLength(1);
+      const slide = slides[0];
+
+      // Invariante 1: Marcado como referencia no resuelta
+      expect(slide.metadata?.diagnostics?.unresolvedContextReference).toBe(true);
+
+      // Invariante 2: Banco sintético inventado se purga para evitar alucinación no fundamentada
+      if (slide.interaction?.type === 'input_fields') {
+        expect(slide.interaction.wordBank).toEqual([]);
+      }
+    });
+
+    it('resuelve referencias en cadena entre actividades múltiples extraídas en el mismo lote (in-batch context)', () => {
+      const rawMultiSlideBatch = JSON.stringify({
+        slides: [
+          {
+            id: 'slide-batch-1',
+            title: '1. Vocabulary Focus',
+            subtitle: 'Study the verbs',
+            layout: 'single_column',
+            interaction: {
+              id: 'int-batch-1',
+              type: 'input_fields',
+              instruction: 'Study the verbs:',
+              layoutMode: 'list',
+              wordBank: ['deliver', 'manage', 'organize', 'supervise'],
+              listItems: [
+                { id: 'i-1', prompt: 'deliver parcels', expectedAnswer: 'deliver', acceptedAnswers: ['deliver'] },
+              ],
+            },
+          },
+          {
+            id: 'slide-batch-2',
+            title: '2. Sentences Practice',
+            subtitle: 'Complete the sentences using the verbs in 1.',
+            layout: 'single_column',
+            interaction: {
+              id: 'int-batch-2',
+              type: 'input_fields',
+              instruction: 'Complete the sentences using the verbs in 1:',
+              layoutMode: 'list',
+              wordBank: [],
+              listItems: [
+                { id: 'i-2', prompt: 'She has to ___ a team of ten people.', expectedAnswer: 'manage', acceptedAnswers: ['manage'] },
+              ],
+            },
+          },
+        ],
+      });
+
+      const slides = validateAndParseSlides(rawMultiSlideBatch, null);
+      expect(slides).toHaveLength(2);
+
+      const slide2 = slides[1];
+      // Invariante: Slide 2 resuelve su referencia contra Slide 1 del mismo lote
+      expect(slide2.metadata?.diagnostics?.unresolvedContextReference).toBe(false);
+      expect(slide2.metadata?.diagnostics?.resolvedFromPreviousContext).toBe(true);
+      if (slide2.interaction?.type === 'input_fields') {
+        expect(slide2.interaction.wordBank).toContain('manage');
+        expect(slide2.interaction.wordBank).toContain('deliver');
       }
     });
   });

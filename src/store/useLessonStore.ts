@@ -744,7 +744,8 @@ export const useLessonStore = create<LessonState>()(
 
         set({ ocrProcessing: true, activeOcrAbortController: controller, ocrError: null });
         try {
-          const extracted = await digitizeBook(images, controller.signal);
+          const lastSlide = get().lesson.slides[get().lesson.slides.length - 1] || null;
+          const extracted = await digitizeBook(images, controller.signal, { previousSlideContext: lastSlide });
           set({
             ocrProcessing: false,
             activeOcrAbortController: null,
@@ -787,9 +788,11 @@ export const useLessonStore = create<LessonState>()(
         });
 
         try {
+          const lastSlide = state.lesson.slides[state.lesson.slides.length - 1] || null;
           const extracted = await digitizeBook(
             nextImages.length > 0 ? nextImages : [fileOrUrl],
-            controller.signal
+            controller.signal,
+            { previousSlideContext: lastSlide }
           );
           set({
             ocrProcessing: false,

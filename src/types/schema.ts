@@ -314,6 +314,7 @@ export const SlideSchema = z.object({
   notes: z.string().optional(),
   isGraded: z.boolean().default(true).optional(),
   sourceImageSnippetUrl: z.string().optional(),
+  metadata: z.record(z.string(), z.any()).optional(),
 });
 
 export type Slide = z.infer<typeof SlideSchema>;
@@ -394,6 +395,7 @@ export const ExtractedBlockSchema = z.object({
   sourceImages: z.array(z.string()).optional(),
   contextBody: z.string().optional(),
   parsedData: z.record(z.string(), z.any()).optional(),
+  metadata: z.record(z.string(), z.any()).optional(),
 });
 
 export type ExtractedBlock = z.infer<typeof ExtractedBlockSchema>;

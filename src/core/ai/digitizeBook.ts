@@ -700,6 +700,10 @@ export const STRUCTURED_SLIDE_SCHEMA = {
               evaluationRubric: { type: 'string' }
             },
             required: ['type', 'id', 'instruction']
+          },
+          metadata: {
+            type: 'object',
+            description: 'Optional slide metadata or diagnostic notifications (e.g. diagnostics: { unresolvedContextReference: boolean })'
           }
         },
         required: ['id', 'title', 'layout']
@@ -1222,6 +1226,157 @@ export function isNegativeDiscriminationInstruction(text?: string): boolean {
 }
 
 /**
+ * Formats previous slide content cleanly for injection into PREVIOUS_SLIDE_CONTEXT prompt section.
+ */
+export function formatPreviousSlideContext(slide: Slide): string {
+  const parts: string[] = [];
+  parts.push(`Title: ${slide.title}`);
+  if (slide.subtitle) parts.push(`Subtitle: ${slide.subtitle}`);
+  if (slide.contextBody) parts.push(`Context/Body: ${slide.contextBody}`);
+
+  if (slide.referenceContent) {
+    const rc = slide.referenceContent as any;
+    if (rc.title) parts.push(`Reference Title: ${rc.title}`);
+    if (rc.content) parts.push(`Reference Content:\n${rc.content}`);
+    if (rc.body && rc.body !== rc.content) parts.push(`Reference Body:\n${rc.body}`);
+    if (rc.columns) {
+      parts.push(`Reference Columns:\n${JSON.stringify(rc.columns)}`);
+    }
+    if (rc.headers && rc.rows) {
+      parts.push(`Reference Table Headers: ${rc.headers.join(' | ')}`);
+      parts.push(`Reference Table Rows:\n${rc.rows.map((r: any[]) => r.join(' | ')).join('\n')}`);
+    }
+  }
+
+  if (slide.interaction) {
+    const it = slide.interaction as any;
+    parts.push(`Interaction Type: ${it.type}`);
+    if (it.instruction) parts.push(`Instruction: ${it.instruction}`);
+    if (it.wordBank && it.wordBank.length > 0) parts.push(`Word Bank: ${it.wordBank.join(', ')}`);
+    if (it.listItems && it.listItems.length > 0) {
+      parts.push(`Items:\n${it.listItems.map((item: any, i: number) => `${i + 1}. ${item.prompt} -> Expected: ${item.expectedAnswer}`).join('\n')}`);
+    }
+    if (it.questions && it.questions.length > 0) {
+      parts.push(`Questions:\n${it.questions.map((q: any, i: number) => {
+        const opts = (q.options || []).map((o: any) => `${o.text}${o.isCorrect ? ' (CORRECT)' : ''}`).join(' / ');
+        return `${i + 1}. ${q.prompt || q.question} [Options: ${opts}]`;
+      }).join('\n')}`);
+    }
+    if (it.options && it.options.length > 0) {
+      parts.push(`Options:\n${it.options.map((o: any) => `${o.text}${o.isCorrect ? ' (CORRECT)' : ''}`).join(', ')}`);
+    }
+    if (it.tokens && it.tokens.length > 0) {
+      parts.push(`Tokens:\n${it.tokens.map((t: any) => `${t.text} (${t.category})`).join(', ')}`);
+    }
+    if (it.sourceItems && it.sourceItems.length > 0) {
+      parts.push(`Source Items:\n${it.sourceItems.map((s: any) => `${s.text} -> ${s.bucketId}`).join(', ')}`);
+    }
+    if (it.targetSlots && it.targetSlots.length > 0) {
+      parts.push(`Target Slots:\n${it.targetSlots.map((ts: any) => ts.label).join(', ')}`);
+    }
+    if (it.buckets && it.buckets.length > 0) {
+      parts.push(`Buckets: ${it.buckets.map((b: any) => b.name).join(', ')}`);
+    }
+  }
+
+  return parts.join('\n');
+}
+
+/**
+ * Extracts candidate words, phrases, and items from previous slide context for legitimate grounding.
+ */
+export function extractItemsFromSlideContext(slide: Slide): {
+  phrases: string[];
+  words: string[];
+  listItems: Array<{ prompt: string; expectedAnswer?: string }>;
+} {
+  const phrases: string[] = [];
+  const words: string[] = [];
+  const listItems: Array<{ prompt: string; expectedAnswer?: string }> = [];
+
+  if (slide.interaction) {
+    const it = slide.interaction as any;
+    if (Array.isArray(it.wordBank)) {
+      words.push(...it.wordBank);
+      phrases.push(...it.wordBank);
+    }
+    if (Array.isArray(it.listItems)) {
+      it.listItems.forEach((item: any) => {
+        if (item.prompt) {
+          listItems.push({ prompt: item.prompt, expectedAnswer: item.expectedAnswer });
+          phrases.push(item.prompt);
+        }
+        if (item.expectedAnswer) {
+          words.push(item.expectedAnswer);
+          phrases.push(item.expectedAnswer);
+        }
+      });
+    }
+    if (Array.isArray(it.questions)) {
+      it.questions.forEach((q: any) => {
+        if (q.prompt || q.question) phrases.push(q.prompt || q.question);
+        if (Array.isArray(q.options)) {
+          q.options.forEach((o: any) => {
+            if (o.text) phrases.push(o.text);
+          });
+        }
+      });
+    }
+    if (Array.isArray(it.options)) {
+      it.options.forEach((o: any) => {
+        if (o.text) phrases.push(o.text);
+      });
+    }
+    if (Array.isArray(it.tokens)) {
+      it.tokens.forEach((t: any) => {
+        if (t.text) phrases.push(t.text);
+      });
+    }
+  }
+
+  if (slide.referenceContent) {
+    const rc = slide.referenceContent as any;
+    if (rc.content) phrases.push(rc.content);
+    if (rc.body) phrases.push(rc.body);
+    if (Array.isArray(rc.columns)) {
+      rc.columns.forEach((col: any) => {
+        if (Array.isArray(col.items)) phrases.push(...col.items);
+      });
+    }
+  }
+
+  const uniquePhrases = Array.from(new Set(phrases.map((p) => p.trim()))).filter(Boolean);
+  const uniqueWords = Array.from(new Set(words.map((w) => w.trim()))).filter(Boolean);
+
+  return { phrases: uniquePhrases, words: uniqueWords, listItems };
+}
+
+/**
+ * Detects whether an instruction or text explicitly references an external/previous activity
+ * (e.g., "in 2a", "from the box in 1", "using the verbs in 2b", "from activity 3", "from the box above", etc.)
+ */
+export function detectCrossActivityReference(text?: string): string | null {
+  if (!text) return null;
+  const patterns: RegExp[] = [
+    /\b(?:in|from|refer\s+to|look\s+at|use|using|with)\s+(?:the\s+)?(?:(?:exercise|activity|dialogue|phrases?|words?|verbs?|sentences?|box|chart|table|part|section)\s+)*(?:(?:in|from)\s+)?(?:the\s+)?(?:box|chart|table|dialogue|list\s+)?(?:\b[0-9]+[a-z]?\b|\babove\b)/i,
+    /\b(?:exercise|activity|part|section)\s+([0-9]+[a-z]?|[a-f]\b)/i,
+    /\bfrom\s+(?:the\s+)?(?:box|chart|dialogue|table|list)\s+above\b/i,
+  ];
+
+  for (const regex of patterns) {
+    const match = text.match(regex);
+    if (match) {
+      const captured = match[0].trim();
+      if (!/\b(?:in\s+(?:english|pairs|groups|class|order|bold|italics|turn|addition|fact|general|detail))\b/i.test(captured)) {
+        return captured;
+      }
+    }
+  }
+
+  return null;
+}
+
+/**
  * Extracts interaction items into prompt/expectedAnswer pairs for referenceContent deduplication.
  */
 export function extractInteractionItemsForDeduplication(
@@ -1277,7 +1432,10 @@ export function extractInteractionItemsForDeduplication(
  * Validates raw model output strictly against canonical SlideSchema.
  * Throws explicit SchemaValidationError if validation fails.
  */
-export function validateAndParseSlides(rawJsonText: string): Slide[] {
+export function validateAndParseSlides(
+  rawJsonText: string,
+  previousSlideContext?: Slide | null
+): Slide[] {
   const cleanJson = rawJsonText.replace(/```(?:json)?/gi, '').replace(/```/g, '').trim();
   let parsedJson: any;
   try {
@@ -1866,6 +2024,78 @@ export function validateAndParseSlides(rawJsonText: string): Slide[] {
       }
     }
 
+    // Observabilidad y Diagnóstico de Contexto Faltante / Resolución de Referencias
+    const textToScan = `${rawSlide.title || ''} ${rawSlide.subtitle || ''} ${(rawSlide.interaction as any)?.instruction || ''}`.trim();
+    const crossRef = detectCrossActivityReference(textToScan);
+    const effectiveContext = (idx > 0 && validatedSlides[idx - 1]) ? validatedSlides[idx - 1] : (previousSlideContext || null);
+
+    if (crossRef) {
+      if (effectiveContext) {
+        // Grounding legítimo con contexto previo
+        const extracted = extractItemsFromSlideContext(effectiveContext);
+
+        if (rawSlide.interaction && rawSlide.interaction.type === 'input_fields') {
+          if (!Array.isArray(rawSlide.interaction.wordBank) || rawSlide.interaction.wordBank.length === 0) {
+            const candidatePool = extracted.words.length > 0 ? extracted.words : extracted.phrases;
+            if (candidatePool.length > 0) {
+              rawSlide.interaction.wordBank = candidatePool.slice(0, 12);
+            }
+          }
+        } else if (rawSlide.interaction && rawSlide.interaction.type === 'selection') {
+          if ((!Array.isArray(rawSlide.interaction.options) || rawSlide.interaction.options.length === 0) &&
+              (!Array.isArray(rawSlide.interaction.questions) || rawSlide.interaction.questions.length === 0)) {
+            if (extracted.phrases.length >= 2) {
+              rawSlide.interaction.options = extracted.phrases.slice(0, 8).map((p, pIdx) => ({
+                id: `opt-${pIdx + 1}`,
+                text: p,
+                isCorrect: pIdx === 0,
+              }));
+            }
+          }
+        }
+
+        rawSlide.metadata = {
+          ...(rawSlide.metadata || {}),
+          diagnostics: {
+            ...((rawSlide.metadata as any)?.diagnostics || {}),
+            unresolvedContextReference: false,
+            resolvedFromPreviousContext: true,
+            referencedActivity: crossRef,
+          },
+        };
+      } else {
+        // Contexto no disponible: emitir advertencia estructurada y diagnóstico formal
+        console.warn(
+          `[digitizeBook] Actividad con referencia cruzada sin diapositiva previa suministrada: "${crossRef}" en "${rawSlide.title || (rawSlide.interaction as any)?.instruction || ''}"`
+        );
+        rawSlide.metadata = {
+          ...(rawSlide.metadata || {}),
+          diagnostics: {
+            ...((rawSlide.metadata as any)?.diagnostics || {}),
+            unresolvedContextReference: true,
+            referencedActivity: crossRef,
+            warning: `Actividad con referencia cruzada detectada sin diapositiva previa suministrada: "${crossRef}"`,
+          },
+        };
+
+        // Principio de Zero-Hallucination: no inventar bancos de palabras sustitutos ni pautas artificiales
+        if (rawSlide.interaction && rawSlide.interaction.type === 'input_fields') {
+          if (Array.isArray(rawSlide.interaction.wordBank) && rawSlide.interaction.wordBank.length > 0) {
+            const isSyntheticBank = rawSlide.interaction.wordBank.every(
+              (w: string) => !textToScan.toLowerCase().includes(w.toLowerCase()) && !(rawSlide.referenceContent?.content || '').toLowerCase().includes(w.toLowerCase())
+            );
+            if (isSyntheticBank && !rawSlide.referenceContent) {
+              rawSlide.interaction.wordBank = [];
+            }
+          }
+        }
+      }
+    } else if (rawSlide.metadata?.diagnostics?.unresolvedContextReference) {
+      console.warn(
+        `[digitizeBook] Actividad con referencia cruzada sin diapositiva previa suministrada reportada por el modelo en "${rawSlide.title || (rawSlide.interaction as any)?.instruction || ''}"`
+      );
+    }
+
     const parseResult = SlideSchema.safeParse(rawSlide);
 
     if (!parseResult.success) {
@@ -1977,6 +2207,7 @@ export function slideToExtractedBlock(
     sourceImageSnippetUrl: primaryImage || undefined,
     sourceImages: imageList.length > 0 ? imageList : undefined,
     contextBody,
+    metadata: slide.metadata,
     parsedData: {
       ...slide,
       title: slide.title,
@@ -1988,6 +2219,8 @@ export function slideToExtractedBlock(
       interactionType: interaction?.type === 'input_fields' ? 'fill_blanks' : interaction?.type,
       items: interaction?.type === 'input_fields' ? interaction.listItems : undefined,
       allowMultiple: interaction?.type === 'selection' ? Boolean(interaction.allowMultiple) : undefined,
+      metadata: slide.metadata,
+      diagnostics: (slide.metadata as any)?.diagnostics,
     },
   };
 }
@@ -1995,10 +2228,19 @@ export function slideToExtractedBlock(
 /**
  * Builds the strict, unambiguous pedagogical System Prompt enforcing native Slide structured outputs.
  */
-function buildExtractionPrompt(imageCount: number, forcedTargetType?: ForcedTargetArchetype): string {
+export function buildExtractionPrompt(
+  imageCount: number,
+  forcedTargetType?: ForcedTargetArchetype,
+  previousSlideContext?: Slide | null
+): string {
   return `You are an expert ELT (English Language Teaching) author, textbook editor, and master teacher.
 You must analyze the provided ${imageCount} clipping(s) and emit directly a JSON object containing an array of "slides" matching the canonical ELT Slide schema.
-
+${previousSlideContext ? `
+================================================================================
+PREVIOUS_SLIDE_CONTEXT: Contenido y reactivos de la diapositiva inmediatamente anterior para resolver referencias cruzadas legítimas.
+${formatPreviousSlideContext(previousSlideContext)}
+================================================================================
+` : ''}
 ROOT RESPONSE FORMAT:
 {
   "slides": [
@@ -2010,7 +2252,8 @@ ROOT RESPONSE FORMAT:
       "isGraded": true or false,
       "contextBody": "Optional literal explanatory narrative, grammar rules, tips, or bullet points accompanying the activity",
       "referenceContent": null or { ...ReferenceBlock... },
-      "interaction": null or { ...InteractionBlock... }
+      "interaction": null or { ...InteractionBlock... },
+      "metadata": { "diagnostics": { "unresolvedContextReference": true or false } }
     }
   ]
 }
@@ -2020,10 +2263,13 @@ MULTI-SLIDE SEGMENTATION & CROSS-REFERENCING DIRECTIVES:
    - When the input image contains TWO OR MORE pedagogically independent and delimited activities (e.g., sequential numbering or labeling such as "1", "2" or "a", "b", or separate exercise headers/instructions):
      * The model MUST emit one distinct element in the "slides" array for EACH identified activity (e.g. [slide-1, slide-2, ...]).
      * It is STRICTLY FORBIDDEN to ignore visible activities or to arbitrarily merge separate, independent exercises into a single slide.
-2. CROSS-REFERENCING RESOLUTION INVARIANT:
-   - When an activity includes instructions or prompts that explicitly reference another section or exercise visible in the clipping (e.g., "in 1", "from the box above", "with the verbs above", "from the dialogue in 2a"):
-     * The referenced information MUST act as active resolution context to exhaustively populate all candidate options, categories (buckets), tokens, or answer pairs of the dependent activity.
-     * In the slide of the dependent activity, NEVER guess, hallucinate, or omit referenced elements that are clearly present in the capture; extract and populate them faithfully and exhaustively.
+2. CROSS-REFERENCING RESOLUTION INVARIANT, GROUNDING & PREVIOUS_SLIDE_CONTEXT:
+   - When an activity includes instructions or prompts that explicitly reference another section or exercise (e.g., "in 1", "from the box in 2a", "with the verbs above", "from the dialogue in 2"):
+     * GROUNDING CON 'PREVIOUS_SLIDE_CONTEXT': Si la actividad hace referencia a un ejercicio previo y se proporciona la sección 'PREVIOUS_SLIDE_CONTEXT', el modelo DEBE reutilizar y extraer legítimamente las frases, palabras, ítems o claves de dicho contexto para resolver y configurar la actividad actual.
+     * CAPACIDAD DEDUCTIVA LEGÍTIMA: El modelo debe usar su razonamiento pedagógico para deducir claves de respuesta ('isCorrect', 'expectedAnswer') y configurar la interacción idónea a partir de la evidencia disponible en el recorte y en 'PREVIOUS_SLIDE_CONTEXT'.
+     * PROHIBICIÓN DE SÍNTESIS NO FUNDAMENTADA (ZERO-HALLUCINATION): El modelo tiene estrictamente prohibido inventar bancos de vocabulario, pautas de redacción, palabras o contenidos sustitutos que no existan ni en el recorte actual ni en 'PREVIOUS_SLIDE_CONTEXT'.
+     * OBSERVABILIDAD DE CONTEXTO FALTANTE: Si la consigna del recorte refiere a un ejercicio previo pero 'PREVIOUS_SLIDE_CONTEXT' no fue suministrado (o es nulo) y el material previo no es visible en la captura, el modelo NO debe inventar contenido sustituto; debe emitir los reactivos observables y registrar en metadatos:
+       "metadata": { "diagnostics": { "unresolvedContextReference": true } }
 3. PRINCIPIO UNIVERSAL DE DENSIDAD MÁXIMA Y ERGONOMÍA (SLIDE ERGONOMICS & COGNITIVE LOAD):
    - Al digitalizar cualquier actividad interactiva basada en un texto o diálogo de referencia:
      * INTEGRIDAD DEL CONTENIDO DE SOPORTE: El texto de lectura o soporte DEBE mantenerse íntegro en el contenedor de referencia ('contextBody' / 'referenceContent'). Queda estrictamente prohibido recortar, resumir o mutilar el material de lectura de apoyo.
@@ -2169,7 +2415,7 @@ AUTONOMOUS RESOLUTION:
 export async function digitizeBook(
   images: string | string[],
   signal?: AbortSignal,
-  options?: { forcedTargetType?: ForcedTargetArchetype }
+  options?: { forcedTargetType?: ForcedTargetArchetype; previousSlideContext?: Slide | null }
 ): Promise<(ExtractedBlock & Slide)[]> {
   if (signal?.aborted) {
     const err = new Error('Operación cancelada por el usuario');
@@ -2184,7 +2430,7 @@ export async function digitizeBook(
     return cloneSampleBlocks(primaryImage) as any;
   }
 
-  const promptText = buildExtractionPrompt(imageList.length, options?.forcedTargetType);
+  const promptText = buildExtractionPrompt(imageList.length, options?.forcedTargetType, options?.previousSlideContext);
 
   // Strategy 1: Google Gemini SDK (@google/genai) if VITE_GEMINI_API_KEY is available
   const geminiApiKey = import.meta.env.VITE_GEMINI_API_KEY;
@@ -2244,7 +2490,7 @@ export async function digitizeBook(
 
           const rawText = response.text?.trim();
           if (rawText) {
-            const validatedSlides = validateAndParseSlides(rawText);
+            const validatedSlides = validateAndParseSlides(rawText, options?.previousSlideContext);
             return validatedSlides.map((slide) => slideToExtractedBlock(slide, primaryImage, imageList));
           }
         } catch (modelErr: any) {
@@ -2326,7 +2572,7 @@ export async function digitizeBook(
           const data = await response.json();
           const rawContent = data.choices?.[0]?.message?.content;
           if (rawContent) {
-            const validatedSlides = validateAndParseSlides(rawContent);
+            const validatedSlides = validateAndParseSlides(rawContent, options?.previousSlideContext);
             return validatedSlides.map((slide) => slideToExtractedBlock(slide, primaryImage, imageList));
           }
         } else {
