@@ -1,6 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import { SlideSchema } from '../../../types/schema';
-import { validateAndParseSlides, SchemaValidationError, extractDisjunctiveAlternatives } from '../digitizeBook';
+import {
+  validateAndParseSlides,
+  SchemaValidationError,
+  extractDisjunctiveAlternatives,
+  cleanSelectionPrompt,
+} from '../digitizeBook';
 
 describe('slideValidation - Direct Schema & Architectural Invariant Tests', () => {
 
@@ -994,6 +999,114 @@ describe('slideValidation - Direct Schema & Architectural Invariant Tests', () =
         expect(slides[0].interaction.prompt).toBe('Do you agree or disagree?');
         expect(slides[0].interaction.minWords).toBe(30);
         expect(slides[0].interaction.guidelines).toHaveLength(2);
+      }
+    });
+  });
+
+  // =========================================================================
+  // CASO L: Limpieza de Prompts en Selección y Cohesión de CCQs Globales
+  // =========================================================================
+  describe('Caso L: Limpieza de Prompts en Selección y Cohesión de CCQs Globales', () => {
+    it('cleanSelectionPrompt elimina tokens espurios de completacion [ ? ], [blank] y {{blank}} en preguntas directas', () => {
+      // 1. Tokens [ ? ] o [?]
+      expect(cleanSelectionPrompt('Do these people agree or disagree? [ ? ]')).toBe(
+        'Do these people agree or disagree?'
+      );
+      expect(cleanSelectionPrompt('[ ? ] Which sentence is grammatically correct?')).toBe(
+        'Which sentence is grammatically correct?'
+      );
+
+      // 2. {{blank}} o ___ en preguntas directas
+      expect(cleanSelectionPrompt('Do the speakers agree or disagree? {{blank}}')).toBe(
+        'Do the speakers agree or disagree?'
+      );
+      expect(cleanSelectionPrompt('___ Is the sentence talking about the past or the present?')).toBe(
+        'Is the sentence talking about the past or the present?'
+      );
+
+      // 3. Preserva {{blank}} en enunciados Cloze de completación contextual legítimos
+      expect(cleanSelectionPrompt('Yesterday I {{blank}} at home.')).toBe('Yesterday I {{blank}} at home.');
+    });
+
+    it('cleanSelectionPrompt elimina la duplicación del diálogo cuando ya está en referenceContent', () => {
+      const dialogueText = 'Speaker A: I love action movies.\nSpeaker B: Really? I find them noisy.';
+      const promptWithDuplicate =
+        'Speaker A: I love action movies.\nSpeaker B: Really? I find them noisy.\n\nDo these people agree or disagree?';
+
+      expect(cleanSelectionPrompt(promptWithDuplicate, dialogueText)).toBe(
+        'Do these people agree or disagree?'
+      );
+    });
+
+    it('validateAndParseSlides limpia tokens de completacion y deduplica preguntas CCQ globales idénticas', () => {
+      const rawMultiCCQSlide = JSON.stringify({
+        slides: [
+          {
+            id: 'slide-ccq-cohesion',
+            title: 'Grammar Concept Check: Agreements',
+            layout: 'split_50_50',
+            referenceContent: {
+              id: 'ref-dialogues',
+              type: 'text',
+              content: 'Speaker 1: I think tea is great.\nSpeaker 2: Absolutely, I agree completely.',
+              category: 'reading_passage'
+            },
+            interaction: {
+              id: 'int-ccq-cohesion',
+              type: 'selection',
+              instruction: 'Read the dialogue and answer the question:',
+              questions: [
+                {
+                  id: 'q-row-1',
+                  prompt: 'Speaker 1: I think tea is great.\nSpeaker 2: Absolutely, I agree completely.\n\nDo these people agree or disagree? [ ? ]',
+                  mode: 'single_choice',
+                  options: [
+                    { id: 'opt-1', text: 'agree', isCorrect: true },
+                    { id: 'opt-2', text: 'disagree', isCorrect: false }
+                  ]
+                },
+                {
+                  id: 'q-row-2',
+                  prompt: 'Do these people agree or disagree? [ ? ]',
+                  mode: 'single_choice',
+                  options: [
+                    { id: 'opt-1', text: 'agree', isCorrect: true },
+                    { id: 'opt-2', text: 'disagree', isCorrect: false }
+                  ]
+                },
+                {
+                  id: 'q-row-3',
+                  prompt: 'Do these people agree or disagree? {{blank}}',
+                  mode: 'single_choice',
+                  options: [
+                    { id: 'opt-1', text: 'agree', isCorrect: true },
+                    { id: 'opt-2', text: 'disagree', isCorrect: false }
+                  ]
+                }
+              ]
+            }
+          }
+        ]
+      });
+
+      const slides = validateAndParseSlides(rawMultiCCQSlide);
+      expect(slides).toHaveLength(1);
+
+      const slide = slides[0];
+      expect(slide.interaction?.type).toBe('selection');
+
+      if (slide.interaction?.type === 'selection') {
+        // Invariante 1: Cohesión de CCQ global colapsa las 3 preguntas redundantes a 1 única pregunta
+        expect(slide.interaction.questions).toHaveLength(1);
+
+        const singleQuestion = slide.interaction.questions![0];
+        // Invariante 2: Limpieza de tokens espurios [ ? ] y {{blank}}, y de diálogo duplicado
+        expect(singleQuestion.prompt).toBe('Do these people agree or disagree?');
+        expect(singleQuestion.options).toHaveLength(2);
+        expect(singleQuestion.options[0].text).toBe('agree');
+        expect(singleQuestion.options[0].isCorrect).toBe(true);
+        expect(singleQuestion.options[1].text).toBe('disagree');
+        expect(singleQuestion.options[1].isCorrect).toBe(false);
       }
     });
   });

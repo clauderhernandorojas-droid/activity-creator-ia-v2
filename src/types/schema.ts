@@ -132,8 +132,8 @@ export const SelectionOptionSchema = z.object({
 
 export const SelectionQuestionSchema = z.object({
   id: z.string(),
-  prompt: z.string().describe("Contextual statement or sentence containing a '{{blank}}' placeholder where the user selection must fit.").default(''),
-  question: z.string().describe("Contextual statement or sentence containing a '{{blank}}' placeholder where the user selection must fit.").optional(),
+  prompt: z.string().describe("Clear direct question or statement in clean text. Strictly forbidden to insert completion tokens or blanks like '[ ? ]', '{{blank}}', or '___'.").default(''),
+  question: z.string().describe("Clear direct question or statement in clean text. Strictly forbidden to insert completion tokens or blanks like '[ ? ]', '{{blank}}', or '___'.").optional(),
   contextText: z.string().optional(),
   mode: z.enum(['single_choice', 'multiple_choice', 'dropdown']),
   options: z.array(SelectionOptionSchema),

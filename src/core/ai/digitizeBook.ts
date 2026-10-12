@@ -720,7 +720,15 @@ export function sanitizeReferenceContent(rawRef: any, idx: number): any {
         return null;
       }
     }
-    if (!ref.category) ref.category = 'grammar_note';
+    if (!ref.category || !['reading', 'grammar_note', 'instructions', 'dialogue'].includes(ref.category)) {
+      if (ref.category === 'reading_passage' || ref.category === 'passage' || ref.category === 'article') {
+        ref.category = 'reading';
+      } else if (ref.category === 'conversation') {
+        ref.category = 'dialogue';
+      } else {
+        ref.category = 'grammar_note';
+      }
+    }
     return ref;
   }
 
@@ -821,6 +829,54 @@ export function extractDisjunctiveAlternatives(text: string): { prompt: string; 
     prompt: matchedQuestion,
     options: [finalA, finalB],
   };
+}
+
+/**
+ * Limpia el texto de una pregunta o enunciado de selección:
+ * - Elimina tokens espurios de completación como '[ ? ]', '[?]', etc.
+ * - Si es una pregunta directa, elimina marcadores de hueco como '{{blank}}', '[blank]' o '___'.
+ * - Si referenceText está presente y fue duplicado dentro del prompt, lo remueve para evitar redundancia.
+ */
+export function cleanSelectionPrompt(rawPrompt: string, referenceText?: string): string {
+  if (!rawPrompt || typeof rawPrompt !== 'string') return '';
+
+  let cleaned = rawPrompt.trim();
+
+  // 1. Remover duplicación del panel de lectura/referencia si el prompt lo incluyó
+  if (referenceText && typeof referenceText === 'string') {
+    const trimmedRef = referenceText.trim();
+    if (trimmedRef && cleaned.includes(trimmedRef)) {
+      cleaned = cleaned.replace(trimmedRef, '').trim();
+    } else if (cleaned.includes('\n\n')) {
+      const parts = cleaned.split('\n\n');
+      const lastPart = parts[parts.length - 1].trim();
+      if (lastPart.endsWith('?')) {
+        cleaned = lastPart;
+      }
+    }
+  }
+
+  // 2. Remover tokens prohibidos de completación '[ ? ]' o '[?]'
+  cleaned = cleaned
+    .replace(/\[\s*\?\s*\]/g, '')
+    .replace(/\[\s*&\w+;\s*\?\s*&\w+;\s*\]/g, '');
+
+  // 3. Si es una pregunta directa / interrogativa, remover '{{blank}}', '[blank]' o '___'
+  if (
+    cleaned.includes('?') ||
+    /\b(Do|Does|Did|Is|Are|Was|Were|Which|What|Who|Where|When|Why|How)\b/i.test(cleaned)
+  ) {
+    cleaned = cleaned
+      .replace(/\{\{\s*blank\s*\}\}/gi, '')
+      .replace(/\[\s*blank\s*\]/gi, '')
+      .replace(/_{2,}/g, '');
+  }
+
+  // 4. Normalizar espacios en blanco y puntuación
+  cleaned = cleaned.replace(/[ \t]{2,}/g, ' ').trim();
+  cleaned = cleaned.replace(/\s+\?$/, '?');
+
+  return cleaned;
 }
 
 /**
@@ -929,14 +985,22 @@ export function validateAndParseSlides(rawJsonText: string): Slide[] {
       }
 
       if (rawSlide.interaction.type === 'selection' && Array.isArray(rawSlide.interaction.questions)) {
+        const refText =
+          rawSlide.referenceContent?.type === 'text'
+            ? rawSlide.referenceContent.content
+            : rawSlide.referenceContent?.type === 'media'
+            ? rawSlide.referenceContent.transcript
+            : '';
+
         for (const q of rawSlide.interaction.questions) {
           if (q && typeof q === 'object') {
             const statement = q.prompt || q.question || '';
-            if (!q.prompt && statement) q.prompt = statement;
-            if (!q.question && statement) q.question = statement;
+            const cleanedStatement = cleanSelectionPrompt(statement, refText);
+            q.prompt = cleanedStatement;
+            q.question = cleanedStatement;
 
             if (!Array.isArray(q.options) || q.options.length === 0) {
-              const disj = extractDisjunctiveAlternatives(statement);
+              const disj = extractDisjunctiveAlternatives(cleanedStatement);
               if (disj) {
                 q.options = disj.options.map((opt, oIdx) => ({
                   id: `opt-${oIdx + 1}`,
@@ -945,6 +1009,30 @@ export function validateAndParseSlides(rawJsonText: string): Slide[] {
                 }));
               }
             }
+          }
+        }
+
+        // Cohesión de Concept Checking Questions globales:
+        // Si hay múltiples preguntas idénticas o redundantes sobre la misma regla general
+        if (rawSlide.interaction.questions.length > 1) {
+          const first = rawSlide.interaction.questions[0];
+          const firstPrompt = (first.prompt || first.question || '').toLowerCase().trim();
+          const disjFirst = extractDisjunctiveAlternatives(firstPrompt);
+
+          const isRedundantGlobalCCQ = rawSlide.interaction.questions.every((q: any) => {
+            const p = (q.prompt || q.question || '').toLowerCase().trim();
+            if (p === firstPrompt) return true;
+            if (disjFirst) {
+              const disjP = extractDisjunctiveAlternatives(p);
+              if (disjP && disjP.options.slice().sort().join('|') === disjFirst.options.slice().sort().join('|')) {
+                return true;
+              }
+            }
+            return false;
+          });
+
+          if (isRedundantGlobalCCQ) {
+            rawSlide.interaction.questions = [first];
           }
         }
       }
@@ -1091,6 +1179,13 @@ CANONICAL ARCHETYPES:
          If the entirety of the passage or exercise decomposes into the interactive items of the activity, referenceContent MUST be strictly null and layout MUST be "single_column".
      * CHECKLISTS & CANDIDATE SELECTION: When students mark, tick (✓), or choose valid candidates from a single domain ("Tick the phrases", "Which sentences are true?", "Select all that apply"):
        - Use flat options[] with allowMultiple: true/false. Preserve the full intact text in options[].text!
+     * PROMPT CLEANLINESS & FORBIDDEN COMPLETION TOKENS:
+       - It is STRICTLY FORBIDDEN to insert completion tokens or blanks (e.g. '[ ? ]', '{{blank}}', '___') inside the prompt of direct selection questions. The prompt MUST be a direct, clean interrogative sentence or instruction (e.g. "Do these people agree or disagree?", "Which sentence is grammatically accurate?").
+       - ZERO PASSAGE/DIALOGUE DUPLICATION: If reading texts, dialogues, or examples are already populated in the reference panel (referenceContent), NEVER duplicate the full dialogue or reading passage inside the "prompt" string of the selection questions. Keep the prompt clean and concise, referencing the panel.
+     * GLOBAL CONCEPT CHECKING QUESTIONS (CCQ) COHESION:
+       - When a closed exercise evaluates an overarching rule or concept from multiple reading examples (e.g. "Do these people agree or disagree?"):
+         * Generate ONE SINGLE unified selection question (options: ["agree", "disagree"]) evaluating the overarching rule and referring to the reading passage/referenceContent.
+         * It is STRICTLY FORBIDDEN to duplicate and fragment identical questions for each individual row, speaker, or example line!
      * DISJUNCTIVE / ALTERNATIVE QUESTIONS RULE (e.g. "Do/Is/Are ... [Option A] or [Option B]?"):
        - UNIVERSAL DETECTION RULE FOR 'selection':
          When an interrogative prompt, instruction, or exercise question presents an explicit closed disjunction delimiting the possible candidate answers (e.g. linguistic pattern "Do/Is/Are ... [Option A] or [Option B]?", such as "Do the speakers agree or disagree?", "Is the sentence talking about the past or the present?", "Are the underlined verbs finished or unfinished?"):
