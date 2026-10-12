@@ -306,6 +306,7 @@ export const SlideSchema = z.object({
   cachedInteraction: InteractionBlockSchema.nullable().optional(),
   notes: z.string().optional(),
   isGraded: z.boolean().default(true).optional(),
+  sourceImageSnippetUrl: z.string().optional(),
 });
 
 export type Slide = z.infer<typeof SlideSchema>;

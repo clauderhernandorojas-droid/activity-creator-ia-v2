@@ -8,7 +8,7 @@ import type {
   SlideLayout, 
   ExtractedBlock 
 } from '../types/schema';
-import { digitizeBook, createManualBlock, type ManualTemplateType } from '../core/ai/digitizeBook';
+import { digitizeBook, createManualBlock, roleToForcedTargetType, type ManualTemplateType } from '../core/ai/digitizeBook';
 import { convertSlideToRole, type PedagogicalRole } from '../core/utils/slideRoleConverter';
 import { compressImageBase64 } from '../core/utils/imageCompressor';
 import { useSessionStore } from './useSessionStore';
@@ -141,6 +141,8 @@ interface LessonState {
     blockId: string,
     role: PedagogicalRole
   ) => void;
+  reExtractBlockWithRole: (blockId: string, role: PedagogicalRole) => Promise<void>;
+  reExtractSlideWithRole: (slideId: string, role: PedagogicalRole, clipUrl?: string) => Promise<void>;
 
   // Actions - Lesson Metadata & File Portability
   setLessonTitle: (title: string) => void;
@@ -371,7 +373,7 @@ export const useLessonStore = create<LessonState>()(
         exportLessonToFile(lesson);
       },
 
-      createSlideFromBlock: (blockId, _role) => {
+      createSlideFromBlock: (blockId, role) => {
         try {
           const state = get();
           const block = (state.extractedBlocks.find((b) => b.id === blockId) || state.extractedBlocks[0]) as (Slide & ExtractedBlock) | undefined;
@@ -380,18 +382,35 @@ export const useLessonStore = create<LessonState>()(
 
           const title = block.title || block.parsedData?.title || 'Diapositiva Digitalizada';
           const subtitle = block.subtitle || block.parsedData?.instruction;
-          const isGraded = block.isGraded !== undefined ? block.isGraded : (block.parsedData?.isGraded !== undefined ? Boolean(block.parsedData.isGraded) : true);
+          const isTargetReference = role === 'reference_text' || role === 'reference_table';
+          const isGraded = isTargetReference ? false : (block.isGraded !== undefined ? block.isGraded : (block.parsedData?.isGraded !== undefined ? Boolean(block.parsedData.isGraded) : true));
+          const sourceImageSnippetUrl = block.sourceImageSnippetUrl || block.sourceImages?.[0] || state.pastedImages[0];
+
+          let refContent = block.referenceContent || null;
+          let interaction = isTargetReference ? null : (block.interaction || null);
+
+          if (isTargetReference && !refContent && block.interaction) {
+            refContent = {
+              id: `ref-${Date.now()}`,
+              type: role === 'reference_table' ? 'reference_table' : 'text',
+              title,
+              content: (block.interaction as any).prompt || (block.interaction as any).instruction || subtitle || '',
+              category: 'grammar_note',
+              ...(role === 'reference_table' ? { columns: [] } : {})
+            } as any;
+          }
 
           const newSlide: Slide = {
             id: newId,
             title,
             subtitle,
-            layout: block.layout || (block.referenceContent ? 'split_50_50' : 'single_column'),
-            referenceContent: block.referenceContent || null,
-            interaction: block.interaction || null,
-            cachedInteraction: block.interaction || null,
+            layout: isTargetReference ? 'single_column' : (block.layout || (refContent && interaction ? 'split_50_50' : 'single_column')),
+            referenceContent: refContent,
+            interaction,
+            cachedInteraction: interaction || block.cachedInteraction || null,
             notes: block.notes || '',
             isGraded,
+            sourceImageSnippetUrl,
           };
 
           const isInitialEmptySlide = (lesson: Lesson) => {
@@ -438,6 +457,8 @@ export const useLessonStore = create<LessonState>()(
             const subtitle = block.subtitle || block.parsedData?.instruction;
             const isGraded = block.isGraded !== undefined ? block.isGraded : (block.parsedData?.isGraded !== undefined ? Boolean(block.parsedData.isGraded) : true);
 
+            const sourceImageSnippetUrl = block.sourceImageSnippetUrl || block.sourceImages?.[0] || state.pastedImages[idx] || state.pastedImages[0];
+
             return {
               id: slideId,
               title,
@@ -448,6 +469,7 @@ export const useLessonStore = create<LessonState>()(
               cachedInteraction: block.interaction || null,
               notes: block.notes || '',
               isGraded,
+              ...(sourceImageSnippetUrl ? { sourceImageSnippetUrl } : {}),
             };
           });
 
@@ -939,11 +961,14 @@ export const useLessonStore = create<LessonState>()(
         state.updateInteractionBlock(slideId, intBlock);
       },
 
-      assignExtractedBlock: (slideId, blockId, _role) => {
+      assignExtractedBlock: (slideId, blockId, role) => {
         try {
           const state = get();
           const source = state.extractedBlocks.find((b) => b.id === blockId) as (Slide & ExtractedBlock) | undefined;
           if (!source) return;
+
+          const isTargetReference = role === 'reference_text' || role === 'reference_table';
+          const sourceImageSnippetUrl = source.sourceImageSnippetUrl || source.sourceImages?.[0] || state.pastedImages[0];
 
           set((s) => ({
             ...recordHistory(s),
@@ -952,24 +977,146 @@ export const useLessonStore = create<LessonState>()(
               slides: s.lesson.slides.map((slide) => {
                 if (slide.id !== slideId) return slide;
 
-                const refContent = source.referenceContent !== undefined ? source.referenceContent : slide.referenceContent;
-                const interaction = source.interaction !== undefined ? source.interaction : slide.interaction;
-                const nextLayout = refContent && interaction ? 'split_50_50' : slide.layout;
+                let refContent = source.referenceContent !== undefined ? source.referenceContent : slide.referenceContent;
+                let interaction = isTargetReference ? null : (source.interaction !== undefined ? source.interaction : slide.interaction);
+
+                if (isTargetReference && !refContent && source.interaction) {
+                  refContent = {
+                    id: `ref-${Date.now()}`,
+                    type: role === 'reference_table' ? 'reference_table' : 'text',
+                    title: source.title || slide.title,
+                    content: (source.interaction as any).prompt || (source.interaction as any).instruction || '',
+                    category: 'grammar_note',
+                    ...(role === 'reference_table' ? { columns: [] } : {})
+                  } as any;
+                }
+
+                const nextLayout = isTargetReference ? 'single_column' : (refContent && interaction ? 'split_50_50' : 'single_column');
 
                 return {
                   ...slide,
                   layout: nextLayout,
                   ...(source.title ? { title: source.title } : {}),
                   ...(source.subtitle ? { subtitle: source.subtitle } : {}),
-                  ...(source.isGraded !== undefined ? { isGraded: source.isGraded } : {}),
+                  isGraded: isTargetReference ? false : (source.isGraded !== undefined ? source.isGraded : slide.isGraded),
                   referenceContent: refContent,
-                  ...(interaction ? { interaction, cachedInteraction: interaction } : {}),
+                  interaction,
+                  cachedInteraction: interaction || slide.cachedInteraction || null,
+                  ...(sourceImageSnippetUrl ? { sourceImageSnippetUrl } : {}),
                 };
               }),
             },
           }));
         } catch (err) {
           console.error('[useLessonStore] Error assigning block to slide:', err);
+        }
+      },
+
+      reExtractBlockWithRole: async (blockId, role) => {
+        const state = get();
+        const blockIndex = state.extractedBlocks.findIndex((b) => b.id === blockId);
+        const block = state.extractedBlocks[blockIndex >= 0 ? blockIndex : 0] as (Slide & ExtractedBlock) | undefined;
+        if (!block) return;
+
+        const clip = block.sourceImageSnippetUrl || block.sourceImages?.[0] || state.pastedImages[blockIndex >= 0 ? blockIndex : 0] || state.pastedImages[0];
+        if (!clip) return;
+
+        const controller = new AbortController();
+        set({ ocrProcessing: true, activeOcrAbortController: controller, ocrError: null });
+
+        try {
+          const forcedTargetType = roleToForcedTargetType(role);
+          const regenerated = await digitizeBook([clip], controller.signal, { forcedTargetType });
+          if (regenerated && regenerated.length > 0) {
+            const newBlock = {
+              ...regenerated[0],
+              id: block.id,
+              sourceImageSnippetUrl: clip,
+              sourceImages: [clip],
+            };
+            set((s) => ({
+              ocrProcessing: false,
+              activeOcrAbortController: null,
+              ocrError: null,
+              extractedBlocks: s.extractedBlocks.map((b) => (b.id === blockId ? newBlock : b)),
+              lastExtractedPayload: s.extractedBlocks.map((b) => (b.id === blockId ? newBlock : b)),
+            }));
+          } else {
+            set({ ocrProcessing: false, activeOcrAbortController: null });
+          }
+        } catch (err: any) {
+          if (controller.signal.aborted || err?.name === 'AbortError') {
+            set({ ocrProcessing: false, activeOcrAbortController: null });
+            return;
+          }
+          console.error('[useLessonStore] Error during reExtractBlockWithRole:', err);
+          set({
+            ocrProcessing: false,
+            activeOcrAbortController: null,
+            ocrError: err?.message || 'Error durante la re-extracción dirigida',
+          });
+        }
+      },
+
+      reExtractSlideWithRole: async (slideId, role, clipUrl) => {
+        const state = get();
+        const slide = state.lesson.slides.find((s) => s.id === slideId);
+        if (!slide) return;
+
+        const clip = clipUrl || slide.sourceImageSnippetUrl || state.pastedImages[0] || (state.extractedBlocks[0] as any)?.sourceImageSnippetUrl;
+        if (!clip) {
+          state.convertSlideRole(slideId, role);
+          return;
+        }
+
+        const controller = new AbortController();
+        set({ ocrProcessing: true, activeOcrAbortController: controller, ocrError: null });
+
+        try {
+          const forcedTargetType = roleToForcedTargetType(role);
+          const regenerated = await digitizeBook([clip], controller.signal, { forcedTargetType });
+          if (regenerated && regenerated.length > 0) {
+            const regSlide = regenerated[0];
+            const isTargetReference = role === 'reference_text' || role === 'reference_table';
+            set((s) => ({
+              ...recordHistory(s),
+              ocrProcessing: false,
+              activeOcrAbortController: null,
+              ocrError: null,
+              lesson: {
+                ...s.lesson,
+                slides: s.lesson.slides.map((sl) => {
+                  if (sl.id !== slideId) return sl;
+                  return {
+                    ...sl,
+                    title: regSlide.title || sl.title,
+                    subtitle: regSlide.subtitle || sl.subtitle,
+                    layout: isTargetReference ? 'single_column' : (regSlide.layout || (regSlide.referenceContent && regSlide.interaction ? 'split_50_50' : 'single_column')),
+                    referenceContent: regSlide.referenceContent || null,
+                    interaction: isTargetReference ? null : (regSlide.interaction || null),
+                    cachedInteraction: regSlide.interaction || sl.cachedInteraction || null,
+                    isGraded: isTargetReference ? false : (regSlide.isGraded !== undefined ? regSlide.isGraded : sl.isGraded),
+                    sourceImageSnippetUrl: clip,
+                  };
+                }),
+              },
+            }));
+          } else {
+            set({ ocrProcessing: false, activeOcrAbortController: null });
+            state.convertSlideRole(slideId, role);
+          }
+        } catch (err: any) {
+          if (controller.signal.aborted || err?.name === 'AbortError') {
+            set({ ocrProcessing: false, activeOcrAbortController: null });
+            return;
+          }
+          console.error('[useLessonStore] Error during reExtractSlideWithRole:', err);
+          set({
+            ocrProcessing: false,
+            activeOcrAbortController: null,
+            ocrError: err?.message || 'Error en re-extracción dirigida',
+          });
+          state.convertSlideRole(slideId, role);
         }
       },
     }),

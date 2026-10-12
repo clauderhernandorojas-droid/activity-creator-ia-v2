@@ -15,6 +15,86 @@ import {
 
 export type ManualTemplateType = 'input_fields' | 'buckets' | 'selection' | 'reference_table' | 'table_grid' | 'writing';
 
+export type ForcedTargetArchetype = 
+  | 'input_fields' 
+  | 'selection' 
+  | 'buckets_matching' 
+  | 'sequence' 
+  | 'writing' 
+  | 'reference_text' 
+  | 'reference_table'
+  | 'grammar_reference';
+
+export function roleToForcedTargetType(role: string): ForcedTargetArchetype {
+  switch (role) {
+    case 'interaction_inputs':
+      return 'input_fields';
+    case 'interaction_selection':
+      return 'selection';
+    case 'interaction_buckets':
+      return 'buckets_matching';
+    case 'interaction_sequence':
+      return 'sequence';
+    case 'interaction_writing':
+      return 'writing';
+    case 'reference_table':
+      return 'reference_table';
+    case 'reference_text':
+    default:
+      return 'reference_text';
+  }
+}
+
+export function hasDataForRole(
+  data: { referenceContent?: any; interaction?: any },
+  targetRole: string
+): boolean {
+  if (targetRole === 'reference_text') {
+    return Boolean(
+      data.referenceContent?.type === 'text' && 
+      (Boolean(data.referenceContent.content?.trim()) || Boolean(data.referenceContent.body?.trim()))
+    );
+  }
+  if (targetRole === 'reference_table') {
+    if (!data.referenceContent) return false;
+    if (data.referenceContent.type === 'reference_table') {
+      return Array.isArray(data.referenceContent.columns) && data.referenceContent.columns.length > 0;
+    }
+    if (data.referenceContent.type === 'table_reference') {
+      return (
+        (Array.isArray(data.referenceContent.headers) && data.referenceContent.headers.length > 0) ||
+        (Array.isArray(data.referenceContent.rows) && data.referenceContent.rows.length > 0)
+      );
+    }
+    return false;
+  }
+  if (!data.interaction) return false;
+  switch (targetRole) {
+    case 'interaction_inputs':
+      return data.interaction.type === 'input_fields' && (
+        (Array.isArray(data.interaction.listItems) && data.interaction.listItems.length > 0) ||
+        (Array.isArray(data.interaction.tableRows) && data.interaction.tableRows.length > 0)
+      );
+    case 'interaction_selection':
+      return data.interaction.type === 'selection' && 
+        Array.isArray(data.interaction.questions) && 
+        data.interaction.questions.length > 0;
+    case 'interaction_buckets':
+      return data.interaction.type === 'buckets_matching' && (
+        (Array.isArray(data.interaction.buckets) && data.interaction.buckets.length > 0) ||
+        (Array.isArray(data.interaction.tokens) && data.interaction.tokens.length > 0)
+      );
+    case 'interaction_sequence':
+      return data.interaction.type === 'sequence' && 
+        Array.isArray(data.interaction.items) && 
+        data.interaction.items.length > 0;
+    case 'interaction_writing':
+      return data.interaction.type === 'writing' && Boolean(data.interaction.prompt?.trim());
+    default:
+      return false;
+  }
+}
+
 export const MANUAL_TEMPLATES: Record<ManualTemplateType, {
   label: string;
   detectedType: ExtractedBlock['detectedType'];
@@ -664,7 +744,7 @@ export function sanitizeReferenceContent(rawRef: any, idx: number): any {
 
   // Auto-detect type if missing
   if (!type) {
-    if (ref.content !== undefined) type = 'text';
+    if (ref.content !== undefined || ref.body !== undefined) type = 'text';
     else if (ref.rows !== undefined || ref.headers !== undefined) type = 'table_reference';
     else if (ref.columns !== undefined) type = 'reference_table';
     else if (ref.mediaType !== undefined || ref.url !== undefined || ref.transcript !== undefined) type = 'media';
@@ -713,6 +793,9 @@ export function sanitizeReferenceContent(rawRef: any, idx: number): any {
   }
 
   if (type === 'text') {
+    if ((typeof ref.content !== 'string' || !ref.content.trim()) && typeof ref.body === 'string' && ref.body.trim()) {
+      ref.content = ref.body.trim();
+    }
     if (typeof ref.content !== 'string' || !ref.content.trim()) {
       if (typeof ref.title === 'string' && ref.title.trim()) {
         ref.content = ref.title.trim();
@@ -721,7 +804,9 @@ export function sanitizeReferenceContent(rawRef: any, idx: number): any {
       }
     }
     if (!ref.category || !['reading', 'grammar_note', 'instructions', 'dialogue'].includes(ref.category)) {
-      if (ref.category === 'reading_passage' || ref.category === 'passage' || ref.category === 'article') {
+      if (ref.category === 'grammar_reference' || ref.category === 'grammar_rules' || ref.category === 'theory') {
+        ref.category = 'grammar_note';
+      } else if (ref.category === 'reading_passage' || ref.category === 'passage' || ref.category === 'article') {
         ref.category = 'reading';
       } else if (ref.category === 'conversation') {
         ref.category = 'dialogue';
@@ -984,7 +1069,42 @@ export function validateAndParseSlides(rawJsonText: string): Slide[] {
         }
       }
 
-      if (rawSlide.interaction.type === 'selection' && Array.isArray(rawSlide.interaction.questions)) {
+      // Directiva Ontológica: Cajas teóricas y reglas explicativas puras no deben degradarse a writing
+      if (rawSlide.interaction && rawSlide.interaction.type === 'writing') {
+        const writing = rawSlide.interaction as any;
+        const scan = `${writing.prompt || ''} ${writing.instruction || ''} ${rawSlide.title || ''} ${rawSlide.subtitle || ''}`.toLowerCase();
+        
+        // Detectar si pide un resumen artificial de reglas o es un encabezado teórico sin práctica
+        const isSyntheticSummary = /\b(?:summariz|summary|summarise|write a summary|explain the rules|summarize the main rules|what did you understand)\b/i.test(scan);
+        const isPureTheoryBox = /\b(?:grammar focus|language summary|real world|rule box|grammar reference|pronunciation note|grammar rules)\b/i.test(scan) &&
+          (!Array.isArray(writing.guidelines) || writing.guidelines.length === 0 || !writing.minWords);
+
+        if (isSyntheticSummary || isPureTheoryBox) {
+          rawSlide.interaction = null;
+          rawSlide.isGraded = false;
+          if (!rawSlide.referenceContent) {
+            const isPromptDirective = /\b(?:summariz|summary|summarise|write a summary|explain the rules|summarize the main rules|what did you understand)\b/i.test(writing.prompt || '');
+            const isInstructionDirective = /\b(?:summariz|summary|summarise|write a summary|explain the rules|summarize the main rules|what did you understand)\b/i.test(writing.instruction || '');
+
+            const rawBody = (writing.prompt && !isPromptDirective)
+              ? writing.prompt
+              : (writing.instruction && !isInstructionDirective)
+              ? writing.instruction
+              : (writing.prompt || writing.instruction || rawSlide.subtitle || rawSlide.title || 'Grammar Reference');
+
+            rawSlide.referenceContent = {
+              id: `ref-theory-${Date.now()}-${idx}`,
+              type: 'text',
+              category: 'grammar_note',
+              title: rawSlide.title || 'Grammar Reference',
+              content: rawBody,
+            };
+          }
+          rawSlide.layout = 'single_column';
+        }
+      }
+
+      if (rawSlide.interaction && rawSlide.interaction.type === 'selection' && Array.isArray(rawSlide.interaction.questions)) {
         const refText =
           rawSlide.referenceContent?.type === 'text'
             ? rawSlide.referenceContent.content
@@ -1039,6 +1159,7 @@ export function validateAndParseSlides(rawJsonText: string): Slide[] {
 
       // En ejercicios de tipo tabla/cuadrícula interactiva autosuficientes:
       if (
+        rawSlide.interaction &&
         rawSlide.interaction.type === 'input_fields' &&
         rawSlide.interaction.layoutMode === 'table' &&
         Array.isArray(rawSlide.interaction.tableRows)
@@ -1088,6 +1209,14 @@ export function validateAndParseSlides(rawJsonText: string): Slide[] {
               rawSlide.referenceContent = null;
             }
           }
+        }
+
+        // Si contiene una tabla de ejemplos (como la matriz agree/disagree) con todas las celdas estáticas (isInput: false):
+        const hasInteractiveCells = rawSlide.interaction.tableRows.some((row: any) =>
+          Array.isArray(row) && row.some((cell: any) => cell && typeof cell === 'object' && cell.isInput === true)
+        );
+        if (!hasInteractiveCells) {
+          rawSlide.isGraded = false;
         }
 
         // En ejercicios de tipo tabla/cuadrícula donde todo el contenido está dentro de la misma tabla,
@@ -1174,7 +1303,7 @@ export function slideToExtractedBlock(
 /**
  * Builds the strict, unambiguous pedagogical System Prompt enforcing native Slide structured outputs.
  */
-function buildExtractionPrompt(imageCount: number): string {
+function buildExtractionPrompt(imageCount: number, forcedTargetType?: ForcedTargetArchetype): string {
   return `You are an expert ELT (English Language Teaching) author, textbook editor, and master teacher.
 You must analyze the provided ${imageCount} clipping(s) and emit directly a JSON object containing an array of "slides" matching the canonical ELT Slide schema.
 
@@ -1270,6 +1399,28 @@ CANONICAL ARCHETYPES:
    - "writing": STRICT RESTRICTION (GENUINELY OPEN TASKS ONLY):
      * Reserve interaction.type: "writing" EXCLUSIVELY for genuinely open-ended communicative or production tasks (personal opinion essays, paragraphs, emails, profiles, or open inquiry questions without finite discrete alternatives in the prompt, such as "Why...", "Describe...", "What do you think about..."). Set isGraded: false.
      * STRICT PROHIBITION: NEVER classify alternative questions with closed binary or finite choices ("... [Option A] or [Option B]?") as "writing". If the prompt contains finite discrete choices delimited by "or", it MUST be classified as "selection".
+     * STRICT PROHIBITION ON EXPLANATORY/THEORETICAL BOXES: NEVER generate interaction.type: "writing" for grammar boxes, rule charts, pronunciation notes, or language summaries. IT IS STRICTLY FORBIDDEN to demand artificial summaries (e.g. "Summarize the rules..."). Pure informational content must be preserved as referenceContent with interaction: null and isGraded: false.
+
+3. PURE EXPLANATORY / THEORETICAL MATERIAL (GRAMMAR BOXES, RULES, CHARTS):
+   - ONTOLOGICAL DIRECTIVE FOR PURE EXPLANATORY CONTENT:
+     * When the input clipping consists of grammar explanations, rule boxes, pronunciation notes, or reference tables (e.g. sections labeled "Real World", "Grammar Focus", "Language Summary", "Pronunciation", "Rule Box") WITHOUT explicit interactive practice directives (no instructions like "Fill in...", "Choose...", "Match...", "Write an essay/paragraph..."):
+       - IT IS STRICTLY FORBIDDEN to invent artificial open writing tasks ("writing") or demand synthetic summaries ("Summarize the main rules...", "Explain the grammar...").
+       - The archetype MUST be classified as a pure informative/referential slide:
+         * Textual explanations / bullet points / rules: Emit cleanly into "referenceContent" (type: "text", category: "grammar_note" or "reading", with literal text in "content").
+         * Example tables / matrix (e.g., agree/disagree matrix, paradigm chart): Emit into "referenceContent" (type: "reference_table" or "table_reference"), OR as interaction with layoutMode: "table" and ALL cells marked as static (isInput: false).
+         * Expository slide: Set interaction: null, isGraded: false, and layout: "single_column".
+${forcedTargetType ? `
+4. DIRECTED ARCHETYPE OVERRIDE (FORCED TARGET: "${forcedTargetType}"):
+The user explicitly commands to format and extract the clipping strictly into the archetype "${forcedTargetType}".
+- You MUST force the slide structure to match this target archetype:
+  * "reference_text" or "grammar_reference": interaction MUST be null, isGraded MUST be false, layout MUST be "single_column", referenceContent MUST be type: "text" (category: "grammar_note").
+  * "reference_table": interaction MUST be null, isGraded MUST be false, layout MUST be "single_column", referenceContent MUST be type: "reference_table" or "table_reference".
+  * "input_fields": interaction MUST be type: "input_fields" (layoutMode: "table" if a grid, or "list" if fill-in blanks).
+  * "selection": interaction MUST be type: "selection" with candidate options.
+  * "buckets_matching": interaction MUST be type: "buckets_matching" with buckets and tokens.
+  * "sequence": interaction MUST be type: "sequence" with disordered chronological items.
+  * "writing": interaction MUST be type: "writing" with prompt and guidelines (isGraded: false).
+` : ''}
 
 AUTONOMOUS RESOLUTION:
 - Act as an expert ELT teacher: all exercises MUST arrive 100% COMPLETELY SOLVED by default.
@@ -1283,7 +1434,8 @@ AUTONOMOUS RESOLUTION:
  */
 export async function digitizeBook(
   images: string | string[],
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  options?: { forcedTargetType?: ForcedTargetArchetype }
 ): Promise<(ExtractedBlock & Slide)[]> {
   if (signal?.aborted) {
     const err = new Error('Operación cancelada por el usuario');
@@ -1298,7 +1450,7 @@ export async function digitizeBook(
     return cloneSampleBlocks(primaryImage) as any;
   }
 
-  const promptText = buildExtractionPrompt(imageList.length);
+  const promptText = buildExtractionPrompt(imageList.length, options?.forcedTargetType);
 
   // Strategy 1: Google Gemini SDK (@google/genai) if VITE_GEMINI_API_KEY is available
   const geminiApiKey = import.meta.env.VITE_GEMINI_API_KEY;

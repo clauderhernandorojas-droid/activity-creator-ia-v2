@@ -8,6 +8,7 @@ import { SlideErrorBoundary } from './common/SlideErrorBoundary';
 import confetti from 'canvas-confetti';
 import type { ReferenceBlock, ReferenceMediaBlock } from '../types/schema';
 import type { PedagogicalRole } from '../core/utils/slideRoleConverter';
+import { hasDataForRole } from '../core/ai/digitizeBook';
 import { renderFormattedMarkdown } from '../core/text/markdownRenderer';
 import { isSubstantialTextOverlap, isConcatenationOfItems, stripEditorialPrefix } from '../core/text/textDeduplication';
 import { ReferenceImageModal } from './modals/ReferenceImageModal';
@@ -40,7 +41,8 @@ const FORMAT_SWITCH_OPTIONS: FormatSwitchOption[] = [
   { id: 'interaction_buckets', label: 'Buckets', icon: '🗂️' },
   { id: 'interaction_sequence', label: 'Secuencia', icon: '🔀' },
   { id: 'interaction_writing', label: 'Escritura', icon: '✍️' },
-  { id: 'reference_text', label: 'Referencia', icon: '📖' },
+  { id: 'reference_text', label: 'Lectura', icon: '📖' },
+  { id: 'reference_table', label: 'Cuadro', icon: '📊' },
 ];
 
 function generateReferenceImageId(): string {
@@ -57,6 +59,10 @@ export const Canvas: React.FC = () => {
     updateReferenceBlock,
     convertSlideRole,
     updateSlideIsGraded,
+    reExtractSlideWithRole,
+    ocrProcessing,
+    pastedImages,
+    extractedBlocks,
   } = useLessonStore();
 
   const {
@@ -402,25 +408,37 @@ export const Canvas: React.FC = () => {
             <div className="flex flex-wrap items-center gap-2">
               <div className="flex flex-wrap items-center gap-1 bg-white p-1 rounded-lg border border-slate-200 shadow-2xs">
                 {FORMAT_SWITCH_OPTIONS.map((opt) => {
-                  const isSelected = currentFormat === opt.id || (opt.id === 'reference_text' && currentFormat === 'reference_table');
+                  const isSelected = currentFormat === opt.id;
+                  const isCurrentLoading = isSelected && ocrProcessing;
                   return (
                     <button
                       key={opt.id}
                       type="button"
-                      onClick={() => {
-                        if (!isSelected) {
-                          convertSlideRole(currentSlide.id, opt.id);
+                      disabled={ocrProcessing}
+                      onClick={async () => {
+                        if (!isSelected && !ocrProcessing) {
+                          const hasData = hasDataForRole(currentSlide, opt.id);
+                          const clip = currentSlide.sourceImageSnippetUrl || pastedImages[0] || (extractedBlocks[0] as any)?.sourceImageSnippetUrl;
+                          if (!hasData && clip) {
+                            await reExtractSlideWithRole(currentSlide.id, opt.id, clip);
+                          } else {
+                            convertSlideRole(currentSlide.id, opt.id);
+                          }
                         }
                       }}
                       className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold transition-all cursor-pointer ${
                         isSelected
                           ? 'bg-indigo-600 text-white shadow-xs scale-[1.02]'
                           : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-                      }`}
+                      } ${ocrProcessing ? 'opacity-80' : ''}`}
                       title={`Convertir diapositiva a formato ${opt.label} (Reversible con Ctrl+Z)`}
                     >
-                      <span className="text-xs">{opt.icon}</span>
-                      <span>{opt.label}</span>
+                      {isCurrentLoading ? (
+                        <RotateCcw className="w-3.5 h-3.5 animate-spin text-white" />
+                      ) : (
+                        <span className="text-xs">{opt.icon}</span>
+                      )}
+                      <span>{isCurrentLoading ? 'Re-extrayendo...' : opt.label}</span>
                     </button>
                   );
                 })}

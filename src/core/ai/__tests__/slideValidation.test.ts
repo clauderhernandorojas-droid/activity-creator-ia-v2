@@ -1208,6 +1208,126 @@ describe('slideValidation - Direct Schema & Architectural Invariant Tests', () =
     });
   });
 
+  // =========================================================================
+  // CASO K: Cajas Teóricas / Reglas Gramaticales / Material Explicativo Puro
+  // =========================================================================
+  describe('Caso K: Cajas Teóricas / Reglas Gramaticales / Material Explicativo Puro', () => {
+    it('convierte cajas teóricas de reglas gramaticales mal clasificadas como writing a referenceContent puro', () => {
+      const rawTheorySlide = JSON.stringify({
+        slides: [
+          {
+            id: 'slide-theory-1',
+            title: 'Grammar Focus: Present Perfect vs Past Simple',
+            layout: 'single_column',
+            referenceContent: null,
+            interaction: {
+              id: 'int-theory-fake-writing',
+              type: 'writing',
+              instruction: 'Summarize the main rules for when to use the present perfect and past simple.',
+              prompt: 'We use the present perfect for actions at an unspecified time in the past, and the past simple for specific past moments.',
+              guidelines: []
+            }
+          }
+        ]
+      });
+
+      const slides = validateAndParseSlides(rawTheorySlide);
+      expect(slides).toHaveLength(1);
+
+      const slide = slides[0];
+      // Invariante 1: Prohibido degradar cajas teóricas a tareas de redacción libre
+      expect(slide.interaction).toBeNull();
+      // Invariante 2: No es una actividad interactiva evaluable
+      expect(slide.isGraded).toBe(false);
+      // Invariante 3: El contenido se preserva en referenceContent con categoría grammar_note
+      expect(slide.referenceContent).not.toBeNull();
+      expect(slide.referenceContent?.type).toBe('text');
+      if (slide.referenceContent?.type === 'text') {
+        expect(slide.referenceContent.category).toBe('grammar_note');
+        expect(slide.referenceContent.content).toContain('We use the present perfect');
+      }
+      // Invariante 4: Disposición de diapositiva expositiva de una columna
+      expect(slide.layout).toBe('single_column');
+    });
+
+    it('establece isGraded: false en matrices o tablas gramaticales puramente estáticas (100% isInput: false)', () => {
+      const rawStaticMatrixSlide = JSON.stringify({
+        slides: [
+          {
+            id: 'slide-matrix-agree-disagree',
+            title: 'Real World: Agreeing and Disagreeing',
+            layout: 'single_column',
+            referenceContent: null,
+            interaction: {
+              id: 'int-matrix-1',
+              type: 'input_fields',
+              instruction: 'Study how to agree and disagree in conversations:',
+              layoutMode: 'table',
+              tableHeaders: ['Statement', 'Agree', 'Disagree'],
+              tableRows: [
+                [
+                  { text: 'I love Italian food.', isInput: false },
+                  { text: 'So do I.', isInput: false },
+                  { text: "I don't.", isInput: false }
+                ],
+                [
+                  { text: "I can't swim well.", isInput: false },
+                  { text: "Neither can I.", isInput: false },
+                  { text: 'I can.', isInput: false }
+                ]
+              ]
+            }
+          }
+        ]
+      });
+
+      const slides = validateAndParseSlides(rawStaticMatrixSlide);
+      expect(slides).toHaveLength(1);
+
+      const slide = slides[0];
+      // Invariante: Tabla sin celdas interactivas no es evaluable numéricamente
+      expect(slide.isGraded).toBe(false);
+      expect(slide.layout).toBe('single_column');
+      if (slide.interaction?.type === 'input_fields') {
+        expect(slide.interaction.tableRows).toHaveLength(2);
+        expect(slide.interaction.tableRows[0][0].isInput).toBe(false);
+        expect(slide.interaction.tableRows[0][1].isInput).toBe(false);
+        expect(slide.interaction.tableRows[0][2].isInput).toBe(false);
+      }
+    });
+
+    it('normaliza diapositivas informativas puras con categorías no estándar (grammar_reference -> grammar_note)', () => {
+      const rawRefSlide = JSON.stringify({
+        slides: [
+          {
+            id: 'slide-theory-ref',
+            title: 'Language Summary - Unit 4',
+            layout: 'single_column',
+            referenceContent: {
+              id: 'ref-lang-sum',
+              type: 'text',
+              category: 'grammar_reference',
+              title: 'Language Summary',
+              content: 'Rule 1: Always check auxiliary agreement.\nRule 2: Irregular forms require memorization.'
+            },
+            interaction: null
+          }
+        ]
+      });
+
+      const slides = validateAndParseSlides(rawRefSlide);
+      expect(slides).toHaveLength(1);
+
+      const slide = slides[0];
+      expect(slide.interaction).toBeNull();
+      expect(slide.layout).toBe('single_column');
+      if (slide.referenceContent?.type === 'text') {
+        expect(slide.referenceContent.category).toBe('grammar_note');
+        expect(slide.referenceContent.content).toContain('Rule 1: Always check auxiliary agreement.');
+      }
+    });
+  });
+
 });
 
 

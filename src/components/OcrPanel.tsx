@@ -24,7 +24,7 @@ import {
   Square
 } from 'lucide-react';
 import type { ExtractedBlock, ReferenceBlock, InteractionBlock } from '../types/schema';
-import type { ManualTemplateType } from '../core/ai/digitizeBook';
+import { type ManualTemplateType, hasDataForRole } from '../core/ai/digitizeBook';
 import { type PedagogicalRole } from '../core/utils/slideRoleConverter';
 import { compressImageBase64 } from '../core/utils/imageCompressor';
 
@@ -51,6 +51,7 @@ export const OcrPanel: React.FC = () => {
     createSlidesFromAllBlocks,
     addSlide,
     resetOcrState,
+    reExtractBlockWithRole,
   } = useLessonStore();
 
   const {
@@ -335,6 +336,28 @@ export const OcrPanel: React.FC = () => {
         setIsOcrDrawerOpen(false);
       } catch {
         // Safe fallback
+      }
+    }
+  };
+
+  const handleSelectRole = async (targetRole: PedagogicalRole) => {
+    setSelectedRoleOverride(targetRole);
+    if (!activeBlock || ocrProcessing) return;
+    const hasData = hasDataForRole(
+      {
+        referenceContent: (activeBlock as any).referenceContent,
+        interaction: (activeBlock as any).interaction,
+      },
+      targetRole
+    );
+    if (!hasData) {
+      const clip =
+        (activeBlock as any).sourceImageSnippetUrl ||
+        (activeBlock as any).sourceImages?.[0] ||
+        pastedImages[activeBlockIndex] ||
+        pastedImages[0];
+      if (clip) {
+        await reExtractBlockWithRole(activeBlock.id, targetRole);
       }
     }
   };
@@ -932,18 +955,26 @@ export const OcrPanel: React.FC = () => {
                     {ROLE_OPTIONS.map((opt) => {
                       const Icon = opt.icon;
                       const isSelected = selectedRole === opt.id;
+                      const isCurrentLoading = isSelected && ocrProcessing;
                       return (
                         <button
                           key={opt.id}
-                          onClick={() => setSelectedRoleOverride(opt.id)}
+                          disabled={ocrProcessing}
+                          onClick={() => handleSelectRole(opt.id)}
                           className={`text-xs py-2 px-2.5 rounded-xl border flex items-center gap-2 font-medium transition text-left cursor-pointer ${
                             isSelected
                               ? 'bg-indigo-50 border-indigo-300 text-indigo-700 shadow-2xs font-bold'
                               : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100 hover:border-slate-300'
-                          }`}
+                          } ${ocrProcessing ? 'opacity-80' : ''}`}
                         >
-                          <Icon className={`w-3.5 h-3.5 flex-shrink-0 ${isSelected ? 'text-indigo-600' : 'text-slate-500'}`} />
-                          <span className="truncate">{opt.label}</span>
+                          {isCurrentLoading ? (
+                            <RotateCcw className="w-3.5 h-3.5 flex-shrink-0 text-indigo-600 animate-spin" />
+                          ) : (
+                            <Icon className={`w-3.5 h-3.5 flex-shrink-0 ${isSelected ? 'text-indigo-600' : 'text-slate-500'}`} />
+                          )}
+                          <span className="truncate">
+                            {isCurrentLoading ? 'Re-extrayendo...' : opt.label}
+                          </span>
                         </button>
                       );
                     })}
@@ -962,14 +993,28 @@ export const OcrPanel: React.FC = () => {
 
                   return (
                     <div className="flex-1 min-h-0 overflow-y-auto rounded-xl border border-slate-200 bg-slate-50/70 p-3.5 space-y-2.5">
-                      <div className="flex items-center justify-between">
-                        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
-                          Previsualización y Edición Rápida de Elementos:
-                        </span>
-                        <span className="text-[10px] text-slate-400">
-                          (Haz clic en cualquier texto para corregir o borra parásitos con ✕)
-                        </span>
-                      </div>
+                      {ocrProcessing ? (
+                        <div className="flex flex-col items-center justify-center h-full min-h-[220px] p-6 text-center space-y-3">
+                          <Sparkles className="w-8 h-8 text-indigo-600 animate-spin" />
+                          <div className="space-y-1">
+                            <p className="text-xs font-bold text-slate-700">
+                              Re-extrayendo contenido con IA hacia formato {ROLE_OPTIONS.find((r) => r.id === selectedRole)?.label || ''}...
+                            </p>
+                            <p className="text-[11px] text-slate-400">
+                              Analizando el recorte original con directiva estructurada sin inventar ejercicios artificiales
+                            </p>
+                          </div>
+                        </div>
+                      ) : (
+                        <>
+                          <div className="flex items-center justify-between">
+                            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
+                              Previsualización y Edición Rápida de Elementos:
+                            </span>
+                            <span className="text-[10px] text-slate-400">
+                              (Haz clic en cualquier texto para corregir o borra parásitos con ✕)
+                            </span>
+                          </div>
 
                       {/* Integrated Reading Passage Context (when present alongside interactive exercise) */}
                       {mappedPreview.reference?.type === 'text' && mappedPreview.interaction && (
@@ -1630,6 +1675,8 @@ export const OcrPanel: React.FC = () => {
                             placeholder="Texto extraído del libro..."
                           />
                         </div>
+                      )}
+                        </>
                       )}
                     </div>
                   );
