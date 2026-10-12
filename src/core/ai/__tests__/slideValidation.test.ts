@@ -2037,6 +2037,277 @@ describe('slideValidation - Direct Schema & Architectural Invariant Tests', () =
     });
   });
 
+  // =========================================================================
+  describe('Caso R: Asignación Única, Descomposición Canónica de Reactivos con \'/\' y Discriminación Negativa', () => {
+    it('elimina referenceContent si duplica los reactivos del ejercicio e impone single_column (Principio de Asignación Única)', () => {
+      const rawDuplicateExerciseSlide = JSON.stringify({
+        slides: [
+          {
+            id: 'slide-dup-reactives',
+            title: 'Vocabulary: Common Collocations',
+            subtitle: 'Cross out the incorrect word in each line.',
+            layout: 'split_50_50',
+            referenceContent: {
+              id: 'ref-dup-1',
+              type: 'text',
+              content: '1. work in a school/an office/a receptionist\n2. have a brother/a car/a uniform\n3. live in a flat/with parents/alone',
+            },
+            interaction: {
+              id: 'int-dup-1',
+              type: 'selection',
+              instruction: 'Cross out the incorrect word in each line:',
+              questions: [
+                {
+                  id: 'q-1',
+                  prompt: '1. work in a school/an office/a receptionist',
+                  mode: 'single_choice',
+                  options: [
+                    { id: 'opt-1', text: 'a school', isCorrect: false },
+                    { id: 'opt-2', text: 'an office', isCorrect: false },
+                    { id: 'opt-3', text: 'a receptionist', isCorrect: true },
+                  ],
+                },
+                {
+                  id: 'q-2',
+                  prompt: '2. have a brother/a car/a uniform',
+                  mode: 'single_choice',
+                  options: [
+                    { id: 'opt-1', text: 'a brother', isCorrect: false },
+                    { id: 'opt-2', text: 'a car', isCorrect: false },
+                    { id: 'opt-3', text: 'a uniform', isCorrect: true },
+                  ],
+                },
+                {
+                  id: 'q-3',
+                  prompt: '3. live in a flat/with parents/alone',
+                  mode: 'single_choice',
+                  options: [
+                    { id: 'opt-1', text: 'a flat', isCorrect: false },
+                    { id: 'opt-2', text: 'with parents', isCorrect: false },
+                    { id: 'opt-3', text: 'alone', isCorrect: true },
+                  ],
+                },
+              ],
+            },
+          },
+        ],
+      });
+
+      const slides = validateAndParseSlides(rawDuplicateExerciseSlide);
+      expect(slides).toHaveLength(1);
+      const slide = slides[0];
+
+      // Invariante 1: Ningún fragmento del recorte se duplica entre referenceContent e interaction
+      // Si todo el recorte son reactivos, referenceContent DEBE ser estrictamente null
+      expect(slide.referenceContent).toBeNull();
+
+      // Invariante 2: Ejercicio autosuficiente de reactivos se normaliza a single_column
+      expect(slide.layout).toBe('single_column');
+    });
+
+    it('descompone canónicamente reactivos con base léxica y opciones delimitadas por \'/\' en prompt base y options individuales', () => {
+      const rawSlashExerciseSlide = JSON.stringify({
+        slides: [
+          {
+            id: 'slide-slash-decomp',
+            title: 'Collocations Practice',
+            subtitle: 'Choose the correct option',
+            layout: 'single_column',
+            referenceContent: null,
+            interaction: {
+              id: 'int-slash-1',
+              type: 'selection',
+              instruction: 'Choose the correct option:',
+              questions: [
+                {
+                  id: 'q-1',
+                  prompt: '1. work in a school/an office/a receptionist [ ? ]',
+                  mode: 'single_choice',
+                  expectedAnswer: 'a school',
+                  options: [],
+                },
+              ],
+            },
+          },
+        ],
+      });
+
+      const slides = validateAndParseSlides(rawSlashExerciseSlide);
+      expect(slides).toHaveLength(1);
+      const slide = slides[0];
+
+      expect(slide.interaction?.type).toBe('selection');
+      if (slide.interaction?.type === 'selection' && slide.interaction.questions) {
+        const q = slide.interaction.questions[0];
+
+        // Invariante: Base léxica común constituye el prompt limpio
+        expect(q.prompt).toBe('work in');
+
+        // Invariante: Opciones mapeadas directamente como ítems individuales dentro de options
+        expect(q.options).toHaveLength(3);
+        expect(q.options[0].text).toBe('a school');
+        expect(q.options[1].text).toBe('an office');
+        expect(q.options[2].text).toBe('a receptionist');
+
+        // Invariante: Sin oraciones con huecos ("[ ? ]", "{{blank}}") en prompt u opciones
+        expect(q.prompt).not.toContain('[ ? ]');
+        expect(q.prompt).not.toContain('{{blank}}');
+        q.options.forEach((opt) => {
+          expect(opt.text).not.toContain('/');
+          expect(opt.text).not.toContain('[ ? ]');
+        });
+      }
+    });
+
+    it('asigna isCorrect: true a la opción que no encaja en tareas de discriminación negativa ("Cross out" / "Odd one out")', () => {
+      const rawCrossOutSlide = JSON.stringify({
+        slides: [
+          {
+            id: 'slide-cross-out',
+            title: 'Vocabulary: Cross Out',
+            subtitle: 'Cross out the incorrect word',
+            layout: 'single_column',
+            referenceContent: null,
+            interaction: {
+              id: 'int-cross-out-1',
+              type: 'selection',
+              instruction: 'Cross out the word/phrase that does not go with the verb:',
+              questions: [
+                {
+                  id: 'q-1',
+                  prompt: 'work in a school/an office/a receptionist',
+                  mode: 'single_choice',
+                  expectedAnswer: 'a receptionist',
+                  options: [],
+                },
+              ],
+            },
+          },
+        ],
+      });
+
+      const slides = validateAndParseSlides(rawCrossOutSlide);
+      expect(slides).toHaveLength(1);
+      const slide = slides[0];
+
+      if (slide.interaction?.type === 'selection' && slide.interaction.questions) {
+        const q = slide.interaction.questions[0];
+        expect(q.prompt).toBe('work in');
+
+        const optSchool = q.options.find((o) => o.text === 'a school');
+        const optOffice = q.options.find((o) => o.text === 'an office');
+        const optReceptionist = q.options.find((o) => o.text === 'a receptionist');
+
+        // Invariante: En discriminación negativa, el elemento que NO encaja es isCorrect: true
+        expect(optReceptionist?.isCorrect).toBe(true);
+        expect(optSchool?.isCorrect).toBe(false);
+        expect(optOffice?.isCorrect).toBe(false);
+      }
+    });
+
+    it('invierte polaridad en discriminación negativa si el modelo marcó erróneamente las colocalizaciones correctas como true', () => {
+      const rawInvertedPolaritySlide = JSON.stringify({
+        slides: [
+          {
+            id: 'slide-odd-one-out',
+            title: 'Odd One Out',
+            subtitle: 'Which one doesn\'t fit?',
+            layout: 'single_column',
+            referenceContent: null,
+            interaction: {
+              id: 'int-odd-1',
+              type: 'selection',
+              instruction: 'Which word doesn\'t fit?',
+              questions: [
+                {
+                  id: 'q-1',
+                  prompt: 'work in a school/an office/a receptionist',
+                  mode: 'single_choice',
+                  options: [
+                    { id: 'opt-1', text: 'a school', isCorrect: true },
+                    { id: 'opt-2', text: 'an office', isCorrect: true },
+                    { id: 'opt-3', text: 'a receptionist', isCorrect: false },
+                  ],
+                },
+              ],
+            },
+          },
+        ],
+      });
+
+      const slides = validateAndParseSlides(rawInvertedPolaritySlide);
+      expect(slides).toHaveLength(1);
+      const slide = slides[0];
+
+      if (slide.interaction?.type === 'selection' && slide.interaction.questions) {
+        const q = slide.interaction.questions[0];
+        const optSchool = q.options.find((o) => o.text === 'a school');
+        const optOffice = q.options.find((o) => o.text === 'an office');
+        const optReceptionist = q.options.find((o) => o.text === 'a receptionist');
+
+        // Invariante: La polaridad se invierte para que el intruso a tachar/seleccionar sea isCorrect: true
+        expect(optReceptionist?.isCorrect).toBe(true);
+        expect(optSchool?.isCorrect).toBe(false);
+        expect(optOffice?.isCorrect).toBe(false);
+      }
+    });
+
+    it('normaliza input_fields con reactivos delimitados por \'/\' en un ejercicio de "Cross out" convirtiéndolo canónicamente a selection', () => {
+      const rawInputFieldsCrossOut = JSON.stringify({
+        slides: [
+          {
+            id: 'slide-input-cross-out',
+            title: 'Verbs Collocation',
+            subtitle: 'Cross out the incorrect word',
+            layout: 'single_column',
+            referenceContent: null,
+            interaction: {
+              id: 'int-input-cross-1',
+              type: 'input_fields',
+              instruction: 'Cross out the incorrect word/phrase:',
+              listItems: [
+                {
+                  id: 'item-1',
+                  prompt: 'work in a school/an office/a receptionist',
+                  expectedAnswer: 'a receptionist',
+                  acceptedAnswers: ['a receptionist'],
+                },
+                {
+                  id: 'item-2',
+                  prompt: 'have a brother/a car/a uniform',
+                  expectedAnswer: 'a uniform',
+                  acceptedAnswers: ['a uniform'],
+                },
+              ],
+            },
+          },
+        ],
+      });
+
+      const slides = validateAndParseSlides(rawInputFieldsCrossOut);
+      expect(slides).toHaveLength(1);
+      const slide = slides[0];
+
+      // Invariante: input_fields degradado con alternativas delimitadas por barras se promueve a selection
+      expect(slide.interaction?.type).toBe('selection');
+      if (slide.interaction?.type === 'selection' && slide.interaction.questions) {
+        expect(slide.interaction.questions).toHaveLength(2);
+
+        const q1 = slide.interaction.questions[0];
+        expect(q1.prompt).toBe('work in');
+        expect(q1.options).toHaveLength(3);
+        expect(q1.options.find((o) => o.text === 'a receptionist')?.isCorrect).toBe(true);
+        expect(q1.options.find((o) => o.text === 'a school')?.isCorrect).toBe(false);
+
+        const q2 = slide.interaction.questions[1];
+        expect(q2.prompt).toBe('have');
+        expect(q2.options).toHaveLength(3);
+        expect(q2.options.find((o) => o.text === 'a uniform')?.isCorrect).toBe(true);
+        expect(q2.options.find((o) => o.text === 'a brother')?.isCorrect).toBe(false);
+      }
+    });
+  });
+
 });
 
 

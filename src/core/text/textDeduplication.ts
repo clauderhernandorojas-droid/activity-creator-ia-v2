@@ -1,5 +1,3 @@
-import { normalizeAnswer } from './normalize';
-
 /**
  * Checks whether referenceContent is just a redundant duplicate
  * of the interactive items extracted from an exercise.
@@ -22,11 +20,11 @@ export function isDuplicateReferenceContent(
   if (refLines.length === 0) return false;
 
   const normalizedItems = items
-    .map((it) => (it.prompt ? normalizeAnswer(it.prompt).replace(/^[\d.)\-_—\s]+/, '').trim() : ''))
+    .map((it) => (it.prompt ? normalizeTextForComparison(it.prompt) : ''))
     .filter((p) => p.length > 3);
 
   const normalizedAnswers = items
-    .map((it) => (it.expectedAnswer ? normalizeAnswer(it.expectedAnswer).replace(/^[\d.)\-_—\s]+/, '').trim() : ''))
+    .map((it) => (it.expectedAnswer ? normalizeTextForComparison(it.expectedAnswer) : ''))
     .filter((a) => a.length > 3);
 
   if (normalizedItems.length === 0 && normalizedAnswers.length === 0) return false;
@@ -35,24 +33,24 @@ export function isDuplicateReferenceContent(
   let totalSubstantialLines = 0;
 
   for (const line of refLines) {
-    const cleanLine = normalizeAnswer(line).replace(/^[\d.)\-_—\s]+/, '').trim();
+    const cleanLine = normalizeTextForComparison(line);
     if (cleanLine.length <= 3) continue;
 
     totalSubstantialLines++;
 
+    const isSubstantialMatch = (target: string) => {
+      if (!target || target.length <= 3) return false;
+      if (cleanLine === target) return true;
+      if (cleanLine.includes(target) || target.includes(cleanLine)) {
+        const ratio = Math.min(cleanLine.length, target.length) / Math.max(cleanLine.length, target.length);
+        return ratio >= 0.6;
+      }
+      return false;
+    };
+
     const isMatch =
-      normalizedItems.some(
-        (itemPrompt) =>
-          cleanLine === itemPrompt ||
-          cleanLine.includes(itemPrompt) ||
-          itemPrompt.includes(cleanLine)
-      ) ||
-      normalizedAnswers.some(
-        (ans) =>
-          cleanLine === ans ||
-          cleanLine.includes(ans) ||
-          ans.includes(cleanLine)
-      );
+      normalizedItems.some(isSubstantialMatch) ||
+      normalizedAnswers.some(isSubstantialMatch);
 
     if (isMatch) {
       matchedLines++;
@@ -66,11 +64,11 @@ export function isDuplicateReferenceContent(
   }
 
   // Also check full text comparison: if the item prompts cover > 60% of the reference text characters
-  const cleanFullRef = normalizeAnswer(trimmedRef).replace(/[\s\d.)\-_—]+/g, '');
+  const cleanFullRef = normalizeTextForComparison(trimmedRef).replace(/\s+/g, '');
   if (cleanFullRef.length > 0) {
     let overlapCount = 0;
     for (const itemP of normalizedItems) {
-      const cleanP = itemP.replace(/[\s\d.)\-_—]+/g, '');
+      const cleanP = itemP.replace(/\s+/g, '');
       if (cleanP.length > 5 && cleanFullRef.includes(cleanP)) {
         overlapCount += cleanP.length;
       }

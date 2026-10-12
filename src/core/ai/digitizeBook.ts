@@ -1139,6 +1139,141 @@ export function foldSpuriousMetadata(text: string, slide: any): void {
 }
 
 /**
+ * Decomposes a reactive item with slash-delimited options into a base prompt and discrete option list.
+ * e.g. "work in a school/an office/a receptionist" -> { prompt: "work in", options: ["a school", "an office", "a receptionist"] }
+ * e.g. "1. work in: a school / an office / a receptionist" -> { prompt: "work in", options: ["a school", "an office", "a receptionist"] }
+ */
+export function decomposeSlashDelimitedReactive(
+  rawText: string
+): { prompt: string; options: string[] } | null {
+  if (!rawText || typeof rawText !== 'string') return null;
+
+  // Clean orphan gap markers: [ ? ], [blank], {{blank}}, _____
+  let clean = rawText
+    .replace(/\[\s*\?\s*\]|\[\s*blank\s*\]|\{\{\s*blank\s*\}\}|_{2,}/gi, '')
+    .trim();
+
+  // Strip leading question numbers e.g. "1. ", "2) ", "(3) "
+  clean = clean.replace(/^(?:\(?\d+[.)]?\s*)/, '').trim();
+
+  // Must contain at least one slash
+  if (!clean.includes('/')) return null;
+
+  // Split by slashes
+  const rawParts = clean.split(/\s*\/\s*/).map((p) => p.trim()).filter(Boolean);
+  if (rawParts.length < 2) return null;
+
+  // Check if there is an explicit separator before the first slash: e.g. "work in: a school" or "work in - a school"
+  const firstPart = rawParts[0];
+  const separatorMatch = firstPart.match(/^(.*?)\s*[:–—]\s*(.*)$/);
+
+  let prompt = '';
+  let firstOption = '';
+
+  if (separatorMatch) {
+    prompt = separatorMatch[1].trim();
+    firstOption = separatorMatch[2].trim();
+  } else {
+    // No colon or dash: e.g. "work in a school" followed by "/ an office / a receptionist"
+    const secondPart = rawParts[1];
+
+    // Check if firstPart contains an article/determiner boundary
+    // e.g. "work in a school" -> boundary at "a school"
+    const articleRegex = /\b(?:a|an|the|my|your|his|her|our|their|some|any)\s+[a-zA-Z]/i;
+    const firstArticleMatch = firstPart.search(articleRegex);
+
+    if (firstArticleMatch > 0) {
+      prompt = firstPart.slice(0, firstArticleMatch).trim();
+      firstOption = firstPart.slice(firstArticleMatch).trim();
+    } else {
+      // Compare word counts with second part
+      const secondWords = secondPart.split(/\s+/).filter(Boolean);
+      const firstWords = firstPart.split(/\s+/).filter(Boolean);
+
+      if (firstWords.length > secondWords.length && secondWords.length > 0) {
+        const splitIdx = firstWords.length - secondWords.length;
+        prompt = firstWords.slice(0, splitIdx).join(' ').trim();
+        firstOption = firstWords.slice(splitIdx).join(' ').trim();
+      } else if (firstWords.length >= 2) {
+        prompt = firstWords.slice(0, firstWords.length - 1).join(' ').trim();
+        firstOption = firstWords[firstWords.length - 1].trim();
+      } else {
+        prompt = firstWords[0] || '';
+        firstOption = firstWords[0] || '';
+      }
+    }
+  }
+
+  const options = [firstOption, ...rawParts.slice(1)]
+    .map((opt) => opt.replace(/\[\s*\?\s*\]|\[\s*blank\s*\]|\{\{\s*blank\s*\}\}|_{2,}/gi, '').replace(/[.,:;?!]+$/, '').trim())
+    .filter(Boolean);
+
+  if (!prompt || options.length < 2) return null;
+
+  return { prompt, options };
+}
+
+/**
+ * Detects whether an instruction represents negative discrimination ("Cross out", "Odd one out", "Which doesn't fit").
+ */
+export function isNegativeDiscriminationInstruction(text?: string): boolean {
+  if (!text) return false;
+  return /\bcross\s*(?:out|off)\b|\bodd\s*one\s*out\b|\bwhich\s+(?:one|word|phrase|item)\s+(?:doesn'?t|does\s+not|isn'?t|is\s+not)\b|\bdoes\s+not\s+(?:fit|belong|collocate|go)\b|\bdoesn'?t\s+(?:fit|belong|collocate|go)\b|\btach[ae]\b|\belimina\b|\bdescarta\b|\bincorrect\s+(?:word|phrase|option|verb|one)\b|\bwrong\s+(?:word|phrase|option|verb|one)\b|\bnot\s+possible\b/i.test(text);
+}
+
+/**
+ * Extracts interaction items into prompt/expectedAnswer pairs for referenceContent deduplication.
+ */
+export function extractInteractionItemsForDeduplication(
+  interaction: any
+): Array<{ prompt?: string; expectedAnswer?: string }> {
+  if (!interaction) return [];
+  const items: Array<{ prompt?: string; expectedAnswer?: string }> = [];
+
+  if (interaction.type === 'input_fields' && Array.isArray(interaction.listItems)) {
+    for (const it of interaction.listItems) {
+      items.push({ prompt: it.prompt || it.text || '', expectedAnswer: it.expectedAnswer || '' });
+    }
+  } else if (interaction.type === 'selection') {
+    if (Array.isArray(interaction.questions)) {
+      for (const q of interaction.questions) {
+        const optionTexts = Array.isArray(q.options) ? q.options.map((o: any) => o.text).join(' ') : '';
+        const promptWithOpts = `${q.prompt || q.question || ''} ${optionTexts}`.trim();
+        items.push({
+          prompt: promptWithOpts,
+          expectedAnswer: q.options?.find((o: any) => o.isCorrect)?.text || '',
+        });
+      }
+    }
+    if (Array.isArray(interaction.options)) {
+      const optionTexts = interaction.options.map((o: any) => o.text).join(' ');
+      const combined = `${interaction.instruction || ''} ${optionTexts}`.trim();
+      items.push({
+        prompt: combined,
+        expectedAnswer: interaction.options.find((o: any) => o.isCorrect)?.text || '',
+      });
+    }
+  } else if (interaction.type === 'buckets_matching') {
+    if (Array.isArray(interaction.tokens)) {
+      for (const t of interaction.tokens) {
+        items.push({ prompt: t.text || t.content || '', expectedAnswer: t.category || '' });
+      }
+    }
+    if (Array.isArray(interaction.sourceItems)) {
+      for (const s of interaction.sourceItems) {
+        items.push({ prompt: s.text || '', expectedAnswer: s.bucketId || '' });
+      }
+    }
+  } else if (interaction.type === 'sequence' && Array.isArray(interaction.items)) {
+    for (const s of interaction.items) {
+      items.push({ prompt: s.text || s.content || '' });
+    }
+  }
+
+  return items;
+}
+
+/**
  * Validates raw model output strictly against canonical SlideSchema.
  * Throws explicit SchemaValidationError if validation fails.
  */
@@ -1301,6 +1436,58 @@ export function validateAndParseSlides(rawJsonText: string): Slide[] {
         }
       }
 
+      // Descomposición canónica y normalización de reactivos con alternativas delimitadas ('/') en input_fields
+      if (rawSlide.interaction && rawSlide.interaction.type === 'input_fields' && Array.isArray(rawSlide.interaction.listItems)) {
+        const isNegativeDiscrim = isNegativeDiscriminationInstruction(
+          `${rawSlide.title || ''} ${rawSlide.subtitle || ''} ${rawSlide.interaction.instruction || ''}`
+        );
+        const hasSlashDelimited = rawSlide.interaction.listItems.length > 0 &&
+          rawSlide.interaction.listItems.every((it: any) => Boolean(decomposeSlashDelimitedReactive(it.prompt || it.text || '')));
+
+        if (hasSlashDelimited || (isNegativeDiscrim && rawSlide.interaction.listItems.some((it: any) => Boolean(decomposeSlashDelimitedReactive(it.prompt || it.text || ''))))) {
+          const questions = rawSlide.interaction.listItems.map((it: any, qIdx: number) => {
+            const rawPrompt = it.prompt || it.text || '';
+            const decomposed = decomposeSlashDelimitedReactive(rawPrompt);
+            const prompt = decomposed ? decomposed.prompt : rawPrompt;
+            const optionTexts = decomposed ? decomposed.options : (Array.isArray(it.options) ? it.options : []);
+            const rawExpected = (it.expectedAnswer || '').trim().toLowerCase();
+
+            const options = optionTexts.map((optText: string, oIdx: number) => {
+              let isCorrect = false;
+              if (rawExpected) {
+                isCorrect = optText.trim().toLowerCase() === rawExpected || rawExpected.includes(optText.trim().toLowerCase());
+              } else if (isNegativeDiscrim) {
+                isCorrect = oIdx === optionTexts.length - 1;
+              } else {
+                isCorrect = oIdx === 0;
+              }
+              return {
+                id: `opt-${qIdx + 1}-${oIdx + 1}`,
+                text: optText,
+                isCorrect,
+                isExample: Boolean(it.isExample),
+              };
+            });
+
+            return {
+              id: `q-${qIdx + 1}`,
+              prompt,
+              question: prompt,
+              mode: 'single_choice',
+              isExample: Boolean(it.isExample),
+              options,
+            };
+          });
+
+          rawSlide.interaction = {
+            id: rawSlide.interaction.id || `int-${Date.now()}-${idx}`,
+            type: 'selection',
+            instruction: rawSlide.interaction.instruction || rawSlide.subtitle || 'Choose the correct option:',
+            questions,
+          };
+        }
+      }
+
       if (rawSlide.interaction && rawSlide.interaction.type === 'selection' && Array.isArray(rawSlide.interaction.questions)) {
         const refText =
           rawSlide.referenceContent?.type === 'text'
@@ -1309,6 +1496,10 @@ export function validateAndParseSlides(rawJsonText: string): Slide[] {
             ? rawSlide.referenceContent.transcript
             : '';
 
+        const isNegativeDiscrim = isNegativeDiscriminationInstruction(
+          `${rawSlide.title || ''} ${rawSlide.subtitle || ''} ${rawSlide.interaction.instruction || ''}`
+        );
+
         for (const q of rawSlide.interaction.questions) {
           if (q && typeof q === 'object') {
             const statement = q.prompt || q.question || '';
@@ -1316,7 +1507,37 @@ export function validateAndParseSlides(rawJsonText: string): Slide[] {
             q.prompt = cleanedStatement;
             q.question = cleanedStatement;
 
-            if (!Array.isArray(q.options) || q.options.length === 0) {
+            // Descomposición canónica de reactivos con alternativas delimitadas ('/')
+            const slashDecomp = decomposeSlashDelimitedReactive(cleanedStatement);
+            if (slashDecomp) {
+              q.prompt = slashDecomp.prompt;
+              q.question = slashDecomp.prompt;
+
+              if (!Array.isArray(q.options) || q.options.length < 2) {
+                const rawExpected = (q.expectedAnswer || '').trim().toLowerCase();
+                q.options = slashDecomp.options.map((optText, oIdx) => {
+                  let isCorrect = false;
+                  if (rawExpected) {
+                    isCorrect = optText.trim().toLowerCase() === rawExpected || rawExpected.includes(optText.trim().toLowerCase());
+                  } else if (isNegativeDiscrim) {
+                    isCorrect = oIdx === slashDecomp.options.length - 1;
+                  } else {
+                    isCorrect = oIdx === 0;
+                  }
+                  return {
+                    id: `opt-${oIdx + 1}`,
+                    text: optText,
+                    isCorrect,
+                  };
+                });
+              } else {
+                q.options.forEach((opt: any) => {
+                  if (opt && typeof opt === 'object' && opt.text) {
+                    opt.text = opt.text.replace(/\[\s*\?\s*\]|\[\s*blank\s*\]|\{\{\s*blank\s*\}\}|_{2,}/gi, '').trim();
+                  }
+                });
+              }
+            } else if (!Array.isArray(q.options) || q.options.length === 0) {
               const disj = extractDisjunctiveAlternatives(cleanedStatement);
               if (disj) {
                 q.options = disj.options.map((opt, oIdx) => ({
@@ -1324,6 +1545,24 @@ export function validateAndParseSlides(rawJsonText: string): Slide[] {
                   text: opt,
                   isCorrect: oIdx === 0,
                 }));
+              }
+            }
+
+            // Calibración de polaridad en discriminación negativa ("Cross out" / "Odd one out")
+            if (isNegativeDiscrim && Array.isArray(q.options) && q.options.length >= 2) {
+              const rawExpected = (q.expectedAnswer || '').trim().toLowerCase();
+              if (rawExpected) {
+                q.options.forEach((opt: any) => {
+                  opt.isCorrect = opt.text.trim().toLowerCase() === rawExpected || rawExpected.includes(opt.text.trim().toLowerCase());
+                });
+              } else {
+                const falseOptions = q.options.filter((o: any) => o.isCorrect === false);
+                const trueOptions = q.options.filter((o: any) => o.isCorrect === true);
+                if (falseOptions.length === 1 && trueOptions.length >= 1) {
+                  q.options.forEach((opt: any) => {
+                    opt.isCorrect = !opt.isCorrect;
+                  });
+                }
               }
             }
           }
@@ -1546,6 +1785,23 @@ export function validateAndParseSlides(rawJsonText: string): Slide[] {
       rawSlide.referenceContent = null;
       if (rawSlide.contextBody && (rawSlide.contextBody === spuriousText || spuriousText.includes(rawSlide.contextBody))) {
         rawSlide.contextBody = undefined;
+      }
+    }
+
+    // Principio de Asignación Única y Exclusión Mutua de Contenido:
+    // Ningún fragmento del recorte debe duplicarse entre 'referenceContent' e 'interaction'.
+    // Si la totalidad del recorte corresponde a los reactivos del ejercicio (instrucción + enunciados interactivos),
+    // 'referenceContent' DEBE ser estrictamente null.
+    if (rawSlide.referenceContent && rawSlide.interaction) {
+      const refText = (rawSlide.referenceContent.body || rawSlide.referenceContent.content || '').trim();
+      if (refText) {
+        const interactionItems = extractInteractionItemsForDeduplication(rawSlide.interaction);
+        if (isDuplicateReferenceContent(refText, interactionItems)) {
+          rawSlide.referenceContent = null;
+          if (rawSlide.contextBody && (rawSlide.contextBody === refText || refText.includes(rawSlide.contextBody))) {
+            rawSlide.contextBody = undefined;
+          }
+        }
       }
     }
 
@@ -1776,6 +2032,10 @@ MULTI-SLIDE SEGMENTATION & CROSS-REFERENCING DIRECTIVES:
 
 CANONICAL ARCHETYPES:
 1. "referenceContent" (Passive consultation material) & STRICT DOCUMENTARY FIDELITY:
+   - PRINCIPIO DE ASIGNACIÓN ÚNICA Y EXCLUSIÓN MUTUA DE CONTENIDO:
+     * Ningún fragmento del recorte debe duplicarse entre 'referenceContent' e 'interaction'.
+     * Si la totalidad del recorte corresponde a los reactivos del ejercicio (instrucción + enunciados interactivos), 'referenceContent' DEBE ser estrictamente null.
+     * 'referenceContent' existe únicamente cuando hay un cuerpo de lectura independiente previo y separado de las preguntas.
    - PRINCIPIO DE CERO ALUCINACIÓN / CERO SÍNTESIS EN 'referenceContent' (FIDELIDAD DOCUMENTAL ESTRICTA):
      * 'referenceContent' debe contener EXCLUSIVAMENTE texto que esté visible e impreso físicamente en el recorte (OCR verbatim: un artículo, una transcripción de audio, un diálogo con hablantes o una tabla de consulta).
      * Queda estrictamente prohibido generar, resumir o redactar texto explicativo que no figure en la imagen fuente (como descripciones de la tarea tipo "Practice expressing...", explicaciones sintéticas, resúmenes de propósito pedagógico o notas del docente).
@@ -1833,6 +2093,15 @@ CANONICAL ARCHETYPES:
          * If an option already appears marked, circled, or highlighted as an initial pedagogical model (solved example), it MUST be marked with isExample: true (and isCorrect: true). If the question item itself is the example, mark isExample: true on the question item as well.
        - INVARIANT FOR LAYOUT SEGMENTATION:
          If the entirety of the passage or exercise decomposes into the interactive items of the activity, referenceContent MUST be strictly null and layout MUST be "single_column".
+     * DESCOMPOSICIÓN CANÓNICA DE REACTIVOS CON ALTERNATIVAS DELIMITADAS ('/'):
+       - Cuando un reactivo presente una base léxica seguida de opciones delimitadas por barras o separadores (ejemplo: "work in a school/an office/a receptionist"):
+         * El segmento base común constituye el 'prompt' de la pregunta (ejemplo: "work in").
+         * Cada elemento delimitado se mapea directamente como un ítem individual dentro de 'options' (["a school", "an office", "a receptionist"]).
+         * Queda estrictamente prohibido transformar estas estructuras en oraciones con huecos ("[ ? ]", "{{blank}}") o incluir opciones dentro del prompt de la pregunta.
+     * ENUNCIADOS DE DISCRIMINACIÓN NEGATIVA ("Cross out" / "Odd one out"):
+       - En tareas donde la instrucción solicite identificar o descartar el elemento incorrecto/sobrante (ejemplo: "Cross out the incorrect word", "Which one doesn't fit?", "Cross out the word/phrase that does not go with"):
+         * La opción que debe marcarse como 'isCorrect: true' es aquella que NO encaja con la base léxica (el elemento intruso o distractor a tachar).
+         * Las opciones que sí colocalizan correctamente con la base léxica deben tener 'isCorrect: false'.
      * CHECKLISTS & CANDIDATE SELECTION: When students mark, tick (✓), or choose valid candidates from a single domain ("Tick the phrases", "Which sentences are true?", "Select all that apply"):
        - When a pedagogical directive asks to identify, find, or mark MULTIPLE valid elements that appear in a text or set (e.g. "Select all that apply", "Which of these appear...", "Find the target responses", "Tick the phrases that are true", "Which sentences are mentioned?"):
          * The interaction MUST be emitted with 'allowMultiple: true'.
