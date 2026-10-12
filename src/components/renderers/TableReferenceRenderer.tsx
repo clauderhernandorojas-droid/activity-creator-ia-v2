@@ -1,6 +1,7 @@
 import React from 'react';
 import type { ReferenceTableBlock } from '../../types/schema';
-import { Plus, Trash2 } from 'lucide-react';
+import { Plus, Trash2, Sparkles } from 'lucide-react';
+import { renderFormattedMarkdown } from '../../core/text/markdownRenderer';
 
 interface Props {
   block: ReferenceTableBlock;
@@ -96,6 +97,53 @@ export const TableReferenceRenderer: React.FC<Props> = ({
         )}
       </div>
 
+      {/* Optional Instruction */}
+      {isEditMode ? (
+        <div className="mb-3">
+          <input
+            type="text"
+            value={block.instruction || ''}
+            onChange={(e) => onChange?.({ ...block, instruction: e.target.value })}
+            placeholder="Instrucción de consulta (ej. Study the table below:)..."
+            className="w-full text-xs font-semibold text-indigo-900 bg-indigo-50/50 border border-indigo-200/80 rounded-lg px-2.5 py-1.5 outline-none focus:border-indigo-500"
+          />
+        </div>
+      ) : (
+        block.instruction && block.instruction.trim() && (
+          <div className="mb-3 text-xs font-semibold text-slate-700 leading-relaxed">
+            {renderFormattedMarkdown(block.instruction)}
+          </div>
+        )
+      )}
+
+      {/* Explanatory Rules & Theory Notes (body) */}
+      {isEditMode ? (
+        <div className="mb-3.5">
+          <label className="block text-[11px] font-bold text-amber-800 uppercase tracking-wider mb-1">
+            Reglas Gramaticales / Notas Explicativas / TIPS:
+          </label>
+          <textarea
+            value={block.body || ''}
+            onChange={(e) => onChange?.({ ...block, body: e.target.value })}
+            placeholder="Viñetas explicativas, reglas o TIPS que acompañan al cuadro..."
+            rows={3}
+            className="w-full text-xs text-slate-800 bg-amber-50/50 border border-amber-200/90 rounded-xl p-3 outline-none focus:border-amber-400 focus:bg-white transition"
+          />
+        </div>
+      ) : (
+        block.body && block.body.trim() && (
+          <div className="mb-3.5 p-3.5 bg-amber-50/70 border border-amber-200/80 rounded-xl text-xs text-slate-800 leading-relaxed shadow-2xs">
+            <div className="flex items-center gap-1.5 font-bold text-amber-900 text-xs mb-1.5">
+              <Sparkles className="w-3.5 h-3.5 text-amber-600" />
+              <span>Reglas y Notas Explicativas</span>
+            </div>
+            <div className="space-y-1 whitespace-pre-wrap select-text">
+              {renderFormattedMarkdown(block.body)}
+            </div>
+          </div>
+        )
+      )}
+
       {/* Proportional Table Layout Container */}
       <div className="flex-1 overflow-auto rounded-xl border border-slate-200 bg-white">
         <table className="w-full text-left text-xs border-collapse table-auto">
@@ -188,9 +236,10 @@ export const TableReferenceRenderer: React.FC<Props> = ({
         />
       ) : (
         block.caption && (
-          <p className="mt-3 text-xs text-slate-700 bg-amber-50/80 p-2.5 rounded-xl border border-amber-200/80 font-medium">
-            💡 {block.caption}
-          </p>
+          <div className="mt-3 text-xs text-slate-700 bg-amber-50/80 p-2.5 rounded-xl border border-amber-200/80 font-medium flex items-start gap-1.5">
+            <span className="shrink-0 font-bold text-amber-700">💡 Tip:</span>
+            <span>{renderFormattedMarkdown(block.caption)}</span>
+          </div>
         )
       )}
     </div>

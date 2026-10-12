@@ -46,9 +46,12 @@ export function roleToForcedTargetType(role: string): ForcedTargetArchetype {
 }
 
 export function hasDataForRole(
-  data: { referenceContent?: any; interaction?: any },
+  data: { referenceContent?: any; interaction?: any; rolePayloadCache?: Record<string, any> },
   targetRole: string
 ): boolean {
+  if (data.rolePayloadCache && data.rolePayloadCache[targetRole]) {
+    return true;
+  }
   if (targetRole === 'reference_text') {
     return Boolean(
       data.referenceContent?.type === 'text' && 
@@ -58,12 +61,13 @@ export function hasDataForRole(
   if (targetRole === 'reference_table') {
     if (!data.referenceContent) return false;
     if (data.referenceContent.type === 'reference_table') {
-      return Array.isArray(data.referenceContent.columns) && data.referenceContent.columns.length > 0;
+      return (Array.isArray(data.referenceContent.columns) && data.referenceContent.columns.length > 0) || Boolean(data.referenceContent.body?.trim());
     }
     if (data.referenceContent.type === 'table_reference') {
       return (
         (Array.isArray(data.referenceContent.headers) && data.referenceContent.headers.length > 0) ||
-        (Array.isArray(data.referenceContent.rows) && data.referenceContent.rows.length > 0)
+        (Array.isArray(data.referenceContent.rows) && data.referenceContent.rows.length > 0) ||
+        Boolean(data.referenceContent.body?.trim())
       );
     }
     return false;
@@ -480,7 +484,11 @@ export const STRUCTURED_SLIDE_SCHEMA = {
                 },
                 description: '2D row cells for table_reference'
               },
-              caption: { type: 'string' },
+              caption: { type: 'string', description: 'Optional footnote, tip or caveat note' },
+              body: {
+                type: 'string',
+                description: 'Literal explanatory notes, grammar rules, tips, bullet points or surrounding narrative commentary that accompanies this reference table or passage.'
+              },
               verificationAudioUrl: { type: 'string' },
               audioLabel: { type: 'string' },
               followUpPrompt: { type: 'string' }
@@ -825,6 +833,11 @@ export function sanitizeReferenceContent(rawRef: any, idx: number): any {
     if (!Array.isArray(ref.headers)) ref.headers = [];
     if (!Array.isArray(ref.rows)) ref.rows = [];
     if (typeof ref.body === 'string') ref.body = ref.body.trim();
+    if (typeof ref.instruction === 'string') ref.instruction = ref.instruction.trim();
+    if (typeof ref.caption === 'string') ref.caption = ref.caption.trim();
+    if (!ref.body && typeof ref.content === 'string' && ref.content.trim()) {
+      ref.body = ref.content.trim();
+    }
     if (ref.headers.length === 0 && ref.rows.length === 0 && !ref.body) {
       return null;
     }
@@ -835,6 +848,11 @@ export function sanitizeReferenceContent(rawRef: any, idx: number): any {
     if (!Array.isArray(ref.columns)) ref.columns = [];
     if (!ref.title) ref.title = 'Tabla de Referencia';
     if (typeof ref.body === 'string') ref.body = ref.body.trim();
+    if (typeof ref.instruction === 'string') ref.instruction = ref.instruction.trim();
+    if (typeof ref.caption === 'string') ref.caption = ref.caption.trim();
+    if (!ref.body && typeof ref.content === 'string' && ref.content.trim()) {
+      ref.body = ref.content.trim();
+    }
     if (ref.columns.length === 0 && !ref.body) {
       return null;
     }

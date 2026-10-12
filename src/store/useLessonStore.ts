@@ -1087,17 +1087,24 @@ export const useLessonStore = create<LessonState>()(
                 ...s.lesson,
                 slides: s.lesson.slides.map((sl) => {
                   if (sl.id !== slideId) return sl;
-                  return {
-                    ...sl,
-                    title: regSlide.title || sl.title,
-                    subtitle: regSlide.subtitle || sl.subtitle,
-                    layout: isTargetReference ? 'single_column' : (regSlide.layout || (regSlide.referenceContent && regSlide.interaction ? 'split_50_50' : 'single_column')),
-                    referenceContent: regSlide.referenceContent || null,
-                    interaction: isTargetReference ? null : (regSlide.interaction || null),
-                    cachedInteraction: regSlide.interaction || sl.cachedInteraction || null,
-                    isGraded: isTargetReference ? false : (regSlide.isGraded !== undefined ? regSlide.isGraded : sl.isGraded),
-                    sourceImageSnippetUrl: clip,
-                  };
+                    const nextRoleCache = { ...(sl.rolePayloadCache || {}) };
+                    if (isTargetReference && regSlide.referenceContent) {
+                      nextRoleCache[role] = regSlide.referenceContent;
+                    } else if (regSlide.interaction) {
+                      nextRoleCache[role] = regSlide.interaction;
+                    }
+                    return {
+                      ...sl,
+                      title: regSlide.title || sl.title,
+                      subtitle: regSlide.subtitle || sl.subtitle,
+                      layout: isTargetReference ? 'single_column' : (regSlide.layout || (regSlide.referenceContent && regSlide.interaction ? 'split_50_50' : 'single_column')),
+                      referenceContent: regSlide.referenceContent || null,
+                      interaction: isTargetReference ? null : (regSlide.interaction || null),
+                      cachedInteraction: regSlide.interaction || sl.cachedInteraction || null,
+                      rolePayloadCache: nextRoleCache,
+                      isGraded: isTargetReference ? false : (regSlide.isGraded !== undefined ? regSlide.isGraded : sl.isGraded),
+                      sourceImageSnippetUrl: clip,
+                    };
                 }),
               },
             }));

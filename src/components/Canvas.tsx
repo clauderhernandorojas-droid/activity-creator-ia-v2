@@ -8,7 +8,6 @@ import { SlideErrorBoundary } from './common/SlideErrorBoundary';
 import confetti from 'canvas-confetti';
 import type { ReferenceBlock, ReferenceMediaBlock } from '../types/schema';
 import type { PedagogicalRole } from '../core/utils/slideRoleConverter';
-import { hasDataForRole } from '../core/ai/digitizeBook';
 import { renderFormattedMarkdown } from '../core/text/markdownRenderer';
 import { isSubstantialTextOverlap, isConcatenationOfItems, stripEditorialPrefix } from '../core/text/textDeduplication';
 import { ReferenceImageModal } from './modals/ReferenceImageModal';
@@ -409,40 +408,57 @@ export const Canvas: React.FC = () => {
               <div className="flex flex-wrap items-center gap-1 bg-white p-1 rounded-lg border border-slate-200 shadow-2xs">
                 {FORMAT_SWITCH_OPTIONS.map((opt) => {
                   const isSelected = currentFormat === opt.id;
-                  const isCurrentLoading = isSelected && ocrProcessing;
                   return (
                     <button
                       key={opt.id}
                       type="button"
                       disabled={ocrProcessing}
-                      onClick={async () => {
+                      onClick={() => {
                         if (!isSelected && !ocrProcessing) {
-                          const hasData = hasDataForRole(currentSlide, opt.id);
-                          const clip = currentSlide.sourceImageSnippetUrl || pastedImages[0] || (extractedBlocks[0] as any)?.sourceImageSnippetUrl;
-                          if (!hasData && clip) {
-                            await reExtractSlideWithRole(currentSlide.id, opt.id, clip);
-                          } else {
-                            convertSlideRole(currentSlide.id, opt.id);
-                          }
+                          convertSlideRole(currentSlide.id, opt.id);
                         }
                       }}
                       className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold transition-all cursor-pointer ${
                         isSelected
                           ? 'bg-indigo-600 text-white shadow-xs scale-[1.02]'
                           : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-                      } ${ocrProcessing ? 'opacity-80' : ''}`}
+                      }`}
                       title={`Convertir diapositiva a formato ${opt.label} (Reversible con Ctrl+Z)`}
                     >
-                      {isCurrentLoading ? (
-                        <RotateCcw className="w-3.5 h-3.5 animate-spin text-white" />
-                      ) : (
-                        <span className="text-xs">{opt.icon}</span>
-                      )}
-                      <span>{isCurrentLoading ? 'Re-extrayendo...' : opt.label}</span>
+                      <span className="text-xs">{opt.icon}</span>
+                      <span>{opt.label}</span>
                     </button>
                   );
                 })}
               </div>
+
+              {/* Explicit AI Re-extraction Button (Only when user explicitly asks, with original clipping) */}
+              {(currentSlide.sourceImageSnippetUrl || pastedImages[0]) && (
+                <button
+                  type="button"
+                  disabled={ocrProcessing}
+                  onClick={async () => {
+                    const clip = currentSlide.sourceImageSnippetUrl || pastedImages[0] || (extractedBlocks[0] as any)?.sourceImageSnippetUrl;
+                    if (clip && !ocrProcessing) {
+                      await reExtractSlideWithRole(currentSlide.id, currentFormat, clip);
+                    }
+                  }}
+                  className="flex items-center gap-1 px-2.5 py-1.5 bg-slate-100 hover:bg-indigo-50 text-slate-600 hover:text-indigo-700 rounded-lg border border-slate-200 text-xs font-semibold transition cursor-pointer disabled:opacity-50"
+                  title="Re-analizar el recorte original con IA específicamente enfocado en el formato activo"
+                >
+                  {ocrProcessing ? (
+                    <>
+                      <RotateCcw className="w-3.5 h-3.5 animate-spin text-indigo-600" />
+                      <span>Re-extrayendo con IA...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles className="w-3.5 h-3.5 text-indigo-600" />
+                      <span>Re-extraer con IA</span>
+                    </>
+                  )}
+                </button>
+              )}
 
               {/* Discrete isGraded Switch */}
               {hasInteraction && (

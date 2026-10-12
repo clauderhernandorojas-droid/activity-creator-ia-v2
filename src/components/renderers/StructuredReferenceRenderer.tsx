@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import type { StructuredReferenceBlock } from '../../types/schema';
-import { Plus, Trash2, BookOpen, Layers } from 'lucide-react';
+import { Plus, Trash2, BookOpen, Layers, Sparkles } from 'lucide-react';
 import { renderFormattedMarkdown } from '../../core/text/markdownRenderer';
 
 interface Props {
@@ -128,6 +128,53 @@ export const StructuredReferenceRenderer: React.FC<Props> = ({
         </div>
       </div>
 
+      {/* Optional Instruction */}
+      {isEditMode ? (
+        <div className="mb-3">
+          <input
+            type="text"
+            value={block.instruction || ''}
+            onChange={(e) => onChange?.({ ...block, instruction: e.target.value })}
+            placeholder="Instrucción de consulta (ej. Study the rules and examples below:)..."
+            className="w-full text-xs font-semibold text-indigo-900 bg-indigo-50/50 border border-indigo-200/80 rounded-lg px-2.5 py-1.5 outline-none focus:border-indigo-500"
+          />
+        </div>
+      ) : (
+        block.instruction && block.instruction.trim() && (
+          <div className="mb-3 text-xs font-semibold text-slate-700 leading-relaxed">
+            {renderFormattedMarkdown(block.instruction)}
+          </div>
+        )
+      )}
+
+      {/* Explanatory Rules & Theory Notes (body) */}
+      {isEditMode ? (
+        <div className="mb-4">
+          <label className="block text-[11px] font-bold text-amber-800 uppercase tracking-wider mb-1">
+            Reglas Gramaticales / Notas Explicativas / TIPS:
+          </label>
+          <textarea
+            value={block.body || ''}
+            onChange={(e) => onChange?.({ ...block, body: e.target.value })}
+            placeholder="Viñetas explicativas, reglas o TIPS que acompañan al cuadro..."
+            rows={3}
+            className="w-full text-xs text-slate-800 bg-amber-50/50 border border-amber-200/90 rounded-xl p-3 outline-none focus:border-amber-400 focus:bg-white transition"
+          />
+        </div>
+      ) : (
+        block.body && block.body.trim() && (
+          <div className="mb-4 p-4 bg-amber-50/70 border border-amber-200/80 rounded-2xl text-xs text-slate-800 leading-relaxed shadow-2xs">
+            <div className="flex items-center gap-1.5 font-bold text-amber-900 text-xs mb-2">
+              <Sparkles className="w-3.5 h-3.5 text-amber-600" />
+              <span>Reglas y Notas Explicativas</span>
+            </div>
+            <div className="space-y-1.5 whitespace-pre-wrap select-text">
+              {renderFormattedMarkdown(block.body)}
+            </div>
+          </div>
+        )
+      )}
+
       {/* Structured Content Grid */}
       <div className="flex-1 overflow-y-auto pr-1">
         {columns.length === 0 ? (
@@ -216,7 +263,7 @@ export const StructuredReferenceRenderer: React.FC<Props> = ({
                           className="text-slate-300 hover:text-rose-600 p-0.5 rounded transition cursor-pointer"
                           title="Eliminar elemento"
                         >
-                          <Trash2 className="w-3 h-3" />
+                          <Trash2 className="w-3.5 h-3.5" />
                         </button>
                       )}
                     </li>
@@ -240,11 +287,25 @@ export const StructuredReferenceRenderer: React.FC<Props> = ({
         )}
       </div>
 
-      {/* Optional Footnote / Caption (only when no columns exist) */}
-      {block.caption && columns.length === 0 && (
-        <div className="mt-3 pt-2.5 border-t border-slate-100 text-[11px] text-slate-500 italic">
-          {block.caption}
+      {/* Footnote / Caption / TIP (Always rendered if present) */}
+      {isEditMode ? (
+        <div className="mt-3 pt-2.5 border-t border-slate-100 flex items-center gap-2">
+          <span className="text-[11px] font-bold text-slate-500">Tip / Nota al pie:</span>
+          <input
+            type="text"
+            value={block.caption || ''}
+            placeholder="Nota marginal o TIP..."
+            onChange={(e) => onChange?.({ ...block, caption: e.target.value })}
+            className="flex-1 text-xs text-slate-700 bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1 outline-none focus:border-indigo-400"
+          />
         </div>
+      ) : (
+        block.caption && block.caption.trim() && (
+          <div className="mt-3 pt-2.5 border-t border-slate-100 flex items-start gap-2 text-xs text-slate-700 bg-amber-50/50 p-2.5 rounded-xl border border-amber-200/70 font-medium">
+            <span className="font-bold text-amber-700 not-italic shrink-0">💡 TIP:</span>
+            <span className="flex-1">{renderFormattedMarkdown(block.caption)}</span>
+          </div>
+        )
       )}
     </div>
   );
