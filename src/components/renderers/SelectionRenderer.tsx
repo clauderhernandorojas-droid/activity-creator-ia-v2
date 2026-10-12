@@ -3,6 +3,7 @@ import type { SelectionBlock, SelectionQuestion, SelectionOption } from '../../t
 import { useSessionStore, type SessionEvaluation } from '../../store/useSessionStore';
 import { Plus, Trash2, CheckCircle2, XCircle, Check, HelpCircle, ChevronDown } from 'lucide-react';
 import { VerificationAudioPlayer } from '../common/VerificationAudioPlayer';
+import { splitSentenceAtBlank, cleanBlankMarkers, hasBlankToken } from '../../core/text/clozeTokenizer';
 
 interface Props {
   block: SelectionBlock;
@@ -14,29 +15,34 @@ interface Props {
 }
 
 /**
- * Renders a question statement, replacing '{{blank}}' placeholders with a clean visual underline.
+ * Renders a question statement, replacing blank placeholders (e.g. {{blank}}, [blank], ___)
+ * with an interactive filled slot or visual underline, without exposing internal template markers.
  */
-const renderQuestionStatement = (rawText: string) => {
+const renderQuestionStatement = (rawText: string, selectedText?: string) => {
   if (!rawText) return null;
-  if (!rawText.includes('{{blank}}')) {
-    return rawText;
+  if (!hasBlankToken(rawText)) {
+    return cleanBlankMarkers(rawText);
   }
-  const parts = rawText.split('{{blank}}');
+  const split = splitSentenceAtBlank(rawText);
   return (
     <span>
-      {parts.map((part, index) => (
-        <React.Fragment key={index}>
-          {part}
-          {index < parts.length - 1 && (
-            <span
-              className="inline-block border-b-2 border-slate-400 font-mono text-slate-500 px-1 mx-1 font-semibold select-none"
-              title="Espacio de selección"
-            >
-              _____
-            </span>
-          )}
-        </React.Fragment>
-      ))}
+      {split.prefix}
+      {selectedText ? (
+        <span
+          className="inline-block border-b-2 border-indigo-600 bg-indigo-50 text-indigo-900 font-bold px-2 py-0.5 mx-1 rounded text-sm align-middle shadow-2xs"
+          title="Opción seleccionada"
+        >
+          {selectedText}
+        </span>
+      ) : (
+        <span
+          className="inline-block border-b-2 border-indigo-300 bg-indigo-50/50 text-indigo-500 font-semibold px-2.5 py-0.5 mx-1 rounded text-xs select-none align-middle"
+          title="Espacio de selección"
+        >
+          [&nbsp;?&nbsp;]
+        </span>
+      )}
+      {split.suffix}
     </span>
   );
 };
@@ -545,7 +551,12 @@ export const SelectionRenderer: React.FC<Props> = ({
                   ) : (
                     <div className="flex items-center justify-between w-full">
                       <p className="text-sm font-semibold text-slate-800 leading-relaxed">
-                        {renderQuestionStatement(q.question || q.prompt || '')}
+                        {(() => {
+                          const selectedOptionId = studentAnswers[q.id];
+                          const selectedOpt = (q.options || []).find((opt) => opt.id === selectedOptionId);
+                          const selectedText = selectedOpt?.text || (q.isExample ? (q.options || []).find((o) => o.isCorrect)?.text : undefined);
+                          return renderQuestionStatement(q.question || q.prompt || '', selectedText);
+                        })()}
                       </p>
                       {isEvaluated && (
                         <span>

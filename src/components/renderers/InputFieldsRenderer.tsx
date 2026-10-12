@@ -3,6 +3,7 @@ import type { InputFieldsBlock, InputFieldListItem, InputFieldTableCell } from '
 import { useSessionStore, type SessionEvaluation } from '../../store/useSessionStore';
 import { Plus, Trash2, CheckCircle2, XCircle, HelpCircle, AlertCircle, Sparkles, Headphones } from 'lucide-react';
 import { VerificationAudioPlayer } from '../common/VerificationAudioPlayer';
+import { splitSentenceAtBlank, cleanBlankMarkers } from '../../core/text/clozeTokenizer';
 
 interface Props {
   block: InputFieldsBlock;
@@ -722,6 +723,7 @@ export const InputFieldsRenderer: React.FC<Props> = ({
           );
 
           const rawPromptTrimmed = (item.prompt || '').trim();
+          const clozeSplit = splitSentenceAtBlank(rawPromptTrimmed);
           const isPureNumPrompt = /^(?:item\s*)?\d+[.)]?$/i.test(rawPromptTrimmed) || !rawPromptTrimmed;
           const isInterrogativePrompt = rawPromptTrimmed.includes('?') ||
             /^(?:(?:\(?\d+[.)]?|[a-zA-Z][.)]|•|\*|-)\s*)?(?:what|where|when|who|whom|which|why|how|do|does|did|is|are|was|were|can|could|should|would|have|has)\b/i.test(rawPromptTrimmed);
@@ -836,7 +838,7 @@ export const InputFieldsRenderer: React.FC<Props> = ({
               ) : (
                 /* PREVIEW / STUDENT MODE */
                 <div className="space-y-2.5">
-                  {parsedPrompt.isMatching ? (
+                  {parsedPrompt.isMatching && !clozeSplit.hasBlank ? (
                     /* MATCHING / VOCABULARY ROW FORMAT */
                     <div className="flex flex-col sm:flex-row sm:items-center gap-2.5">
                       <div className={`flex items-center gap-2 ${hasRealClueOnRight ? 'shrink-0' : 'flex-1'}`}>
@@ -975,8 +977,103 @@ export const InputFieldsRenderer: React.FC<Props> = ({
                         </span>
                       )}
                     </div>
+                  ) : clozeSplit.hasBlank ? (
+                    /* INLINE CLOZE / FILL-IN-THE-BLANK FLOW */
+                    <div className="flex flex-col gap-2">
+                      <div className="text-sm sm:text-base font-semibold text-slate-800 leading-loose flex flex-wrap items-center gap-x-1.5 gap-y-2">
+                        {/* Leading text before the blank */}
+                        {clozeSplit.prefix && (
+                          <span className="align-middle">{clozeSplit.prefix}</span>
+                        )}
+
+                        {/* Separate item prefix if not already present in prompt prefix */}
+                        {item.prefix && !clozeSplit.prefix.includes(item.prefix) && (
+                          <span className="font-bold text-slate-500 align-middle">{item.prefix}</span>
+                        )}
+
+                        {/* INLINE INPUT FIELD MOUNTED AT THE EXACT BLANK POSITION */}
+                        <div className="relative inline-flex items-center align-middle mx-1">
+                          <input
+                            type="text"
+                            value={item.isExample ? (item.expectedAnswer || userVal) : userVal}
+                            disabled={isEvaluated || item.isExample}
+                            placeholder={item.isExample ? '' : (item.hint ? item.hint : '...')}
+                            onChange={(e) => onAnswerChange?.(item.id, e.target.value)}
+                            style={{
+                              width: `${Math.max(
+                                11,
+                                Math.min(
+                                  28,
+                                  Math.max(
+                                    (userVal || '').length,
+                                    (item.expectedAnswer || item.acceptedAnswers?.[0] || '').length,
+                                    6
+                                  ) + 3
+                                )
+                              )}ch`,
+                            }}
+                            className={`inline-block text-sm sm:text-base rounded-xl px-3 py-1.5 outline-none font-semibold transition min-w-[110px] sm:min-w-[130px] max-w-full text-center ${
+                              item.isExample
+                                ? 'bg-slate-100 text-slate-800 border border-slate-300 font-bold select-none cursor-not-allowed shadow-2xs'
+                                : isEvaluated
+                                  ? !isGraded
+                                    ? 'bg-indigo-50/30 text-slate-900 border border-indigo-300 font-semibold pr-8 shadow-xs'
+                                    : isCorrect
+                                      ? isTypoWarning
+                                        ? 'bg-white text-amber-950 border border-amber-400 font-bold pr-8 shadow-xs'
+                                        : 'bg-white text-emerald-950 border border-emerald-400 font-bold pr-8 shadow-xs'
+                                      : 'bg-white text-rose-950 border border-rose-400 font-bold pr-8 shadow-xs'
+                                  : 'bg-white text-slate-900 border border-slate-300 focus:border-indigo-600 focus:ring-2 focus:ring-indigo-100 shadow-2xs'
+                            }`}
+                          />
+
+                          {isEvaluated && !item.isExample && (
+                            <span className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none">
+                              {!isGraded ? (
+                                <CheckCircle2 className="w-4 h-4 text-indigo-600" />
+                              ) : isCorrect ? (
+                                isTypoWarning ? (
+                                  <AlertCircle className="w-4 h-4 text-amber-600" />
+                                ) : (
+                                  <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                                )
+                              ) : (
+                                <XCircle className="w-4 h-4 text-rose-600" />
+                              )}
+                            </span>
+                          )}
+                        </div>
+
+                        {/* Separate item suffix if not already present in prompt suffix */}
+                        {item.suffix && !clozeSplit.suffix.includes(item.suffix) && (
+                          <span className="font-bold text-slate-500 align-middle">{item.suffix}</span>
+                        )}
+
+                        {/* Trailing text after the blank */}
+                        {clozeSplit.suffix && (
+                          <span className="align-middle">{clozeSplit.suffix}</span>
+                        )}
+
+                        {/* Example indicator badge */}
+                        {item.isExample && (
+                          <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-slate-200 text-slate-600 border border-slate-300 select-none shrink-0 self-center ml-1">
+                            ✓ Ejemplo
+                          </span>
+                        )}
+
+                        {/* Hint icon */}
+                        {item.hint && !isEvaluated && !item.isExample && (
+                          <span
+                            title={`Pista: ${item.hint}`}
+                            className="p-1 text-amber-600 hover:text-amber-700 cursor-help shrink-0 self-center"
+                          >
+                            <HelpCircle className="w-4 h-4" />
+                          </span>
+                        )}
+                      </div>
+                    </div>
                   ) : (
-                    /* STANDARD SENTENCE / FILL-IN-BLANK FORMAT */
+                    /* STANDARD SENTENCE / QUESTION WITHOUT BLANK */
                     <>
                       <div className="flex items-center justify-between gap-2">
                         <p className="text-sm font-semibold text-slate-800 leading-relaxed">
@@ -985,12 +1082,12 @@ export const InputFieldsRenderer: React.FC<Props> = ({
                             const isPureNum = /^(?:item\s*)?\d+[.)]?$/i.test(p);
                             const fallback = explanationOrHint?.trim();
                             if (isPureNum && fallback) {
-                              return `${p} ${fallback}`;
+                              return cleanBlankMarkers(`${p} ${fallback}`);
                             }
                             if (!p && fallback) {
-                              return `${idx + 1}. ${fallback}`;
+                              return cleanBlankMarkers(`${idx + 1}. ${fallback}`);
                             }
-                            return p || `${idx + 1}.`;
+                            return cleanBlankMarkers(p || `${idx + 1}.`);
                           })()}
                         </p>
                         {item.isExample && (
