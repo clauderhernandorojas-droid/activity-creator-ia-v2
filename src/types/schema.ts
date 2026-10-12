@@ -9,6 +9,7 @@ export const ReferenceTextBlockSchema = z.object({
   id: z.string(),
   title: z.string().optional(),
   content: z.string(),
+  body: z.string().optional(),
   category: z.enum(['reading', 'grammar_note', 'instructions', 'dialogue']).default('grammar_note'),
   imageUrl: z.string().optional(),
   images: z.array(z.string()).optional(),
@@ -21,6 +22,7 @@ export const ReferenceTableBlockSchema = z.object({
   headers: z.array(z.string()),
   rows: z.array(z.array(z.string())),
   caption: z.string().optional(),
+  body: z.string().optional(),
 });
 
 export const StructuredReferenceColumnSchema = z.object({
@@ -35,6 +37,7 @@ export const StructuredReferenceBlockSchema = z.object({
   instruction: z.string().optional().default(''),
   columns: z.array(StructuredReferenceColumnSchema).default([]),
   caption: z.string().optional(),
+  body: z.string().optional(),
   verificationAudioUrl: z.string().optional(),
   audioLabel: z.string().optional(),
   followUpPrompt: z.string().optional(),

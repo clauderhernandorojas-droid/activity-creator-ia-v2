@@ -1250,7 +1250,7 @@ describe('slideValidation - Direct Schema & Architectural Invariant Tests', () =
       expect(slide.layout).toBe('single_column');
     });
 
-    it('establece isGraded: false en matrices o tablas gramaticales puramente estáticas (100% isInput: false)', () => {
+    it('establece isGraded: false e interaction: null en matrices o tablas gramaticales puramente estáticas (100% isInput: false)', () => {
       const rawStaticMatrixSlide = JSON.stringify({
         slides: [
           {
@@ -1285,14 +1285,136 @@ describe('slideValidation - Direct Schema & Architectural Invariant Tests', () =
       expect(slides).toHaveLength(1);
 
       const slide = slides[0];
-      // Invariante: Tabla sin celdas interactivas no es evaluable numéricamente
+      // Invariante: Bloque sin celdas interactivas se emite con isGraded: false e interaction: null
       expect(slide.isGraded).toBe(false);
+      expect(slide.interaction).toBeNull();
       expect(slide.layout).toBe('single_column');
-      if (slide.interaction?.type === 'input_fields') {
-        expect(slide.interaction.tableRows).toHaveLength(2);
-        expect(slide.interaction.tableRows[0][0].isInput).toBe(false);
-        expect(slide.interaction.tableRows[0][1].isInput).toBe(false);
-        expect(slide.interaction.tableRows[0][2].isInput).toBe(false);
+      expect(slide.referenceContent).not.toBeNull();
+      expect(slide.referenceContent?.type).toBe('table_reference');
+      if (slide.referenceContent?.type === 'table_reference') {
+        expect(slide.referenceContent.headers).toEqual(['Statement', 'Agree', 'Disagree']);
+        expect(slide.referenceContent.rows).toHaveLength(2);
+      }
+    });
+
+    it('normaliza instrucciones resolutivas ("Complete the table...") a propósito de consulta ("Study the table...") en bloques sin elementos activos', () => {
+      const rawStaticSlide = JSON.stringify({
+        slides: [
+          {
+            id: 'slide-static-resolutive',
+            title: 'Irregular Verbs Reference',
+            subtitle: 'Complete the table with the past forms',
+            layout: 'single_column',
+            referenceContent: null,
+            interaction: {
+              id: 'int-static-tbl',
+              type: 'input_fields',
+              instruction: 'Complete the table with the past forms',
+              layoutMode: 'table',
+              tableHeaders: ['Infinitive', 'Past Simple', 'Past Participle'],
+              tableRows: [
+                [
+                  { text: 'go', isInput: false },
+                  { text: 'went', isInput: false },
+                  { text: 'gone', isInput: false }
+                ]
+              ]
+            }
+          }
+        ]
+      });
+
+      const slides = validateAndParseSlides(rawStaticSlide);
+      const slide = slides[0];
+      expect(slide.isGraded).toBe(false);
+      expect(slide.interaction).toBeNull();
+      expect(slide.subtitle).toBe('Study the table with the past forms');
+      expect(slide.referenceContent?.type).toBe('table_reference');
+    });
+
+    it('preserva íntegramente el texto perimetral y notas explicativas dentro de referenceContent.body al combinar elementos estructurados', () => {
+      const rawCombinedSlide = JSON.stringify({
+        slides: [
+          {
+            id: 'slide-perimetral-1',
+            title: 'Vocabulary & Phrases: In an Office',
+            layout: 'split_50_50',
+            referenceContent: {
+              id: 'ref-perimetral-note',
+              type: 'text',
+              category: 'grammar_note',
+              title: 'Useful Language & Tip',
+              content: 'Notice how "colleague" is used for professional peers. Always use polite intonation.',
+              body: 'Notice how "colleague" is used for professional peers. Always use polite intonation.'
+            },
+            interaction: {
+              id: 'int-office-table',
+              type: 'input_fields',
+              instruction: 'Complete the missing office phrases:',
+              layoutMode: 'table',
+              tableHeaders: ['Role', 'Phrase'],
+              tableRows: [
+                [
+                  { text: 'Receptionist', isInput: false },
+                  { text: '', isInput: true, inputId: 'inp-1', expectedAnswer: 'How can I help you?' }
+                ]
+              ]
+            }
+          }
+        ]
+      });
+
+      const slides = validateAndParseSlides(rawCombinedSlide);
+      const slide = slides[0];
+      // El texto perimetral NO debe ser eliminado a pesar de tener una tabla en la interacción
+      expect(slide.referenceContent).not.toBeNull();
+      expect(slide.referenceContent?.type).toBe('text');
+      if (slide.referenceContent?.type === 'text') {
+        expect(slide.referenceContent.body).toContain('Notice how "colleague" is used');
+        expect(slide.referenceContent.content).toContain('Notice how "colleague" is used');
+      }
+      expect(slide.interaction).not.toBeNull();
+      expect(slide.isGraded).toBe(true);
+    });
+
+    it('preserva el texto perimetral body en table_reference convirtiéndolo en nota de referencia textual para evitar pérdida de contexto', () => {
+      const rawTableRefSlide = JSON.stringify({
+        slides: [
+          {
+            id: 'slide-table-perimetral-2',
+            title: 'Quantifiers: Much / Many / A lot of',
+            layout: 'split_50_50',
+            referenceContent: {
+              id: 'ref-tbl-with-body',
+              type: 'table_reference',
+              title: 'Quantifiers Overview',
+              headers: ['Countable', 'Uncountable'],
+              rows: [['many', 'much']],
+              body: 'Important Note: Use "a lot of" in affirmative sentences, and "much/many" in questions and negatives.'
+            },
+            interaction: {
+              id: 'int-quant-1',
+              type: 'input_fields',
+              instruction: 'Complete the sentences with much or many:',
+              layoutMode: 'table',
+              tableHeaders: ['Question', 'Answer'],
+              tableRows: [
+                [
+                  { text: 'How ___ milk is left?', isInput: true, inputId: 'inp-milk', expectedAnswer: 'much' },
+                  { text: 'Not much.', isInput: false }
+                ]
+              ]
+            }
+          }
+        ]
+      });
+
+      const slides = validateAndParseSlides(rawTableRefSlide);
+      const slide = slides[0];
+      expect(slide.referenceContent).not.toBeNull();
+      expect(slide.referenceContent?.type).toBe('text');
+      if (slide.referenceContent?.type === 'text') {
+        expect(slide.referenceContent.body).toContain('Important Note: Use "a lot of"');
       }
     });
 

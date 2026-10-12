@@ -796,9 +796,13 @@ export function sanitizeReferenceContent(rawRef: any, idx: number): any {
     if ((typeof ref.content !== 'string' || !ref.content.trim()) && typeof ref.body === 'string' && ref.body.trim()) {
       ref.content = ref.body.trim();
     }
+    if ((typeof ref.body !== 'string' || !ref.body.trim()) && typeof ref.content === 'string' && ref.content.trim()) {
+      ref.body = ref.content.trim();
+    }
     if (typeof ref.content !== 'string' || !ref.content.trim()) {
       if (typeof ref.title === 'string' && ref.title.trim()) {
         ref.content = ref.title.trim();
+        ref.body = ref.title.trim();
       } else {
         return null;
       }
@@ -820,7 +824,8 @@ export function sanitizeReferenceContent(rawRef: any, idx: number): any {
   if (type === 'table_reference') {
     if (!Array.isArray(ref.headers)) ref.headers = [];
     if (!Array.isArray(ref.rows)) ref.rows = [];
-    if (ref.headers.length === 0 && ref.rows.length === 0) {
+    if (typeof ref.body === 'string') ref.body = ref.body.trim();
+    if (ref.headers.length === 0 && ref.rows.length === 0 && !ref.body) {
       return null;
     }
     return ref;
@@ -829,7 +834,8 @@ export function sanitizeReferenceContent(rawRef: any, idx: number): any {
   if (type === 'reference_table') {
     if (!Array.isArray(ref.columns)) ref.columns = [];
     if (!ref.title) ref.title = 'Tabla de Referencia';
-    if (ref.columns.length === 0) {
+    if (typeof ref.body === 'string') ref.body = ref.body.trim();
+    if (ref.columns.length === 0 && !ref.body) {
       return null;
     }
     return ref;
@@ -962,6 +968,28 @@ export function cleanSelectionPrompt(rawPrompt: string, referenceText?: string):
   cleaned = cleaned.replace(/\s+\?$/, '?');
 
   return cleaned;
+}
+
+/**
+ * Normalizes instruction phrasing on non-interactive slides to consultative/reading verbs,
+ * avoiding resolutive action verbs (e.g. "Complete...", "Fill in...") when there are zero inputs.
+ */
+export function normalizeNonInteractiveInstruction(instruction?: string): string {
+  if (!instruction || typeof instruction !== 'string') return 'Read and review the reference material:';
+  const trimmed = instruction.trim();
+  const resolutiveRegex = /^(?:complete|fill\s+in|fill\s+out|choose|select|write|circle|match|tick|check|subraya|completa|rellena|elige|selecciona|escribe)\b/i;
+  if (resolutiveRegex.test(trimmed)) {
+    return trimmed
+      .replace(/^complete\s+the\s+table\b/i, 'Study the table')
+      .replace(/^complete\s+the\s+chart\b/i, 'Study the chart')
+      .replace(/^complete\s+the\s+sentences\b/i, 'Read the sentences')
+      .replace(/^fill\s+in\s+the\s+blanks?\b/i, 'Review the rules and examples')
+      .replace(/^fill\s+in\s+the\s+table\b/i, 'Study the table')
+      .replace(/^choose\s+the\s+correct\s+answers?\b/i, 'Review the examples')
+      .replace(/^write\b/i, 'Read')
+      .replace(resolutiveRegex, 'Review');
+  }
+  return trimmed;
 }
 
 /**
@@ -1157,7 +1185,7 @@ export function validateAndParseSlides(rawJsonText: string): Slide[] {
         }
       }
 
-      // En ejercicios de tipo tabla/cuadrícula interactiva autosuficientes:
+      // En ejercicios de tipo tabla/cuadrícula interactiva:
       if (
         rawSlide.interaction &&
         rawSlide.interaction.type === 'input_fields' &&
@@ -1165,18 +1193,36 @@ export function validateAndParseSlides(rawJsonText: string): Slide[] {
         Array.isArray(rawSlide.interaction.tableRows)
       ) {
         if (rawSlide.referenceContent) {
-          // Descartar tablas duplicadas o desacopladas indebidamente
+          // Descartar tablas duplicadas o desacopladas indebidamente,
+          // PERO preservar cualquier texto perimetral explicativo o notas marginales en 'referenceContent.body'
           if (
             rawSlide.referenceContent.type === 'table_reference' ||
             rawSlide.referenceContent.type === 'reference_table'
           ) {
-            rawSlide.referenceContent = null;
+            const perimetralText =
+              rawSlide.referenceContent.body ||
+              rawSlide.referenceContent.caption ||
+              rawSlide.referenceContent.instruction ||
+              '';
+            if (perimetralText.trim()) {
+              rawSlide.referenceContent = {
+                id: `ref-perimetral-${Date.now()}-${idx}`,
+                type: 'text',
+                category: 'grammar_note',
+                title: rawSlide.referenceContent.title || 'Grammar Note',
+                content: perimetralText.trim(),
+                body: perimetralText.trim(),
+              };
+            } else {
+              rawSlide.referenceContent = null;
+            }
           } else if (
             rawSlide.referenceContent.type === 'text' &&
-            typeof rawSlide.referenceContent.content === 'string'
+            (typeof rawSlide.referenceContent.content === 'string' || typeof rawSlide.referenceContent.body === 'string')
           ) {
-            // Verificar si el texto en referenceContent corresponde a celdas de ejemplo o elementos de la tabla
-            const refLines = rawSlide.referenceContent.content
+            // Verificar si el texto en referenceContent corresponde estrictamente a celdas de ejemplo copiadas de la tabla
+            const refTextToScan = (rawSlide.referenceContent.content || rawSlide.referenceContent.body || '').trim();
+            const refLines = refTextToScan
               .split('\n')
               .map((l: string) => l.trim().toLowerCase())
               .filter((l: string) => l.length > 2);
@@ -1205,23 +1251,79 @@ export function validateAndParseSlides(rawJsonText: string): Slide[] {
                 tableTexts.some((t: string) => t.includes(line) || line.includes(t))
               );
 
+            // Solo descartar si el texto de referencia NO aporta nada perimetral y era meramente copia de celdas
             if (allLinesInTable) {
               rawSlide.referenceContent = null;
             }
           }
         }
+      }
 
-        // Si contiene una tabla de ejemplos (como la matriz agree/disagree) con todas las celdas estáticas (isInput: false):
-        const hasInteractiveCells = rawSlide.interaction.tableRows.some((row: any) =>
-          Array.isArray(row) && row.some((cell: any) => cell && typeof cell === 'object' && cell.isInput === true)
-        );
-        if (!hasInteractiveCells) {
-          rawSlide.isGraded = false;
+      // Consistencia semántica de estado no interactivo:
+      // Si un bloque no posee elementos de entrada activos (cero inputs, cero blanks, celdas 100% informativas):
+      if (rawSlide.interaction) {
+        let isZeroInteractive = false;
+        if (rawSlide.interaction.type === 'input_fields') {
+          if (rawSlide.interaction.layoutMode === 'table') {
+            const hasInteractiveCells = Array.isArray(rawSlide.interaction.tableRows) && rawSlide.interaction.tableRows.some((row: any) =>
+              Array.isArray(row) && row.some((cell: any) => cell && typeof cell === 'object' && cell.isInput === true)
+            );
+            if (!hasInteractiveCells) isZeroInteractive = true;
+          } else {
+            const hasInteractiveItems = Array.isArray(rawSlide.interaction.listItems) && rawSlide.interaction.listItems.some((item: any) =>
+              !item.isExample && Boolean(item.expectedAnswer?.trim() || (Array.isArray(item.acceptedAnswers) && item.acceptedAnswers.length > 0))
+            );
+            const hasParagraphInputs = Boolean(rawSlide.interaction.paragraphTemplate && Object.keys(rawSlide.interaction.paragraphInputs || {}).length > 0);
+            if (!hasInteractiveItems && !hasParagraphInputs) isZeroInteractive = true;
+          }
+        } else if (rawSlide.interaction.type === 'selection') {
+          const hasQuestions = (Array.isArray(rawSlide.interaction.questions) && rawSlide.interaction.questions.length > 0) ||
+            (Array.isArray(rawSlide.interaction.options) && rawSlide.interaction.options.length > 0);
+          if (!hasQuestions) isZeroInteractive = true;
+        } else if (rawSlide.interaction.type === 'buckets_matching') {
+          const hasTokens = (Array.isArray(rawSlide.interaction.tokens) && rawSlide.interaction.tokens.length > 0) ||
+            (Array.isArray(rawSlide.interaction.sourceItems) && rawSlide.interaction.sourceItems.length > 0);
+          if (!hasTokens) isZeroInteractive = true;
+        } else if (rawSlide.interaction.type === 'sequence') {
+          const hasItems = Array.isArray(rawSlide.interaction.items) && rawSlide.interaction.items.length > 0;
+          if (!hasItems) isZeroInteractive = true;
         }
 
-        // En ejercicios de tipo tabla/cuadrícula donde todo el contenido está dentro de la misma tabla,
-        // el diseño de la diapositiva debe ser de una sola columna ('single_column') sin panel de lectura lateral
-        if (!rawSlide.referenceContent) {
+        if (isZeroInteractive) {
+          rawSlide.isGraded = false;
+          if (rawSlide.interaction.instruction) {
+            const normalized = normalizeNonInteractiveInstruction(rawSlide.interaction.instruction);
+            if (!rawSlide.subtitle || rawSlide.subtitle === rawSlide.interaction.instruction) {
+              rawSlide.subtitle = normalized;
+            }
+          }
+          if (rawSlide.subtitle) {
+            rawSlide.subtitle = normalizeNonInteractiveInstruction(rawSlide.subtitle);
+          }
+          if (!rawSlide.referenceContent) {
+            if (rawSlide.interaction.type === 'input_fields' && rawSlide.interaction.layoutMode === 'table') {
+              rawSlide.referenceContent = {
+                id: `ref-tbl-${Date.now()}-${idx}`,
+                type: 'table_reference',
+                title: rawSlide.title || 'Table Reference',
+                headers: rawSlide.interaction.tableHeaders || [],
+                rows: (rawSlide.interaction.tableRows || []).map((row: any[]) =>
+                  row.map((cell: any) => (typeof cell === 'string' ? cell : cell?.text || ''))
+                ),
+              };
+            } else if (rawSlide.interaction.type === 'input_fields' && Array.isArray(rawSlide.interaction.listItems)) {
+              const textLines = rawSlide.interaction.listItems.map((it: any) => it.prompt || it.text || '').filter(Boolean).join('\n');
+              rawSlide.referenceContent = {
+                id: `ref-txt-${Date.now()}-${idx}`,
+                type: 'text',
+                category: 'grammar_note',
+                title: rawSlide.title || 'Reference Note',
+                content: textLines,
+                body: textLines,
+              };
+            }
+          }
+          rawSlide.interaction = null;
           rawSlide.layout = 'single_column';
         }
       }
@@ -1229,7 +1331,13 @@ export function validateAndParseSlides(rawJsonText: string): Slide[] {
       rawSlide.interaction = null;
     }
 
+    if (!rawSlide.interaction && rawSlide.subtitle) {
+      rawSlide.subtitle = normalizeNonInteractiveInstruction(rawSlide.subtitle);
+    }
+
     if (!rawSlide.referenceContent) {
+      rawSlide.layout = 'single_column';
+    } else if (!rawSlide.interaction) {
       rawSlide.layout = 'single_column';
     } else if (!rawSlide.layout) {
       rawSlide.layout = 'split_50_50';
@@ -1342,6 +1450,16 @@ CANONICAL ARCHETYPES:
    - CONTINUOUS READING TEXTS vs COLUMNS:
      * Use type: "text" for all reading articles, narrative stories, dialogues, or continuous texts divided into paragraphs. Use standard double line breaks (\n\n) between paragraphs. NEVER fragment a continuous reading text into independent vertical columns (even if formatted in newspaper columns on the original page!).
      * Use type: "reference_table" (columns) ONLY when the printed material consists of comparative data or parallel tabular lists organized in vertical categories (e.g. vocabulary categories, preposition lists).
+   - CONSERVACIÓN INTEGRAL DE TEXTO PERIMETRAL:
+     * Al procesar cualquier recorte que combine elementos estructurados (e.g. tablas o listas) con texto explicativo, viñetas o notas marginales:
+       - El modelo DEBE preservar todo el texto informativo acompañante dentro de 'referenceContent.body' (o 'referenceContent.content') con category 'grammar_note' o 'reading'.
+       - Queda ESTRICTAMENTE PROHIBIDO descartar o resumir el texto contextual para extraer únicamente el bloque estructurado.
+       - En diapositivas con texto explicativo perimetral Y ejercicio estructurado interactivo, el layout DEBE ser 'split_50_50'.
+   - CONSISTENCIA SEMÁNTICA DE ESTADO NO INTERACTIVO (CERO ELEMENTOS ACTIVOS):
+     * Si un bloque o diapositiva no posee elementos de entrada activos (cero inputs, cero blanks, celdas 100% informativas con isInput: false):
+       - La instrucción o enunciado ("instruction" / "title" / "subtitle") DEBE reflejar propósito de consulta o lectura (e.g. "Review...", "Read...", "Study..."), evitando rigurosamente verbos de acción resolutiva ("Complete...", "Fill in...", "Choose...").
+       - Debe emitirse con 'isGraded: false' e 'interaction: null' para que el lienzo de presentación no active controles de envío de respuestas.
+       - Si contiene una tabla o cuadro puramente informativo, estructurarlo en 'referenceContent' (type: 'reference_table' o 'table_reference') y layout 'single_column'.
    - STRICT FIDELITY: Strictly transcribe literal text. NEVER generate synthetic summaries or pedagogical explanations.
 
 2. "interaction" (Active evaluated exercise):
