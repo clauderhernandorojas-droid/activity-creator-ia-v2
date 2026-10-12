@@ -1491,6 +1491,100 @@ describe('slideValidation - Direct Schema & Architectural Invariant Tests', () =
     });
   });
 
+  // =========================================================================
+  // CASO N: Principio Universal de Densidad Máxima y Ergonomía (Slide Ergonomics)
+  // =========================================================================
+  describe('Caso N: Principio Universal de Densidad Máxima y Ergonomía (Slide Ergonomics & Cognitive Load)', () => {
+    it('mantiene el texto de lectura 100% íntegro y acota el panel interactivo a un máximo representativo de 8 reactivos ante baterías masivas', () => {
+      const massiveReadingActivity = JSON.stringify({
+        slides: [
+          {
+            id: 'slide-reading-density',
+            title: 'Reading Comprehension: An Inspiring Journey',
+            subtitle: 'Read the article and complete the sentences.',
+            layout: 'split_50_50',
+            isGraded: true,
+            referenceContent: {
+              id: 'ref-reading-story',
+              type: 'text',
+              category: 'reading',
+              title: 'An Inspiring Journey',
+              content: 'Full story paragraph 1...\n\nFull story paragraph 2...\n\nFull story paragraph 3...',
+              body: 'Full story paragraph 1...\n\nFull story paragraph 2...\n\nFull story paragraph 3...',
+            },
+            interaction: {
+              id: 'int-reading-items',
+              type: 'input_fields',
+              instruction: 'Complete the sentences based on the text:',
+              listItems: Array.from({ length: 14 }, (_, i) => ({
+                id: `item-${i + 1}`,
+                prompt: `Sentence item ${i + 1} with blank: {{blank}}`,
+                expectedAnswer: `Answer ${i + 1}`,
+                acceptedAnswers: [`Answer ${i + 1}`],
+                isExample: i === 0,
+              })),
+            },
+          },
+        ],
+      });
+
+      const slides = validateAndParseSlides(massiveReadingActivity);
+      expect(slides).toHaveLength(1);
+      const slide = slides[0];
+
+      // 1. Integridad total del texto de lectura de apoyo
+      expect(slide.referenceContent?.type).toBe('text');
+      if (slide.referenceContent && 'content' in slide.referenceContent) {
+        expect(slide.referenceContent.content).toBe('Full story paragraph 1...\n\nFull story paragraph 2...\n\nFull story paragraph 3...');
+      }
+
+      // 2. Acotamiento ergonómico del panel interactivo (máximo 8 reactivos representativos)
+      expect(slide.interaction?.type).toBe('input_fields');
+      if (slide.interaction?.type === 'input_fields') {
+        expect(slide.interaction.listItems).toHaveLength(8);
+        expect(slide.interaction.listItems?.[0].prompt).toBe('Sentence item 1 with blank: {{blank}}');
+        expect(slide.interaction.listItems?.[7].prompt).toBe('Sentence item 8 with blank: {{blank}}');
+      }
+    });
+
+    it('permite que listas independientes autosuficientes sin texto de lectura conserven más de 8 elementos en single_column', () => {
+      const standaloneVocabularyDrill = JSON.stringify({
+        slides: [
+          {
+            id: 'slide-drill',
+            title: 'Irregular Verbs Drill',
+            subtitle: 'Fill in the past simple form.',
+            layout: 'single_column',
+            isGraded: true,
+            referenceContent: null,
+            interaction: {
+              id: 'int-drill',
+              type: 'input_fields',
+              instruction: 'Write the past simple form:',
+              listItems: Array.from({ length: 10 }, (_, i) => ({
+                id: `verb-${i + 1}`,
+                prompt: `Verb ${i + 1}`,
+                expectedAnswer: `Past ${i + 1}`,
+                acceptedAnswers: [`Past ${i + 1}`],
+                isExample: false,
+              })),
+            },
+          },
+        ],
+      });
+
+      const slides = validateAndParseSlides(standaloneVocabularyDrill);
+      expect(slides).toHaveLength(1);
+      const slide = slides[0];
+
+      // Al no tener referenceContent (single_column), no sufre saturación en dos columnas y no se trunca
+      expect(slide.referenceContent).toBeNull();
+      if (slide.interaction?.type === 'input_fields') {
+        expect(slide.interaction.listItems).toHaveLength(10);
+      }
+    });
+  });
+
 });
 
 

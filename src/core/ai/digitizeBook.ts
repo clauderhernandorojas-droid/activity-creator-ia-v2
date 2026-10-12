@@ -1225,6 +1225,19 @@ export function validateAndParseSlides(rawJsonText: string): Slide[] {
         }
       }
 
+      // Normalizar layoutMode para input_fields si fue omitido por el modelo
+      if (rawSlide.interaction && rawSlide.interaction.type === 'input_fields') {
+        if (!rawSlide.interaction.layoutMode) {
+          if (Array.isArray(rawSlide.interaction.tableRows) && rawSlide.interaction.tableRows.length > 0) {
+            rawSlide.interaction.layoutMode = 'table';
+          } else if (rawSlide.interaction.paragraphTemplate) {
+            rawSlide.interaction.layoutMode = 'inline_paragraph';
+          } else {
+            rawSlide.interaction.layoutMode = 'list';
+          }
+        }
+      }
+
       // En ejercicios de tipo tabla/cuadrícula interactiva:
       if (
         rawSlide.interaction &&
@@ -1396,6 +1409,39 @@ export function validateAndParseSlides(rawJsonText: string): Slide[] {
       rawSlide.layout = 'split_50_50';
     }
 
+    // Principio Universal de Densidad Máxima por Diapositiva (Slide Ergonomics & Cognitive Load):
+    // Cuando una actividad interactiva se basa en un texto o diálogo de referencia (layout split_50_50):
+    // - El texto de soporte en referenceContent / contextBody se mantiene íntegro al 100%.
+    // - El panel interactivo se delimita a una muestra focalizada y representativa (máximo 8 reactivos)
+    //   para evitar el desbordamiento vertical y la saturación cognitiva del estudiante.
+    const hasReferenceSupport = Boolean(rawSlide.referenceContent || rawSlide.contextBody);
+    if (hasReferenceSupport && rawSlide.interaction) {
+      const MAX_ERGONOMIC_ITEMS = 8;
+      if (rawSlide.interaction.type === 'input_fields' && Array.isArray(rawSlide.interaction.listItems)) {
+        if (rawSlide.interaction.listItems.length > MAX_ERGONOMIC_ITEMS) {
+          rawSlide.interaction.listItems = rawSlide.interaction.listItems.slice(0, MAX_ERGONOMIC_ITEMS);
+        }
+      } else if (rawSlide.interaction.type === 'selection') {
+        if (Array.isArray(rawSlide.interaction.questions) && rawSlide.interaction.questions.length > MAX_ERGONOMIC_ITEMS) {
+          rawSlide.interaction.questions = rawSlide.interaction.questions.slice(0, MAX_ERGONOMIC_ITEMS);
+        }
+        if (Array.isArray(rawSlide.interaction.options) && rawSlide.interaction.options.length > MAX_ERGONOMIC_ITEMS) {
+          rawSlide.interaction.options = rawSlide.interaction.options.slice(0, MAX_ERGONOMIC_ITEMS);
+        }
+      } else if (rawSlide.interaction.type === 'buckets_matching') {
+        if (Array.isArray(rawSlide.interaction.tokens) && rawSlide.interaction.tokens.length > MAX_ERGONOMIC_ITEMS) {
+          rawSlide.interaction.tokens = rawSlide.interaction.tokens.slice(0, MAX_ERGONOMIC_ITEMS);
+        }
+        if (Array.isArray(rawSlide.interaction.sourceItems) && rawSlide.interaction.sourceItems.length > MAX_ERGONOMIC_ITEMS) {
+          rawSlide.interaction.sourceItems = rawSlide.interaction.sourceItems.slice(0, MAX_ERGONOMIC_ITEMS);
+        }
+      } else if (rawSlide.interaction.type === 'sequence') {
+        if (Array.isArray(rawSlide.interaction.items) && rawSlide.interaction.items.length > MAX_ERGONOMIC_ITEMS) {
+          rawSlide.interaction.items = rawSlide.interaction.items.slice(0, MAX_ERGONOMIC_ITEMS);
+        }
+      }
+    }
+
     const parseResult = SlideSchema.safeParse(rawSlide);
 
     if (!parseResult.success) {
@@ -1553,6 +1599,11 @@ MULTI-SLIDE SEGMENTATION & CROSS-REFERENCING DIRECTIVES:
    - When an activity includes instructions or prompts that explicitly reference another section or exercise visible in the clipping (e.g., "in 1", "from the box above", "with the verbs above", "from the dialogue in 2a"):
      * The referenced information MUST act as active resolution context to exhaustively populate all candidate options, categories (buckets), tokens, or answer pairs of the dependent activity.
      * In the slide of the dependent activity, NEVER guess, hallucinate, or omit referenced elements that are clearly present in the capture; extract and populate them faithfully and exhaustively.
+3. PRINCIPIO UNIVERSAL DE DENSIDAD MÁXIMA Y ERGONOMÍA (SLIDE ERGONOMICS & COGNITIVE LOAD):
+   - Al digitalizar cualquier actividad interactiva basada en un texto o diálogo de referencia:
+     * INTEGRIDAD DEL CONTENIDO DE SOPORTE: El texto de lectura o soporte DEBE mantenerse íntegro en el contenedor de referencia ('contextBody' / 'referenceContent'). Queda estrictamente prohibido recortar, resumir o mutilar el material de lectura de apoyo.
+     * MUESTRA FOCALIZADA Y REPRESENTATIVA: El panel interactivo (preguntas, reactivos, selecciones o huecos) DEBE ser una muestra focalizada y representativa del objetivo pedagógico (máximo 4 a 8 reactivos clave), nunca un despiece exhaustivo línea por línea del texto de apoyo.
+     * PROHIBICIÓN DE BATERÍAS MASIVAS: Queda estrictamente prohibido generar baterías masivas de reactivos que desborden visualmente la diapositiva o saturen el layout interactivo en dos columnas densas. Priorizar la síntesis pedagógica sobre la exhaustividad mecánica.
 
 CANONICAL ARCHETYPES:
 1. "referenceContent" (Passive consultation material):
@@ -2861,6 +2912,14 @@ function sanitizeExtractedPayload(payload: ExtractedStructuredPayload): Extracte
         contextDirective
       );
     }
+  }
+
+  // Principio Universal de Densidad Máxima por Diapositiva (Slide Ergonomics & Cognitive Load):
+  // Al digitalizar cualquier actividad interactiva basada en un texto o diálogo de referencia:
+  // El material de lectura se mantiene 100% íntegro, mientras que la batería interactiva se delimita a
+  // una muestra focalizada y representativa (máximo 8 reactivos) para evitar la saturación visual en dos columnas.
+  if ((referenceContent || payload.contextBody) && finalItems.length > 8) {
+    finalItems = finalItems.slice(0, 8);
   }
 
   // Detection and sanitization of verification audio ("Listen and check", "R1.2", "CD1 Track X")
