@@ -1915,7 +1915,130 @@ describe('slideValidation - Direct Schema & Architectural Invariant Tests', () =
     });
   });
 
+  // =========================================================================
+  // CASO Q: Principio de Fidelidad Documental Estricta y Cero Alucinación
+  // =========================================================================
+  describe('Caso Q: Principio de Fidelidad Documental Estricta y Cero Alucinación en referenceContent', () => {
+    it('elimina referenceContent si aloja descripciones sintéticas de la tarea tipo "Practice expressing..." y normaliza layout a single_column', () => {
+      const rawSyntheticTaskSlide = JSON.stringify({
+        slides: [
+          {
+            id: 'slide-synthetic-task',
+            title: 'Expressing Preferences',
+            subtitle: 'Choose the correct response',
+            layout: 'split_50_50',
+            referenceContent: {
+              id: 'ref-syn-1',
+              type: 'text',
+              content: 'Practice expressing opinions about daily habits with your partner.',
+            },
+            interaction: {
+              id: 'int-pref-1',
+              type: 'selection',
+              instruction: 'Choose the correct answer:',
+              options: [
+                { id: 'opt-1', text: 'I prefer tea to coffee.', isCorrect: true },
+                { id: 'opt-2', text: 'I prefer tea than coffee.', isCorrect: false },
+              ],
+            },
+          },
+        ],
+      });
+
+      const slides = validateAndParseSlides(rawSyntheticTaskSlide);
+      expect(slides).toHaveLength(1);
+      const slide = slides[0];
+
+      // Invariante 1: Cero alucinación - Descripciones sintéticas no impresas se descartan
+      expect(slide.referenceContent).toBeNull();
+
+      // Invariante 2: Sin material de consulta impreso, la diapositiva es autosuficiente en single_column
+      expect(slide.layout).toBe('single_column');
+
+      // Invariante 3: La instrucción del ejercicio no se contamina con texto docente artificial
+      expect(slide.interaction?.instruction).toBe('Choose the correct answer:');
+    });
+
+    it('elimina referenceContent cuando el modelo redacta meta-comentarios docentes ("In this activity, students practice...")', () => {
+      const rawTeacherMetaSlide = JSON.stringify({
+        slides: [
+          {
+            id: 'slide-teacher-meta',
+            title: 'Past Tense Recognition',
+            layout: 'split_50_50',
+            referenceContent: {
+              id: 'ref-syn-meta',
+              type: 'text',
+              content: 'In this activity, students practice identifying regular and irregular past tense verbs in English sentences.',
+            },
+            interaction: {
+              id: 'int-past-meta',
+              type: 'input_fields',
+              instruction: 'Fill in the blanks with the past simple:',
+              listItems: [
+                {
+                  id: 'item-1',
+                  prompt: '1. Yesterday I ___ (visit) my grandmother.',
+                  expectedAnswer: 'visited',
+                  acceptedAnswers: ['visited'],
+                  isExample: false,
+                },
+              ],
+            },
+          },
+        ],
+      });
+
+      const slides = validateAndParseSlides(rawTeacherMetaSlide);
+      expect(slides).toHaveLength(1);
+      const slide = slides[0];
+
+      expect(slide.referenceContent).toBeNull();
+      expect(slide.layout).toBe('single_column');
+      expect(slide.interaction?.instruction).toBe('Fill in the blanks with the past simple:');
+    });
+
+    it('preserva referenceContent íntegro y layout split_50_50 cuando contiene un diálogo OCR verbatim con hablantes', () => {
+      const rawDialogueSlide = JSON.stringify({
+        slides: [
+          {
+            id: 'slide-verbatim-dial',
+            title: 'Ordering at a Restaurant',
+            subtitle: 'Read the dialogue and answer the question.',
+            layout: 'split_50_50',
+            referenceContent: {
+              id: 'ref-dial-1',
+              type: 'text',
+              category: 'dialogue',
+              title: 'At the Bistro',
+              content: 'Waiter: Good evening. Are you ready to order?\nCustomer: Yes, I would like the pasta, please.\nWaiter: Certainly, and what would you like to drink?',
+            },
+            interaction: {
+              id: 'int-dial-q',
+              type: 'selection',
+              instruction: 'What did the customer order?',
+              options: [
+                { id: 'opt-1', text: 'Pasta', isCorrect: true },
+                { id: 'opt-2', text: 'Pizza', isCorrect: false },
+              ],
+            },
+          },
+        ],
+      });
+
+      const slides = validateAndParseSlides(rawDialogueSlide);
+      expect(slides).toHaveLength(1);
+      const slide = slides[0];
+
+      // Invariante: El diálogo real impreso se mantiene intacto y activa el split_50_50
+      expect(slide.referenceContent).not.toBeNull();
+      expect(slide.referenceContent?.type).toBe('text');
+      expect(slide.layout).toBe('split_50_50');
+    });
+  });
+
 });
+
 
 
 

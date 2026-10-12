@@ -1078,6 +1078,11 @@ export function isSpuriousReferenceMetadata(
     }
   }
 
+  // 5. Synthetic pedagogical advice, task descriptions, or teacher summaries (Principio de Cero Alucinación / Cero Síntesis)
+  if (isSyntheticPedagogicalText(content)) {
+    return true;
+  }
+
   return false;
 }
 
@@ -1089,7 +1094,16 @@ export function foldSpuriousMetadata(text: string, slide: any): void {
   const trimmed = text.trim();
   if (!trimmed) return;
 
+  const isInstructionDirective = /^(?:instructions?|directions?|consigna|task)\b[:\s]/i.test(trimmed) ||
+    /^(?:complete|fill in|choose|circle|select|underline|match|tick|write|read and complete|look and write|put the words|rewrite|listen and check|ask and answer|answer the questions|cross out)\b/i.test(trimmed);
+
   const isExample = /^(?:examples?|models?|samples?|demos?|e\.g\.|for example)\b[:\s]/i.test(trimmed);
+
+  // Si es texto sintético inventado o meta-comentario pedagógico (e.g. "Practice expressing...", "Teacher notes..."),
+  // y NO es una consigna imperativa auténtica ni un ejemplo resuelto, descartarlo por completo (Principio de Cero Alucinación / Cero Síntesis)
+  if (!isInstructionDirective && !isExample && isSyntheticPedagogicalText(trimmed)) {
+    return;
+  }
 
   if (slide.interaction) {
     const currentInst = slide.interaction.instruction ? slide.interaction.instruction.trim() : '';
@@ -1169,13 +1183,18 @@ export function validateAndParseSlides(rawJsonText: string): Slide[] {
       undefined;
 
     if (rawContextBody && typeof rawContextBody === 'string' && rawContextBody.trim()) {
-      rawSlide.contextBody = rawContextBody.trim();
-      if (
-        rawSlide.referenceContent &&
-        (rawSlide.referenceContent.type === 'reference_table' || rawSlide.referenceContent.type === 'table_reference') &&
-        !rawSlide.referenceContent.body
-      ) {
-        rawSlide.referenceContent.body = rawSlide.contextBody;
+      const candidateContext = rawContextBody.trim();
+      if (!isSyntheticPedagogicalText(candidateContext)) {
+        rawSlide.contextBody = candidateContext;
+        if (
+          rawSlide.referenceContent &&
+          (rawSlide.referenceContent.type === 'reference_table' || rawSlide.referenceContent.type === 'table_reference') &&
+          !rawSlide.referenceContent.body
+        ) {
+          rawSlide.referenceContent.body = rawSlide.contextBody;
+        }
+      } else {
+        rawSlide.contextBody = undefined;
       }
     }
 
@@ -1756,10 +1775,14 @@ MULTI-SLIDE SEGMENTATION & CROSS-REFERENCING DIRECTIVES:
      * PROHIBICIÓN DE BATERÍAS MASIVAS: Queda estrictamente prohibido generar baterías masivas de reactivos que desborden visualmente la diapositiva o saturen el layout interactivo en dos columnas densas. Priorizar la síntesis pedagógica sobre la exhaustividad mecánica.
 
 CANONICAL ARCHETYPES:
-1. "referenceContent" (Passive consultation material) & ONTOLOGICAL LAYOUT SELECTION:
-   - PRINCIPIO ONTOLÓGICO DE SELECCIÓN DE LAYOUT:
-     * 'split_50_50': Se utiliza ÚNICAMENTE cuando existe un texto continuo de consulta autónomo (un artículo, un audioscript, un diálogo completo, o una tabla de consulta) que el estudiante necesita leer a la izquierda mientras interactúa a la derecha.
-     * 'single_column': Es el layout por defecto para cualquier ejercicio de oraciones, listas o reactivos donde el contenido sea autosuficiente, así como para diapositivas puramente expositivas/teóricas sin elementos interactivos.
+1. "referenceContent" (Passive consultation material) & STRICT DOCUMENTARY FIDELITY:
+   - PRINCIPIO DE CERO ALUCINACIÓN / CERO SÍNTESIS EN 'referenceContent' (FIDELIDAD DOCUMENTAL ESTRICTA):
+     * 'referenceContent' debe contener EXCLUSIVAMENTE texto que esté visible e impreso físicamente en el recorte (OCR verbatim: un artículo, una transcripción de audio, un diálogo con hablantes o una tabla de consulta).
+     * Queda estrictamente prohibido generar, resumir o redactar texto explicativo que no figure en la imagen fuente (como descripciones de la tarea tipo "Practice expressing...", explicaciones sintéticas, resúmenes de propósito pedagógico o notas del docente).
+     * Si el recorte no incluye un bloque de texto de lectura o soporte impreso, 'referenceContent' DEBE ser estrictamente null.
+   - DETERMINACIÓN ONTOLÓGICA DEL LAYOUT (SIN FILTROS HEURÍSTICOS):
+     * 'split_50_50': Se utiliza ÚNICAMENTE cuando existe un texto continuo de consulta autónomo (un artículo, un audioscript, un diálogo completo, o una tabla de consulta) visiblemente impreso en la imagen que el estudiante necesita leer a la izquierda mientras interactúa a la derecha.
+     * 'single_column': Es el layout por defecto para cualquier ejercicio de oraciones, listas o reactivos donde el contenido sea autosuficiente (sin texto de lectura impreso en la imagen), así como para diapositivas puramente expositivas/teóricas sin elementos interactivos.
    - MODELADO DE EJEMPLOS E INSTRUCCIONES (METADATOS vs CONTENIDO AUTÓNOMO):
      * Las oraciones modelo ("Example"), las instrucciones y las demostraciones pedagógicas resueltas son metadatos de la actividad: DEBEN residir dentro del encabezado ('instruction', 'subtitle' o dentro del primer ítem con su campo de ejemplo resuelto isExample: true), NUNCA separarse como si fueran un bloque de lectura independiente ('referenceContent').
      * Queda estrictamente prohibido generar un bloque 'referenceContent' para alojar únicamente una consigna o un ejemplo de una oración. En tales casos, 'referenceContent' DEBE ser estrictamente null y el layout 'single_column'.

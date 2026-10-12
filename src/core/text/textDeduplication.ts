@@ -189,6 +189,10 @@ export function isSyntheticPedagogicalText(text: string | null | undefined): boo
     return true;
   }
 
+  // 5. Fabricated task descriptions or artificial pedagogical purpose summaries (e.g. "Practice expressing...", "Students practice...")
+  const taskDescRegex = /^(?:practice\s+(?:expressing|using|talking|speaking|writing|forming|identifying|differentiating|asking|answering|practicing|making|discussing|describing)\b|practise\s+(?:expressing|using|talking|speaking|writing|forming|identifying|differentiating|asking|answering|practicing|making|discussing|describing)\b|(?:students\s+practice|practice\s+and\s+review)\b)/i;
+  if (taskDescRegex.test(trimmed)) return true;
+
   return false;
 }
 
