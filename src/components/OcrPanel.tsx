@@ -48,6 +48,7 @@ export const OcrPanel: React.FC = () => {
     directAssignTemplate,
     assignExtractedBlock,
     createSlideFromBlock,
+    createSlidesFromAllBlocks,
     addSlide,
     resetOcrState,
   } = useLessonStore();
@@ -64,11 +65,13 @@ export const OcrPanel: React.FC = () => {
   const [assignmentFeedback, setAssignmentFeedback] = useState<string | null>(null);
   const [isManualMenuOpen, setIsManualMenuOpen] = useState(false);
   const [selectedRoleOverride, setSelectedRoleOverride] = useState<PedagogicalRole | null>(null);
+  const [selectedBlockIndex, setSelectedBlockIndex] = useState(0);
 
   const currentSlideIndex = lesson.slides.findIndex((s) => s.id === currentSlideId);
 
-  // Consolidated active block
-  const activeBlock: ExtractedBlock | undefined = extractedBlocks[0];
+  // Consolidated active block (with multi-block index support)
+  const activeBlockIndex = Math.min(selectedBlockIndex, Math.max(0, extractedBlocks.length - 1));
+  const activeBlock: ExtractedBlock | undefined = extractedBlocks[activeBlockIndex] || extractedBlocks[0];
 
   const handleUpdateTitle = (newTitle: string) => {
     if (!activeBlock) return;
@@ -308,6 +311,31 @@ export const OcrPanel: React.FC = () => {
         reader.readAsDataURL(file);
       });
       e.target.value = '';
+    }
+  };
+
+  /**
+   * Batch Action: Creates and inserts ALL detected blocks into the lesson sequentially,
+   * establishes the first newly created slide as active, activates preview mode, and closes modal.
+   */
+  const handleCreateAllAsNewSlides = () => {
+    try {
+      const newSlideIds = createSlidesFromAllBlocks();
+      if (newSlideIds.length > 0) {
+        setCurrentSlideId(newSlideIds[0]);
+      }
+      setMode('preview'); // Instantly activates real playable containers & tokens on Canvas
+      resetOcrState(); // Automatically resets OCR state to blank
+      setIsOcrDrawerOpen(false);
+    } catch (err) {
+      console.error('[OcrPanel] Error during handleCreateAllAsNewSlides:', err);
+      try {
+        setMode('preview');
+        resetOcrState();
+        setIsOcrDrawerOpen(false);
+      } catch {
+        // Safe fallback
+      }
     }
   };
 
@@ -707,20 +735,39 @@ export const OcrPanel: React.FC = () => {
             
             {/* Step 2 Header & Action Bar */}
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 flex-shrink-0">
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 <span className="w-5 h-5 rounded-full bg-emerald-600 text-white flex items-center justify-center text-[10px] font-black">
                   2
                 </span>
                 <h3 className="text-xs font-bold text-slate-800">
-                  Paso 2: Actividad Didáctica Consolidada
+                  Paso 2: {extractedBlocks.length > 1 ? `${extractedBlocks.length} Actividades Detectadas` : 'Actividad Didáctica Consolidada'}
                 </h3>
                 <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-full ${
                   activeBlock 
                     ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' 
                     : 'bg-amber-50 text-amber-700 border border-amber-200'
                 }`}>
-                  {activeBlock ? 'Actividad Lista' : 'Sin Actividad'}
+                  {activeBlock ? (extractedBlocks.length > 1 ? `${extractedBlocks.length} Slides Listas` : 'Actividad Lista') : 'Sin Actividad'}
                 </span>
+
+                {extractedBlocks.length > 1 && (
+                  <div className="flex items-center gap-1 ml-1">
+                    {extractedBlocks.map((blk, idx) => (
+                      <button
+                        key={blk.id || idx}
+                        type="button"
+                        onClick={() => setSelectedBlockIndex(idx)}
+                        className={`px-2 py-0.5 text-[11px] font-semibold rounded-md transition ${
+                          activeBlockIndex === idx
+                            ? 'bg-indigo-600 text-white shadow-2xs'
+                            : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                        }`}
+                      >
+                        Slide {idx + 1}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
 
               {/* Top Controls: Restore & Manual Template Menu */}
@@ -1591,11 +1638,21 @@ export const OcrPanel: React.FC = () => {
                 {/* Primary Action Buttons */}
                 <div className="pt-2 border-t border-slate-100 flex flex-col sm:flex-row items-center gap-2.5 flex-shrink-0">
                   <button
-                    onClick={() => handleCreateAsNewSlide(activeBlock.id, selectedRole)}
-                    className="w-full sm:flex-1 py-3 px-4 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-sm rounded-xl shadow-xs transition transform active:scale-95 flex items-center justify-center gap-2"
+                    onClick={() => {
+                      if (extractedBlocks.length > 1) {
+                        handleCreateAllAsNewSlides();
+                      } else if (activeBlock) {
+                        handleCreateAsNewSlide(activeBlock.id, selectedRole);
+                      }
+                    }}
+                    className="w-full sm:flex-1 py-3 px-4 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-sm rounded-xl shadow-xs transition transform active:scale-95 flex items-center justify-center gap-2 cursor-pointer"
                   >
                     <Rocket className="w-4 h-4" />
-                    <span>🚀 Crear como Nueva Diapositiva</span>
+                    <span>
+                      {extractedBlocks.length > 1
+                        ? `🚀 Crear ${extractedBlocks.length} Diapositivas Detectadas`
+                        : '🚀 Crear como Nueva Diapositiva'}
+                    </span>
                   </button>
 
                   {lesson.slides.length > 0 && currentSlideId && (

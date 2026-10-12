@@ -105,8 +105,9 @@ interface LessonState {
   duplicateSlide: (id: string) => string;
   createSlideFromBlock: (
     blockId: string,
-    role: PedagogicalRole
+    role?: PedagogicalRole
   ) => string;
+  createSlidesFromAllBlocks: () => string[];
   reorderSlides: (sourceIndex: number, destinationIndex: number) => void;
   updateSlideTitle: (id: string, title: string) => void;
   updateSlideSubtitle: (id: string, subtitle: string) => void;
@@ -393,14 +394,27 @@ export const useLessonStore = create<LessonState>()(
             isGraded,
           };
 
-          set((s) => ({
-            ...recordHistory(s),
-            activeSlideId: newId,
-            lesson: {
-              ...s.lesson,
-              slides: [...s.lesson.slides, newSlide],
-            },
-          }));
+          const isInitialEmptySlide = (lesson: Lesson) => {
+            if (lesson.slides.length !== 1) return false;
+            const single = lesson.slides[0];
+            return (
+              !single.interaction &&
+              !single.referenceContent &&
+              (single.title === 'Diapositiva 1' || single.title === 'Nueva Diapositiva' || !single.title.trim())
+            );
+          };
+
+          set((s) => {
+            const shouldReplace = isInitialEmptySlide(s.lesson);
+            return {
+              ...recordHistory(s),
+              activeSlideId: newId,
+              lesson: {
+                ...s.lesson,
+                slides: shouldReplace ? [newSlide] : [...s.lesson.slides, newSlide],
+              },
+            };
+          });
 
           useSessionStore.getState().setCurrentSlideId(newId);
           return newId;
@@ -408,6 +422,64 @@ export const useLessonStore = create<LessonState>()(
           console.error('[useLessonStore] Error creating slide from block:', err);
           const fallbackId = `slide-${Date.now()}`;
           return fallbackId;
+        }
+      },
+
+      createSlidesFromAllBlocks: () => {
+        try {
+          const state = get();
+          const blocks = state.extractedBlocks as (Slide & ExtractedBlock)[];
+          if (!blocks || blocks.length === 0) return [];
+
+          const now = Date.now();
+          const newSlides: Slide[] = blocks.map((block, idx) => {
+            const slideId = `slide-${now}-${idx}`;
+            const title = block.title || block.parsedData?.title || `Diapositiva ${idx + 1}`;
+            const subtitle = block.subtitle || block.parsedData?.instruction;
+            const isGraded = block.isGraded !== undefined ? block.isGraded : (block.parsedData?.isGraded !== undefined ? Boolean(block.parsedData.isGraded) : true);
+
+            return {
+              id: slideId,
+              title,
+              subtitle,
+              layout: block.layout || (block.referenceContent ? 'split_50_50' : 'single_column'),
+              referenceContent: block.referenceContent || null,
+              interaction: block.interaction || null,
+              cachedInteraction: block.interaction || null,
+              notes: block.notes || '',
+              isGraded,
+            };
+          });
+
+          const isInitialEmptySlide = (lesson: Lesson) => {
+            if (lesson.slides.length !== 1) return false;
+            const single = lesson.slides[0];
+            return (
+              !single.interaction &&
+              !single.referenceContent &&
+              (single.title === 'Diapositiva 1' || single.title === 'Nueva Diapositiva' || !single.title.trim())
+            );
+          };
+
+          const firstNewId = newSlides[0]?.id || `slide-${now}`;
+
+          set((s) => {
+            const shouldReplace = isInitialEmptySlide(s.lesson);
+            return {
+              ...recordHistory(s),
+              activeSlideId: firstNewId,
+              lesson: {
+                ...s.lesson,
+                slides: shouldReplace ? newSlides : [...s.lesson.slides, ...newSlides],
+              },
+            };
+          });
+
+          useSessionStore.getState().setCurrentSlideId(firstNewId);
+          return newSlides.map((s) => s.id);
+        } catch (err) {
+          console.error('[useLessonStore] Error creating slides from all blocks:', err);
+          return [];
         }
       },
 
