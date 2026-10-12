@@ -437,6 +437,10 @@ export const STRUCTURED_SLIDE_SCHEMA = {
             type: 'boolean',
             description: 'false for open discussions, surveys, personal reflections, opinions or speaking/writing without fixed answers. true for objectively evaluable exercises.'
           },
+          contextBody: {
+            type: 'string',
+            description: 'Literal contextual explanations, rules, bullet points, or TIPS accompanying the main structured element.'
+          },
           notes: { type: 'string', description: 'Optional teaching or editorial notes' },
           referenceContent: {
             type: 'object',
@@ -1047,6 +1051,24 @@ export function validateAndParseSlides(rawJsonText: string): Slide[] {
 
     rawSlide.referenceContent = sanitizeReferenceContent(rawSlide.referenceContent, idx);
 
+    // Harvest / Unify contextual narrative text (contextBody)
+    const rawContextBody =
+      rawSlide.contextBody ||
+      rawSlide.referenceContent?.body ||
+      (rawSlide.referenceContent?.type === 'text' ? rawSlide.referenceContent.content : undefined) ||
+      undefined;
+
+    if (rawContextBody && typeof rawContextBody === 'string' && rawContextBody.trim()) {
+      rawSlide.contextBody = rawContextBody.trim();
+      if (
+        rawSlide.referenceContent &&
+        (rawSlide.referenceContent.type === 'reference_table' || rawSlide.referenceContent.type === 'table_reference') &&
+        !rawSlide.referenceContent.body
+      ) {
+        rawSlide.referenceContent.body = rawSlide.contextBody;
+      }
+    }
+
     if (rawSlide.interaction && typeof rawSlide.interaction === 'object') {
       if (!rawSlide.interaction.id) {
         rawSlide.interaction.id = `int-${Date.now()}-${idx}`;
@@ -1221,8 +1243,10 @@ export function validateAndParseSlides(rawJsonText: string): Slide[] {
               rawSlide.referenceContent.body ||
               rawSlide.referenceContent.caption ||
               rawSlide.referenceContent.instruction ||
+              rawSlide.contextBody ||
               '';
             if (perimetralText.trim()) {
+              rawSlide.contextBody = perimetralText.trim();
               rawSlide.referenceContent = {
                 id: `ref-perimetral-${Date.now()}-${idx}`,
                 type: 'text',
@@ -1272,6 +1296,7 @@ export function validateAndParseSlides(rawJsonText: string): Slide[] {
             // Solo descartar si el texto de referencia NO aporta nada perimetral y era meramente copia de celdas
             if (allLinesInTable) {
               rawSlide.referenceContent = null;
+              rawSlide.contextBody = undefined;
             }
           }
         }
@@ -1353,7 +1378,17 @@ export function validateAndParseSlides(rawJsonText: string): Slide[] {
       rawSlide.subtitle = normalizeNonInteractiveInstruction(rawSlide.subtitle);
     }
 
-    if (!rawSlide.referenceContent) {
+    if (!rawSlide.referenceContent && rawSlide.contextBody && rawSlide.interaction) {
+      rawSlide.referenceContent = {
+        id: `ref-ctx-${Date.now()}-${idx}`,
+        type: 'text',
+        category: 'grammar_note',
+        title: rawSlide.title || 'Reference Note',
+        content: rawSlide.contextBody,
+        body: rawSlide.contextBody,
+      };
+      rawSlide.layout = 'split_50_50';
+    } else if (!rawSlide.referenceContent) {
       rawSlide.layout = 'single_column';
     } else if (!rawSlide.interaction) {
       rawSlide.layout = 'single_column';
@@ -1407,19 +1442,79 @@ export function slideToExtractedBlock(
       ? 'paragraph'
       : 'numbered_list';
 
+  const contextBody =
+    slide.contextBody ||
+    (ref && 'body' in ref ? (ref as any).body : undefined) ||
+    (ref?.type === 'text' ? ref.content : undefined) ||
+    slide.notes ||
+    undefined;
+
+  // Collect all textual elements agnostically to preserve both structured items and surrounding narrative
+  const textParts: string[] = [
+    slide.title,
+    slide.subtitle,
+    ref?.title,
+    contextBody,
+    interaction?.instruction,
+  ].filter(Boolean) as string[];
+
+  if (ref?.type === 'text' && ref.content && ref.content !== contextBody) {
+    textParts.push(ref.content);
+  }
+  if (ref && 'columns' in ref && Array.isArray((ref as any).columns)) {
+    (ref as any).columns.forEach((col: any) => {
+      if (col.header) textParts.push(col.header);
+      if (Array.isArray(col.items)) textParts.push(...col.items);
+    });
+  }
+  if (ref && 'headers' in ref && Array.isArray((ref as any).headers)) {
+    textParts.push(...(ref as any).headers);
+  }
+  if (ref && 'rows' in ref && Array.isArray((ref as any).rows)) {
+    (ref as any).rows.forEach((row: any[]) => {
+      if (Array.isArray(row)) textParts.push(...row.filter(Boolean));
+    });
+  }
+  if (interaction?.type === 'input_fields') {
+    if (Array.isArray(interaction.listItems)) {
+      interaction.listItems.forEach((it) => {
+        if (it.prompt) textParts.push(it.prompt);
+        if (it.expectedAnswer) textParts.push(it.expectedAnswer);
+      });
+    }
+    if (Array.isArray(interaction.tableHeaders)) {
+      textParts.push(...interaction.tableHeaders);
+    }
+    if (Array.isArray(interaction.tableRows)) {
+      interaction.tableRows.forEach((row) => {
+        if (Array.isArray(row)) {
+          row.forEach((cell: any) => {
+            if (cell?.text) textParts.push(cell.text);
+            if (cell?.expectedAnswer) textParts.push(cell.expectedAnswer);
+          });
+        }
+      });
+    }
+  }
+
+  const rawText = Array.from(new Set(textParts)).filter(Boolean).join('\n\n');
+
   return {
     ...slide,
-    rawText: [slide.title, slide.subtitle, ref?.title, interaction?.instruction].filter(Boolean).join('\n\n'),
+    rawText: rawText || slide.title || '',
     detectedType,
     confidence: 1.0,
     sourceImageSnippetUrl: primaryImage || undefined,
     sourceImages: imageList.length > 0 ? imageList : undefined,
+    contextBody,
     parsedData: {
       ...slide,
       title: slide.title,
       instruction: interaction?.instruction || slide.subtitle || '',
       isGraded: slide.isGraded !== undefined ? slide.isGraded : true,
-      referenceContent: ref?.type === 'text' ? ref.content : undefined,
+      contextBody,
+      referenceContent: ref?.type === 'text' ? ref.content : (contextBody || undefined),
+      content: contextBody || (ref?.type === 'text' ? ref.content : undefined),
       interactionType: interaction?.type === 'input_fields' ? 'fill_blanks' : interaction?.type,
       items: interaction?.type === 'input_fields' ? interaction.listItems : undefined,
     },
@@ -1442,6 +1537,7 @@ ROOT RESPONSE FORMAT:
       "subtitle": "Pedagogical directive or subtitle",
       "layout": "split_50_50" or "single_column",
       "isGraded": true or false,
+      "contextBody": "Optional literal explanatory narrative, grammar rules, tips, or bullet points accompanying the activity",
       "referenceContent": null or { ...ReferenceBlock... },
       "interaction": null or { ...InteractionBlock... }
     }
@@ -1468,11 +1564,9 @@ CANONICAL ARCHETYPES:
    - CONTINUOUS READING TEXTS vs COLUMNS:
      * Use type: "text" for all reading articles, narrative stories, dialogues, or continuous texts divided into paragraphs. Use standard double line breaks (\n\n) between paragraphs. NEVER fragment a continuous reading text into independent vertical columns (even if formatted in newspaper columns on the original page!).
      * Use type: "reference_table" (columns) ONLY when the printed material consists of comparative data or parallel tabular lists organized in vertical categories (e.g. vocabulary categories, preposition lists).
-   - CONSERVACIÓN INTEGRAL DE TEXTO PERIMETRAL:
-     * Al procesar cualquier recorte que combine elementos estructurados (e.g. tablas o listas) con texto explicativo, viñetas o notas marginales:
-       - El modelo DEBE preservar todo el texto informativo acompañante dentro de 'referenceContent.body' (o 'referenceContent.content') con category 'grammar_note' o 'reading'.
-       - Queda ESTRICTAMENTE PROHIBIDO descartar o resumir el texto contextual para extraer únicamente el bloque estructurado.
-       - En diapositivas con texto explicativo perimetral Y ejercicio estructurado interactivo, el layout DEBE ser 'split_50_50'.
+   - CONSERVACIÓN INTEGRAL Y COMPOSICIÓN COEXISTENTE DE TEXTO PERIMETRAL:
+     * Whenever a clipping contains structured elements (tables, grids, question lists) alongside explanatory paragraphs, rules, bullet points, or TIPS, the model MUST extract the structured element into its corresponding primitive AND preserve 100% of the surrounding narrative/rules into 'referenceContent.body' (or 'contextBody'). It is strictly prohibited to discard one in favor of the other.
+     * En diapositivas con texto explicativo perimetral Y ejercicio estructurado interactivo, el layout DEBE ser 'split_50_50'.
    - CONSISTENCIA SEMÁNTICA DE ESTADO NO INTERACTIVO (CERO ELEMENTOS ACTIVOS):
      * Si un bloque o diapositiva no posee elementos de entrada activos (cero inputs, cero blanks, celdas 100% informativas con isInput: false):
        - La instrucción o enunciado ("instruction" / "title" / "subtitle") DEBE reflejar propósito de consulta o lectura (e.g. "Review...", "Read...", "Study..."), evitando rigurosamente verbos de acción resolutiva ("Complete...", "Fill in...", "Choose...").
@@ -1538,13 +1632,13 @@ CANONICAL ARCHETYPES:
      * STRICT PROHIBITION ON EXPLANATORY/THEORETICAL BOXES: NEVER generate interaction.type: "writing" for grammar boxes, rule charts, pronunciation notes, or language summaries. IT IS STRICTLY FORBIDDEN to demand artificial summaries (e.g. "Summarize the rules..."). Pure informational content must be preserved as referenceContent with interaction: null and isGraded: false.
 
 3. PURE EXPLANATORY / THEORETICAL MATERIAL (GRAMMAR BOXES, RULES, CHARTS):
-   - ONTOLOGICAL DIRECTIVE FOR PURE EXPLANATORY CONTENT:
+   - ONTOLOGICAL DIRECTIVE FOR PURE EXPLANATORY CONTENT & COEXISTING COMPOSITION:
      * When the input clipping consists of grammar explanations, rule boxes, pronunciation notes, or reference tables (e.g. sections labeled "Real World", "Grammar Focus", "Language Summary", "Pronunciation", "Rule Box") WITHOUT explicit interactive practice directives (no instructions like "Fill in...", "Choose...", "Match...", "Write an essay/paragraph..."):
        - IT IS STRICTLY FORBIDDEN to invent artificial open writing tasks ("writing") or demand synthetic summaries ("Summarize the main rules...", "Explain the grammar...").
-       - The archetype MUST be classified as a pure informative/referential slide:
-         * Textual explanations / bullet points / rules: Emit cleanly into "referenceContent" (type: "text", category: "grammar_note" or "reading", with literal text in "content").
-         * Example tables / matrix (e.g., agree/disagree matrix, paradigm chart): Emit into "referenceContent" (type: "reference_table" or "table_reference"), OR as interaction with layoutMode: "table" and ALL cells marked as static (isInput: false).
-         * Expository slide: Set interaction: null, isGraded: false, and layout: "single_column".
+       - UNIVERSAL COEXISTING COMPOSITION RULE: Whenever a clipping contains structured elements (tables, grids, paradigm matrices) alongside explanatory paragraphs, rules, bullet points, or TIPS, the model MUST extract the structured element into its corresponding primitive AND preserve 100% of the surrounding narrative/rules into 'referenceContent.body' (and 'contextBody'). It is strictly prohibited to discard one in favor of the other.
+       - Textual explanations / bullet points / rules: Emit cleanly into "referenceContent.body" and "contextBody".
+       - Example tables / matrix (e.g., agree/disagree matrix, paradigm chart): Emit into "referenceContent" (type: "reference_table" or "table_reference"), OR as interaction with layoutMode: "table" and ALL cells marked as static (isInput: false), preserving all explanatory narrative/rules in 'referenceContent.body' and 'contextBody'.
+       - Expository slide: Set interaction: null, isGraded: false, and layout: "single_column".
 ${forcedTargetType ? `
 4. DIRECTED ARCHETYPE OVERRIDE (FORCED TARGET: "${forcedTargetType}"):
 The user explicitly commands to format and extract the clipping strictly into the archetype "${forcedTargetType}".
@@ -1800,9 +1894,12 @@ export function buildExtractedBlockFromPayload(
     }
   }
 
+  const contextBody = sanitized.contextBody || sanitized.referenceContent || undefined;
+
   const rawTextParts = [
     sanitized.title,
     sanitized.instruction,
+    contextBody,
     sanitized.followUpPrompt,
     sanitized.referenceContent,
     ...sanitized.items.map((i) => i.prompt),
@@ -1824,14 +1921,16 @@ export function buildExtractedBlockFromPayload(
     confidence: 0.98,
     sourceImageSnippetUrl: visualImages[0] || undefined,
     sourceImages: visualImages.length > 0 ? visualImages : undefined,
+    contextBody,
     parsedData: {
       title: sanitized.title,
       instruction: sanitized.instruction,
       verificationAudioUrl: sanitized.verificationAudioUrl,
       audioLabel: sanitized.audioLabel,
       followUpPrompt: sanitized.followUpPrompt,
+      contextBody,
       referenceContent: sanitized.referenceContent || undefined,
-      content: sanitized.referenceContent || undefined,
+      content: contextBody || sanitized.referenceContent || undefined,
       wordBank: sanitized.wordBank.length > 0 ? sanitized.wordBank : undefined,
       interactionType: sanitized.interactionType,
       guidelines: sanitized.guidelines,
@@ -2853,6 +2952,7 @@ function sanitizeExtractedPayload(payload: ExtractedStructuredPayload): Extracte
           .map((n) => Number(n))
           .filter((n) => !isNaN(n) && n > 0)
       : undefined,
+    contextBody: payload.contextBody || undefined,
   };
 }
 

@@ -309,6 +309,7 @@ export const SlideSchema = z.object({
   interaction: InteractionBlockSchema.nullable().optional(),
   cachedInteraction: InteractionBlockSchema.nullable().optional(),
   rolePayloadCache: z.record(z.string(), z.any()).optional(),
+  contextBody: z.string().optional(),
   notes: z.string().optional(),
   isGraded: z.boolean().default(true).optional(),
   sourceImageSnippetUrl: z.string().optional(),
@@ -360,6 +361,7 @@ export const ExtractedStructuredPayloadSchema = z.object({
   audioLabel: z.string().optional(),
   followUpPrompt: z.string().optional(),
   referenceContent: z.string().nullable().optional(),
+  contextBody: z.string().optional(),
   wordBank: z.array(z.string()).default([]),
   interactionType: z.enum(['fill_blanks', 'multiple_choice', 'selection', 'matching', 'buckets', 'reference', 'writing']).default('fill_blanks'),
   guidelines: z.array(z.string()).optional(),
@@ -388,6 +390,7 @@ export const ExtractedBlockSchema = z.object({
   confidence: z.number().min(0).max(1),
   sourceImageSnippetUrl: z.string().optional(),
   sourceImages: z.array(z.string()).optional(),
+  contextBody: z.string().optional(),
   parsedData: z.record(z.string(), z.any()).optional(),
 });
 

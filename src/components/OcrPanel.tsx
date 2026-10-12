@@ -67,6 +67,7 @@ export const OcrPanel: React.FC = () => {
   const [isManualMenuOpen, setIsManualMenuOpen] = useState(false);
   const [selectedRoleOverride, setSelectedRoleOverride] = useState<PedagogicalRole | null>(null);
   const [selectedBlockIndex, setSelectedBlockIndex] = useState(0);
+  const [forceShowContext, setForceShowContext] = useState<Record<string, boolean>>({});
 
   const currentSlideIndex = lesson.slides.findIndex((s) => s.id === currentSlideId);
 
@@ -90,6 +91,40 @@ export const OcrPanel: React.FC = () => {
       parsedData: {
         ...activeBlock.parsedData,
         instruction: newInstruction,
+      },
+    });
+  };
+
+  const handleUpdateContextBody = (val: string) => {
+    if (!activeBlock) return;
+    const currentRef = (activeBlock as any)?.referenceContent;
+    let updatedRef = currentRef;
+    if (currentRef) {
+      if (currentRef.type === 'text') {
+        updatedRef = { ...currentRef, content: val, body: val };
+      } else {
+        updatedRef = { ...currentRef, body: val };
+      }
+    } else if (val.trim()) {
+      updatedRef = {
+        id: `ref-ctx-${Date.now()}`,
+        type: 'text',
+        category: 'grammar_note',
+        title: activeBlock.parsedData?.title || 'Grammar Note',
+        content: val,
+        body: val,
+      };
+    }
+
+    updateExtractedBlock(activeBlock.id, {
+      contextBody: val,
+      ...((updatedRef ? { referenceContent: updatedRef } : {}) as any),
+      parsedData: {
+        ...activeBlock.parsedData,
+        contextBody: val,
+        content: val,
+        paragraphs: val.split('\n\n').filter(Boolean),
+        referenceContent: val,
       },
     });
   };
@@ -1016,41 +1051,84 @@ export const OcrPanel: React.FC = () => {
                             </span>
                           </div>
 
-                      {/* Integrated Reading Passage Context (when present alongside interactive exercise) */}
-                      {mappedPreview.reference?.type === 'text' && mappedPreview.interaction && (
-                        <div className="rounded-xl border border-sky-200 bg-sky-50/70 p-3 space-y-1.5 mb-2">
-                          <div className="flex items-center justify-between">
-                            <span className="text-xs font-bold text-sky-900 flex items-center gap-1.5">
-                              <BookOpen className="w-3.5 h-3.5 text-sky-600" />
-                              <span>📖 Texto de Lectura / Contexto Base Integrado:</span>
-                            </span>
-                            <span className="text-[10px] font-semibold text-sky-700 bg-sky-100/90 px-2 py-0.5 rounded-full border border-sky-200">
-                              Lienzo Dividido Automático
-                            </span>
-                          </div>
-                          <textarea
-                            value={
-                              activeBlock.parsedData?.content ||
-                              (Array.isArray(activeBlock.parsedData?.paragraphs)
-                                ? activeBlock.parsedData.paragraphs.join('\n\n')
-                                : '')
-                            }
-                            onChange={(e) => {
-                              const val = e.target.value;
-                              updateExtractedBlock(activeBlock.id, {
-                                parsedData: {
-                                  ...activeBlock.parsedData,
-                                  content: val,
-                                  paragraphs: val.split('\n\n').filter(Boolean),
-                                },
-                              });
-                            }}
-                            rows={3}
-                            className="w-full text-xs text-slate-800 bg-white border border-sky-200 focus:border-sky-400 rounded-lg p-2 outline-none font-sans leading-relaxed resize-y"
-                            placeholder="Párrafos del texto de lectura extraído del recorte..."
-                          />
-                        </div>
-                      )}
+                      {/* Transversal Context Module: Exists above structured previews whenever context exists or user adds it */}
+                      {(() => {
+                        const hasStructuredElement = Boolean(
+                          (mappedPreview.reference?.type === 'reference_table' && mappedPreview.reference.columns.length > 0) ||
+                          (mappedPreview.reference?.type === 'table_reference' && mappedPreview.reference.rows.length > 0) ||
+                          (mappedPreview.interaction?.type === 'buckets_matching' && mappedPreview.interaction.buckets.length > 0) ||
+                          (mappedPreview.interaction?.type === 'input_fields' && mappedPreview.interaction.layoutMode === 'table' && mappedPreview.interaction.tableRows.length > 0) ||
+                          (mappedPreview.interaction?.type === 'input_fields' && mappedPreview.interaction.listItems.length > 0) ||
+                          (mappedPreview.interaction?.type === 'sequence' && mappedPreview.interaction.items.length > 0) ||
+                          (mappedPreview.interaction?.type === 'selection' && (
+                            (mappedPreview.interaction.options && mappedPreview.interaction.options.length > 0) ||
+                            (mappedPreview.interaction.questions && mappedPreview.interaction.questions.length > 0)
+                          )) ||
+                          (mappedPreview.interaction?.type === 'writing')
+                        );
+
+                        const currentContextText =
+                          activeBlock.contextBody ??
+                          activeBlock.parsedData?.contextBody ??
+                          (mappedPreview.reference && 'body' in mappedPreview.reference ? (mappedPreview.reference as any).body : undefined) ??
+                          (mappedPreview.reference?.type === 'text' ? mappedPreview.reference.content : undefined) ??
+                          (hasStructuredElement ? (activeBlock.parsedData?.content || '') : '');
+
+                        const isContextVisible = Boolean(currentContextText.trim() || forceShowContext[activeBlock.id]);
+
+                        if (hasStructuredElement) {
+                          if (isContextVisible) {
+                            return (
+                              <div className="rounded-xl border border-sky-200 bg-sky-50/70 p-3 space-y-1.5 mb-2.5 transition shadow-2xs">
+                                <div className="flex items-center justify-between">
+                                  <span className="text-xs font-bold text-sky-900 flex items-center gap-1.5">
+                                    <BookOpen className="w-3.5 h-3.5 text-sky-600" />
+                                    <span>📖 Texto Explicativo / Reglas / Notas de Contexto:</span>
+                                  </span>
+                                  <div className="flex items-center gap-1.5">
+                                    <span className="text-[10px] font-semibold text-sky-700 bg-sky-100/90 px-2 py-0.5 rounded-full border border-sky-200">
+                                      Markdown soportado
+                                    </span>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        handleUpdateContextBody('');
+                                        setForceShowContext((prev) => ({ ...prev, [activeBlock.id]: false }));
+                                      }}
+                                      className="text-slate-400 hover:text-rose-500 p-0.5 rounded transition cursor-pointer"
+                                      title="Ocultar o borrar texto de contexto"
+                                    >
+                                      <X className="w-3.5 h-3.5" />
+                                    </button>
+                                  </div>
+                                </div>
+                                <textarea
+                                  value={currentContextText}
+                                  onChange={(e) => handleUpdateContextBody(e.target.value)}
+                                  rows={Math.min(Math.max(currentContextText.split('\n').length + 1, 3), 7)}
+                                  className="w-full text-xs text-slate-800 bg-white border border-sky-200 focus:border-sky-400 rounded-lg p-2.5 outline-none font-sans leading-relaxed resize-y"
+                                  placeholder="Reglas gramaticales, viñetas, notas o texto explicativo circundante (e.g. TIPS, explicaciones teóricas)..."
+                                />
+                              </div>
+                            );
+                          } else {
+                            return (
+                              <div className="mb-2">
+                                <button
+                                  type="button"
+                                  onClick={() => setForceShowContext((prev) => ({ ...prev, [activeBlock.id]: true }))}
+                                  className="text-[11px] font-medium text-sky-700 hover:text-sky-900 bg-sky-50/80 hover:bg-sky-100/90 border border-dashed border-sky-200 hover:border-sky-300 rounded-lg px-2.5 py-1.5 flex items-center gap-1.5 transition cursor-pointer"
+                                >
+                                  <Plus className="w-3.5 h-3.5 text-sky-600" />
+                                  <span>+ Añadir texto explicativo, reglas o notas circundantes (Markdown)</span>
+                                </button>
+                              </div>
+                            );
+                          }
+                        }
+
+                        return null;
+                      })()}
 
                       {/* Structured Reference Table View (Columns of Vocabulary / Collocations / Rules) */}
                       {mappedPreview.reference?.type === 'reference_table' && mappedPreview.reference.columns.length > 0 ? (() => {
@@ -1658,13 +1736,15 @@ export const OcrPanel: React.FC = () => {
                         /* Raw text / Reference text editable fallback */
                         <div className="space-y-2">
                           <textarea
-                            value={activeBlock.parsedData?.content || activeBlock.rawText || ''}
+                            value={activeBlock.contextBody || activeBlock.parsedData?.contextBody || activeBlock.parsedData?.content || activeBlock.rawText || ''}
                             onChange={(e) => {
                               const newContent = e.target.value;
                               updateExtractedBlock(activeBlock.id, {
                                 rawText: newContent,
+                                contextBody: newContent,
                                 parsedData: {
                                   ...activeBlock.parsedData,
+                                  contextBody: newContent,
                                   content: newContent,
                                   items: newContent.split('\n').map((l) => l.trim()).filter(Boolean)
                                 }

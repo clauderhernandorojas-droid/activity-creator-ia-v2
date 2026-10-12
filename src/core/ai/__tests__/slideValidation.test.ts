@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { SlideSchema } from '../../../types/schema';
 import {
   validateAndParseSlides,
+  slideToExtractedBlock,
   SchemaValidationError,
   extractDisjunctiveAlternatives,
   cleanSelectionPrompt,
@@ -1447,6 +1448,46 @@ describe('slideValidation - Direct Schema & Architectural Invariant Tests', () =
         expect(slide.referenceContent.category).toBe('grammar_note');
         expect(slide.referenceContent.content).toContain('Rule 1: Always check auxiliary agreement.');
       }
+    });
+
+    it('preserva contextBody y tabla de forma coexistente en validateAndParseSlides y slideToExtractedBlock', () => {
+      const compositeSlide = JSON.stringify({
+        slides: [
+          {
+            id: 'slide-composite-theory',
+            title: 'Grammar Focus: Past Simple',
+            layout: 'split_50_50',
+            contextBody: '• Use did/didn\'t for questions and negatives.\n• TIP: Never use did with was/were.',
+            referenceContent: {
+              id: 'ref-composite-table',
+              type: 'reference_table',
+              title: 'Past Simple Forms',
+              body: '• Use did/didn\'t for questions and negatives.\n• TIP: Never use did with was/were.',
+              columns: [
+                { header: 'Positive', items: ['I watched TV.', 'He went out.'] },
+                { header: 'Negative', items: ['I didn\'t watch TV.', 'He didn\'t go out.'] }
+              ]
+            },
+            interaction: null
+          }
+        ]
+      });
+
+      const slides = validateAndParseSlides(compositeSlide);
+      expect(slides).toHaveLength(1);
+      const slide = slides[0];
+      expect(slide.contextBody).toContain('TIP: Never use did with was/were.');
+      expect(slide.referenceContent?.type).toBe('reference_table');
+      if (slide.referenceContent && 'body' in slide.referenceContent) {
+        expect(slide.referenceContent.body).toContain('Use did/didn\'t for questions');
+      }
+
+      const extractedBlock = slideToExtractedBlock(slide, 'https://example.com/snippet.png', []);
+      expect(extractedBlock.contextBody).toContain('TIP: Never use did with was/were.');
+      expect(extractedBlock.rawText).toContain('Positive');
+      expect(extractedBlock.rawText).toContain('Negative');
+      expect(extractedBlock.rawText).toContain('TIP: Never use did with was/were.');
+      expect(extractedBlock.parsedData?.contextBody).toContain('TIP: Never use did with was/were.');
     });
   });
 

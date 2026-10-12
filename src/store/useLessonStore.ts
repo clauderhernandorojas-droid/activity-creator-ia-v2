@@ -386,6 +386,7 @@ export const useLessonStore = create<LessonState>()(
           const isGraded = isTargetReference ? false : (block.isGraded !== undefined ? block.isGraded : (block.parsedData?.isGraded !== undefined ? Boolean(block.parsedData.isGraded) : true));
           const sourceImageSnippetUrl = block.sourceImageSnippetUrl || block.sourceImages?.[0] || state.pastedImages[0];
 
+          const contextBody = block.contextBody || block.parsedData?.contextBody || undefined;
           let refContent = block.referenceContent || null;
           let interaction = isTargetReference ? null : (block.interaction || null);
 
@@ -395,9 +396,21 @@ export const useLessonStore = create<LessonState>()(
               type: role === 'reference_table' ? 'reference_table' : 'text',
               title,
               content: (block.interaction as any).prompt || (block.interaction as any).instruction || subtitle || '',
+              body: contextBody,
               category: 'grammar_note',
               ...(role === 'reference_table' ? { columns: [] } : {})
             } as any;
+          } else if (!refContent && contextBody && interaction) {
+            refContent = {
+              id: `ref-${Date.now()}`,
+              type: 'text',
+              title: title || 'Notas de Referencia',
+              content: contextBody,
+              body: contextBody,
+              category: 'grammar_note',
+            };
+          } else if (refContent && contextBody && 'body' in refContent && !(refContent as any).body) {
+            refContent = { ...(refContent as any), body: contextBody };
           }
 
           const newSlide: Slide = {
@@ -408,6 +421,7 @@ export const useLessonStore = create<LessonState>()(
             referenceContent: refContent,
             interaction,
             cachedInteraction: interaction || block.cachedInteraction || null,
+            contextBody,
             notes: block.notes || '',
             isGraded,
             sourceImageSnippetUrl,
@@ -458,15 +472,30 @@ export const useLessonStore = create<LessonState>()(
             const isGraded = block.isGraded !== undefined ? block.isGraded : (block.parsedData?.isGraded !== undefined ? Boolean(block.parsedData.isGraded) : true);
 
             const sourceImageSnippetUrl = block.sourceImageSnippetUrl || block.sourceImages?.[0] || state.pastedImages[idx] || state.pastedImages[0];
+            const contextBody = block.contextBody || block.parsedData?.contextBody || undefined;
+            let refContent = block.referenceContent || null;
+            if (contextBody && !refContent && block.interaction) {
+              refContent = {
+                id: `ref-${now}-${idx}`,
+                type: 'text',
+                title: title || 'Notas de Referencia',
+                content: contextBody,
+                body: contextBody,
+                category: 'grammar_note',
+              };
+            } else if (contextBody && refContent && 'body' in refContent && !(refContent as any).body) {
+              refContent = { ...(refContent as any), body: contextBody };
+            }
 
             return {
               id: slideId,
               title,
               subtitle,
-              layout: block.layout || (block.referenceContent ? 'split_50_50' : 'single_column'),
-              referenceContent: block.referenceContent || null,
+              layout: block.layout || (refContent ? 'split_50_50' : 'single_column'),
+              referenceContent: refContent,
               interaction: block.interaction || null,
               cachedInteraction: block.interaction || null,
+              contextBody,
               notes: block.notes || '',
               isGraded,
               ...(sourceImageSnippetUrl ? { sourceImageSnippetUrl } : {}),
@@ -1002,6 +1031,7 @@ export const useLessonStore = create<LessonState>()(
                   referenceContent: refContent,
                   interaction,
                   cachedInteraction: interaction || slide.cachedInteraction || null,
+                  contextBody: source.contextBody || source.parsedData?.contextBody || slide.contextBody,
                   ...(sourceImageSnippetUrl ? { sourceImageSnippetUrl } : {}),
                 };
               }),
