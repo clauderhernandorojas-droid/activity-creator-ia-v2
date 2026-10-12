@@ -908,37 +908,92 @@ describe('slideValidation - Direct Schema & Architectural Invariant Tests', () =
       }
     });
 
-    it('validateAndParseSlides preserva estrictamente como writing las consignas genuinamente abiertas', () => {
-      const rawOpenWritingSlide = JSON.stringify({
+    it('extractDisjunctiveAlternatives excluye incondicionalmente dilemas de opinion, justificaciones y preguntas largas', () => {
+      // 1. Palabras clave de desarrollo / justificación (why, explain, give reasons, opinion, etc.)
+      expect(extractDisjunctiveAlternatives('Do you prefer tea or coffee? Explain why.')).toBeNull();
+      expect(extractDisjunctiveAlternatives('Should cities ban cars or promote cycling? Write your opinion.')).toBeNull();
+      expect(extractDisjunctiveAlternatives('Do you prefer living in a city or a town? Give reasons.')).toBeNull();
+      expect(extractDisjunctiveAlternatives('Would you like to study law or medicine? Discuss your reasons.')).toBeNull();
+      expect(extractDisjunctiveAlternatives('Do you think modern art is inspiring or boring? Tell your partner.')).toBeNull();
+
+      // 2. Umbral de longitud descriptiva (> 20 palabras)
+      expect(
+        extractDisjunctiveAlternatives(
+          'Would you rather live in a very cold country with plenty of natural beauty and snow or in a warm tropical island where everyone is always outdoors in the sun?'
+        )
+      ).toBeNull();
+    });
+
+    it('validateAndParseSlides NUNCA muta writing a selection ante dilemas de opinion con justificacion', () => {
+      const rawOpinionSlide = JSON.stringify({
         slides: [
           {
-            id: 'slide-open-writing',
-            title: 'Personal Profile Writing',
+            id: 'slide-opinion-1',
+            title: 'Opinion Essay: Lifestyle Dilemma',
             layout: 'single_column',
             referenceContent: null,
             interaction: {
-              id: 'int-open-1',
+              id: 'int-opinion-1',
               type: 'writing',
-              instruction: 'Write a short profile about someone you admire:',
-              prompt: 'Write 50-80 words describing their daily routine and why you admire them.',
-              guidelines: ['Use present simple', 'Include at least three adjectives'],
-              minWords: 50,
-              maxWords: 80
+              instruction: 'Personal opinion task:',
+              prompt: 'Do you prefer tea or coffee? Explain why.'
+            }
+          },
+          {
+            id: 'slide-opinion-2',
+            title: 'Civic Debate Essay',
+            layout: 'single_column',
+            referenceContent: null,
+            interaction: {
+              id: 'int-opinion-2',
+              type: 'writing',
+              instruction: 'Write your stance:',
+              prompt: 'Should cities ban cars or promote cycling? Write your opinion.'
             }
           }
         ]
       });
 
-      const slides = validateAndParseSlides(rawOpenWritingSlide);
+      const slides = validateAndParseSlides(rawOpinionSlide);
+      expect(slides).toHaveLength(2);
+
+      // Invariante: Deben permanecer estrictamente como 'writing'
+      expect(slides[0].interaction?.type).toBe('writing');
+      expect((slides[0].interaction as any).prompt).toBe('Do you prefer tea or coffee? Explain why.');
+
+      expect(slides[1].interaction?.type).toBe('writing');
+      expect((slides[1].interaction as any).prompt).toBe('Should cities ban cars or promote cycling? Write your opinion.');
+    });
+
+    it('validateAndParseSlides NUNCA muta writing a selection si el bloque cuenta con rubricas o guidelines', () => {
+      const rawRubricSlide = JSON.stringify({
+        slides: [
+          {
+            id: 'slide-rubric-ccq',
+            title: 'Persuasive Opinion Task',
+            layout: 'single_column',
+            referenceContent: null,
+            interaction: {
+              id: 'int-rubric-1',
+              type: 'writing',
+              instruction: 'State your view:',
+              prompt: 'Do you agree or disagree?',
+              guidelines: ['State your opinion clearly', 'Provide at least one example'],
+              minWords: 30
+            }
+          }
+        ]
+      });
+
+      const slides = validateAndParseSlides(rawRubricSlide);
       expect(slides).toHaveLength(1);
 
-      const slide = slides[0];
-      // Invariante: Tareas abiertas permanecen estrictamente como 'writing'
-      expect(slide.interaction?.type).toBe('writing');
-      if (slide.interaction?.type === 'writing') {
-        expect(slide.interaction.prompt).toContain('Write 50-80 words');
-        expect(slide.interaction.minWords).toBe(50);
-        expect(slide.interaction.guidelines).toHaveLength(2);
+      // Invariante: La presencia de guidelines/minWords blindan el bloque contra cualquier mutacion a selection
+      expect(slides[0].interaction?.type).toBe('writing');
+      if (slides[0].interaction?.type === 'writing') {
+        expect(slides[0].interaction.prompt).toBe('Do you agree or disagree?');
+        expect(slides[0].interaction.minWords).toBe(30);
+        expect(slides[0].interaction.guidelines).toHaveLength(2);
       }
     });
   });

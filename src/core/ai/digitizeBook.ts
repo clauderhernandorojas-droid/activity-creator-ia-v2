@@ -746,19 +746,43 @@ export function sanitizeReferenceContent(rawRef: any, idx: number): any {
 }
 
 /**
- * Detects whether an interrogative prompt is an Alternative/Disjunctive Question
+ * Palabras clave que denotan producción abierta, justificación o redacción reflexiva.
+ * Si están presentes, la consigna NUNCA debe considerarse una disyunción cerrada simplista.
+ */
+export const OPEN_WRITING_EXCLUSION_REGEX =
+  /\b(why|explain|give reasons?|describe|write|paragraph|opinion|discuss|tell)\b/i;
+
+/**
+ * Detects whether an interrogative prompt is a concise, purely conceptual Alternative/Disjunctive Question (CCQ)
  * (e.g. "Do/Is/Are ... [Option A] or [Option B]?") and extracts the discrete options.
+ *
+ * CRITERIOS DE EXCLUSIÓN INCONDICIONAL:
+ * - Si contiene palabras clave de producción abierta (why, explain, give reasons, describe, write, paragraph, opinion, discuss, tell).
+ * - Si supera el umbral descriptivo de 20 palabras.
+ * - Si las opciones candidatas no son contrastes breves (máx 3 palabras por opción).
  */
 export function extractDisjunctiveAlternatives(text: string): { prompt: string; options: string[] } | null {
   if (!text || typeof text !== 'string') return null;
 
   const trimmed = text.trim();
+  if (!trimmed) return null;
+
+  // Criterio 1: Descartar consignas descriptivas extensas (> 20 palabras)
+  if (trimmed.split(/\s+/).length > 20) return null;
+
+  // Criterio 2: Exclusión incondicional por verbos/pautas de producción abierta
+  if (OPEN_WRITING_EXCLUSION_REGEX.test(trimmed)) return null;
+
   // Must match an auxiliary/modal question containing 'or' and ending with '?'
   const auxMatch = trimmed.match(
     /\b(Do|Does|Did|Is|Are|Was|Were|Can|Could|Should|Would|Will|Has|Have|Had)\b([^?]*\bor\b[^?]*)\?/i
   );
 
   if (!auxMatch) return null;
+
+  const matchedQuestion = auxMatch[0].trim();
+  if (matchedQuestion.split(/\s+/).length > 20) return null;
+  if (OPEN_WRITING_EXCLUSION_REGEX.test(matchedQuestion)) return null;
 
   const questionBody = auxMatch[2]; // between auxiliary and '?'
   const orParts = questionBody.split(/\s+or\s+/i);
@@ -772,7 +796,7 @@ export function extractDisjunctiveAlternatives(text: string): { prompt: string; 
 
   const candidateB = stripLeadingTokens(rawRight);
   const rightWords = candidateB.split(/\s+/);
-  if (rightWords.length > 5) return null;
+  if (rightWords.length > 3) return null; // CCQs discretos: máximo 3 palabras por opción
 
   const rawLeft = cleanQuotesAndPunct(orParts[0]);
   const leftTokens = rawLeft.split(/\s+/).filter(Boolean);
@@ -789,8 +813,12 @@ export function extractDisjunctiveAlternatives(text: string): { prompt: string; 
 
   if (!finalA || !finalB || finalA === finalB) return null;
 
+  if (OPEN_WRITING_EXCLUSION_REGEX.test(finalA) || OPEN_WRITING_EXCLUSION_REGEX.test(finalB)) {
+    return null;
+  }
+
   return {
-    prompt: auxMatch[0].trim(),
+    prompt: matchedQuestion,
     options: [finalA, finalB],
   };
 }
@@ -839,53 +867,64 @@ export function validateAndParseSlides(rawJsonText: string): Slide[] {
 
       // Regla de Detección Universal: preguntas alternativas/disyuntivas ("... A or B?") clasificadas erróneamente como writing
       if (rawSlide.interaction.type === 'writing') {
-        const candidateTexts = [
-          rawSlide.interaction.prompt,
-          rawSlide.interaction.instruction,
-          Array.isArray(rawSlide.interaction.guidelines) ? rawSlide.interaction.guidelines.join(' ') : '',
-        ].filter(Boolean);
+        const writing = rawSlide.interaction as any;
 
-        let disjunctive: ReturnType<typeof extractDisjunctiveAlternatives> = null;
-        for (const txt of candidateTexts) {
-          disjunctive = extractDisjunctiveAlternatives(txt);
-          if (disjunctive) break;
-        }
+        // Criterio de Exclusión Incondicional: Si ya cuenta con rúbricas o parámetros de redacción auténtica, NUNCA mutar
+        const hasWritingRubricOrGuidelines =
+          (Array.isArray(writing.guidelines) && writing.guidelines.length > 0) ||
+          (typeof writing.minWords === 'number' && writing.minWords > 0) ||
+          (typeof writing.maxWords === 'number' && writing.maxWords > 0) ||
+          Boolean(writing.evaluationRubric) ||
+          Boolean(writing.criteria);
 
-        if (disjunctive) {
-          const rawExpected = (
-            (rawSlide.interaction as any).expectedAnswer ||
-            (rawSlide.interaction as any).correctAnswer ||
-            ''
-          )
-            .toLowerCase()
-            .trim();
-          const isB = rawExpected && (rawExpected === disjunctive.options[1] || rawExpected.includes(disjunctive.options[1]));
+        if (!hasWritingRubricOrGuidelines) {
+          const candidateTexts = [
+            writing.prompt,
+            writing.instruction,
+          ].filter(Boolean);
 
-          rawSlide.interaction = {
-            id: rawSlide.interaction.id || `int-${Date.now()}-${idx}`,
-            type: 'selection',
-            instruction:
-              rawSlide.interaction.instruction ||
-              rawSlide.subtitle ||
-              rawSlide.title ||
-              'Choose the correct answer:',
-            verificationAudioUrl: rawSlide.interaction.verificationAudioUrl,
-            audioLabel: rawSlide.interaction.audioLabel,
-            followUpPrompt: rawSlide.interaction.followUpPrompt,
-            questions: [
-              {
-                id: `q-${Date.now()}-${idx}`,
-                prompt: disjunctive.prompt,
-                question: disjunctive.prompt,
-                mode: 'single_choice',
-                options: disjunctive.options.map((opt, oIdx) => ({
-                  id: `opt-${oIdx + 1}`,
-                  text: opt,
-                  isCorrect: isB ? oIdx === 1 : oIdx === 0,
-                })),
-              },
-            ],
-          };
+          let disjunctive: ReturnType<typeof extractDisjunctiveAlternatives> = null;
+          for (const txt of candidateTexts) {
+            disjunctive = extractDisjunctiveAlternatives(txt);
+            if (disjunctive) break;
+          }
+
+          if (disjunctive) {
+            const rawExpected = (
+              writing.expectedAnswer ||
+              writing.correctAnswer ||
+              ''
+            )
+              .toLowerCase()
+              .trim();
+            const isB = rawExpected && (rawExpected === disjunctive.options[1] || rawExpected.includes(disjunctive.options[1]));
+
+            rawSlide.interaction = {
+              id: rawSlide.interaction.id || `int-${Date.now()}-${idx}`,
+              type: 'selection',
+              instruction:
+                writing.instruction ||
+                rawSlide.subtitle ||
+                rawSlide.title ||
+                'Choose the correct answer:',
+              verificationAudioUrl: writing.verificationAudioUrl,
+              audioLabel: writing.audioLabel,
+              followUpPrompt: writing.followUpPrompt,
+              questions: [
+                {
+                  id: `q-${Date.now()}-${idx}`,
+                  prompt: disjunctive.prompt,
+                  question: disjunctive.prompt,
+                  mode: 'single_choice',
+                  options: disjunctive.options.map((opt, oIdx) => ({
+                    id: `opt-${oIdx + 1}`,
+                    text: opt,
+                    isCorrect: isB ? oIdx === 1 : oIdx === 0,
+                  })),
+                },
+              ],
+            };
+          }
         }
       }
 
