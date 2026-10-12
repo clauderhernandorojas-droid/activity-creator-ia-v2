@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { SlideSchema } from '../../../types/schema';
-import { validateAndParseSlides, SchemaValidationError } from '../digitizeBook';
+import { validateAndParseSlides, SchemaValidationError, extractDisjunctiveAlternatives } from '../digitizeBook';
 
 describe('slideValidation - Direct Schema & Architectural Invariant Tests', () => {
 
@@ -828,6 +828,117 @@ describe('slideValidation - Direct Schema & Architectural Invariant Tests', () =
           expect(result.data.referenceContent.mediaType).toBe('audio');
           expect(result.data.referenceContent.url).toBe('placeholder:audio-track');
         }
+      }
+    });
+  });
+
+  // =========================================================================
+  // CASO K: Clasificación Semántica de Preguntas Disyuntivas (Alternative Questions)
+  // =========================================================================
+  describe('Caso K: Clasificación Semántica de Preguntas Disyuntivas (Alternative Questions vs Writing)', () => {
+    it('extractDisjunctiveAlternatives detecta el patrón "Do/Is/Are ... [A] or [B]?" y extrae las opciones discretas', () => {
+      // 1. Ejemplos canónicos
+      const r1 = extractDisjunctiveAlternatives('Do the speakers agree or disagree?');
+      expect(r1).not.toBeNull();
+      expect(r1?.options).toEqual(['agree', 'disagree']);
+
+      const r2 = extractDisjunctiveAlternatives('Is this sentence talking about the past or the present?');
+      expect(r2).not.toBeNull();
+      expect(r2?.options).toEqual(['past', 'present']);
+
+      const r3 = extractDisjunctiveAlternatives('Are the underlined verbs finished or unfinished?');
+      expect(r3).not.toBeNull();
+      expect(r3?.options).toEqual(['finished', 'unfinished']);
+
+      const r4 = extractDisjunctiveAlternatives('Does rule A refer to a habit or an action in progress?');
+      expect(r4).not.toBeNull();
+      expect(r4?.options).toEqual(['habit', 'action in progress']);
+    });
+
+    it('extractDisjunctiveAlternatives retorna null ante consignas abiertas de redacción o preguntas abiertas', () => {
+      // Consignas abiertas no deben alterarse
+      expect(extractDisjunctiveAlternatives('Describe a memorable holiday with your friends or family.')).toBeNull();
+      expect(extractDisjunctiveAlternatives('Write a short paragraph about someone you admire.')).toBeNull();
+      expect(extractDisjunctiveAlternatives('Why do you think the speaker made that choice?')).toBeNull();
+      expect(extractDisjunctiveAlternatives('What are the main advantages of public transport?')).toBeNull();
+    });
+
+    it('validateAndParseSlides normaliza una pregunta disyuntiva erróneamente tipada como writing a selection', () => {
+      const rawDisjunctiveWritingSlide = JSON.stringify({
+        slides: [
+          {
+            id: 'slide-disj-1',
+            title: 'Grammar Concept Check',
+            layout: 'single_column',
+            referenceContent: null,
+            interaction: {
+              id: 'int-disj-1',
+              type: 'writing',
+              instruction: 'Listen to the conversation and answer the question:',
+              prompt: 'Do the speakers agree or disagree?',
+              expectedAnswer: 'disagree'
+            }
+          }
+        ]
+      });
+
+      const slides = validateAndParseSlides(rawDisjunctiveWritingSlide);
+      expect(slides).toHaveLength(1);
+
+      const slide = slides[0];
+      // Invariante 1: NO debe quedar como 'writing', DEBE modelarse como 'selection'
+      expect(slide.interaction?.type).toBe('selection');
+
+      if (slide.interaction?.type === 'selection') {
+        expect(slide.interaction.questions).toBeDefined();
+        expect(slide.interaction.questions).toHaveLength(1);
+
+        const q = slide.interaction.questions![0];
+        expect(q.mode).toBe('single_choice');
+        expect(q.prompt).toBe('Do the speakers agree or disagree?');
+
+        // Invariante 2: Opciones discretas extraídas exactamente de la disyunción
+        expect(q.options).toHaveLength(2);
+        expect(q.options[0].text).toBe('agree');
+        expect(q.options[1].text).toBe('disagree');
+
+        // Invariante 3: Inferencia de respuesta correcta basada en expectedAnswer
+        expect(q.options[0].isCorrect).toBe(false);
+        expect(q.options[1].isCorrect).toBe(true);
+      }
+    });
+
+    it('validateAndParseSlides preserva estrictamente como writing las consignas genuinamente abiertas', () => {
+      const rawOpenWritingSlide = JSON.stringify({
+        slides: [
+          {
+            id: 'slide-open-writing',
+            title: 'Personal Profile Writing',
+            layout: 'single_column',
+            referenceContent: null,
+            interaction: {
+              id: 'int-open-1',
+              type: 'writing',
+              instruction: 'Write a short profile about someone you admire:',
+              prompt: 'Write 50-80 words describing their daily routine and why you admire them.',
+              guidelines: ['Use present simple', 'Include at least three adjectives'],
+              minWords: 50,
+              maxWords: 80
+            }
+          }
+        ]
+      });
+
+      const slides = validateAndParseSlides(rawOpenWritingSlide);
+      expect(slides).toHaveLength(1);
+
+      const slide = slides[0];
+      // Invariante: Tareas abiertas permanecen estrictamente como 'writing'
+      expect(slide.interaction?.type).toBe('writing');
+      if (slide.interaction?.type === 'writing') {
+        expect(slide.interaction.prompt).toContain('Write 50-80 words');
+        expect(slide.interaction.minWords).toBe(50);
+        expect(slide.interaction.guidelines).toHaveLength(2);
       }
     });
   });

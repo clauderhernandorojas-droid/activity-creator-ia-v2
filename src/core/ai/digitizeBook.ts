@@ -746,6 +746,56 @@ export function sanitizeReferenceContent(rawRef: any, idx: number): any {
 }
 
 /**
+ * Detects whether an interrogative prompt is an Alternative/Disjunctive Question
+ * (e.g. "Do/Is/Are ... [Option A] or [Option B]?") and extracts the discrete options.
+ */
+export function extractDisjunctiveAlternatives(text: string): { prompt: string; options: string[] } | null {
+  if (!text || typeof text !== 'string') return null;
+
+  const trimmed = text.trim();
+  // Must match an auxiliary/modal question containing 'or' and ending with '?'
+  const auxMatch = trimmed.match(
+    /\b(Do|Does|Did|Is|Are|Was|Were|Can|Could|Should|Would|Will|Has|Have|Had)\b([^?]*\bor\b[^?]*)\?/i
+  );
+
+  if (!auxMatch) return null;
+
+  const questionBody = auxMatch[2]; // between auxiliary and '?'
+  const orParts = questionBody.split(/\s+or\s+/i);
+  if (orParts.length !== 2) return null;
+
+  const cleanQuotesAndPunct = (s: string) => s.replace(/['"“”‘’]/g, '').replace(/[?.!,;:]+$/, '').trim();
+  const stripLeadingTokens = (s: string) => s.replace(/^(?:(?:the|a|an|to|in|at|on|about|of)\s+)+/gi, '').trim();
+
+  const rawRight = cleanQuotesAndPunct(orParts[1]);
+  if (!rawRight) return null;
+
+  const candidateB = stripLeadingTokens(rawRight);
+  const rightWords = candidateB.split(/\s+/);
+  if (rightWords.length > 5) return null;
+
+  const rawLeft = cleanQuotesAndPunct(orParts[0]);
+  const leftTokens = rawLeft.split(/\s+/).filter(Boolean);
+  if (leftTokens.length === 0) return null;
+
+  const numTokens = Math.min(Math.max(rightWords.length, 1), 3);
+  const leftCandidateRaw = leftTokens.slice(-numTokens).join(' ');
+  const candidateA = stripLeadingTokens(leftCandidateRaw);
+
+  if (!candidateA || !candidateB) return null;
+
+  const finalA = candidateA.toLowerCase().replace(/^[([\]+|[)\]]+$/g, '').trim();
+  const finalB = candidateB.toLowerCase().replace(/^[([\]+|[)\]]+$/g, '').trim();
+
+  if (!finalA || !finalB || finalA === finalB) return null;
+
+  return {
+    prompt: auxMatch[0].trim(),
+    options: [finalA, finalB],
+  };
+}
+
+/**
  * Validates raw model output strictly against canonical SlideSchema.
  * Throws explicit SchemaValidationError if validation fails.
  */
@@ -786,12 +836,76 @@ export function validateAndParseSlides(rawJsonText: string): Slide[] {
       if (!rawSlide.interaction.id) {
         rawSlide.interaction.id = `int-${Date.now()}-${idx}`;
       }
+
+      // Regla de Detección Universal: preguntas alternativas/disyuntivas ("... A or B?") clasificadas erróneamente como writing
+      if (rawSlide.interaction.type === 'writing') {
+        const candidateTexts = [
+          rawSlide.interaction.prompt,
+          rawSlide.interaction.instruction,
+          Array.isArray(rawSlide.interaction.guidelines) ? rawSlide.interaction.guidelines.join(' ') : '',
+        ].filter(Boolean);
+
+        let disjunctive: ReturnType<typeof extractDisjunctiveAlternatives> = null;
+        for (const txt of candidateTexts) {
+          disjunctive = extractDisjunctiveAlternatives(txt);
+          if (disjunctive) break;
+        }
+
+        if (disjunctive) {
+          const rawExpected = (
+            (rawSlide.interaction as any).expectedAnswer ||
+            (rawSlide.interaction as any).correctAnswer ||
+            ''
+          )
+            .toLowerCase()
+            .trim();
+          const isB = rawExpected && (rawExpected === disjunctive.options[1] || rawExpected.includes(disjunctive.options[1]));
+
+          rawSlide.interaction = {
+            id: rawSlide.interaction.id || `int-${Date.now()}-${idx}`,
+            type: 'selection',
+            instruction:
+              rawSlide.interaction.instruction ||
+              rawSlide.subtitle ||
+              rawSlide.title ||
+              'Choose the correct answer:',
+            verificationAudioUrl: rawSlide.interaction.verificationAudioUrl,
+            audioLabel: rawSlide.interaction.audioLabel,
+            followUpPrompt: rawSlide.interaction.followUpPrompt,
+            questions: [
+              {
+                id: `q-${Date.now()}-${idx}`,
+                prompt: disjunctive.prompt,
+                question: disjunctive.prompt,
+                mode: 'single_choice',
+                options: disjunctive.options.map((opt, oIdx) => ({
+                  id: `opt-${oIdx + 1}`,
+                  text: opt,
+                  isCorrect: isB ? oIdx === 1 : oIdx === 0,
+                })),
+              },
+            ],
+          };
+        }
+      }
+
       if (rawSlide.interaction.type === 'selection' && Array.isArray(rawSlide.interaction.questions)) {
         for (const q of rawSlide.interaction.questions) {
           if (q && typeof q === 'object') {
             const statement = q.prompt || q.question || '';
             if (!q.prompt && statement) q.prompt = statement;
             if (!q.question && statement) q.question = statement;
+
+            if (!Array.isArray(q.options) || q.options.length === 0) {
+              const disj = extractDisjunctiveAlternatives(statement);
+              if (disj) {
+                q.options = disj.options.map((opt, oIdx) => ({
+                  id: `opt-${oIdx + 1}`,
+                  text: opt,
+                  isCorrect: oIdx === 0,
+                }));
+              }
+            }
           }
         }
       }
@@ -938,6 +1052,13 @@ CANONICAL ARCHETYPES:
          If the entirety of the passage or exercise decomposes into the interactive items of the activity, referenceContent MUST be strictly null and layout MUST be "single_column".
      * CHECKLISTS & CANDIDATE SELECTION: When students mark, tick (✓), or choose valid candidates from a single domain ("Tick the phrases", "Which sentences are true?", "Select all that apply"):
        - Use flat options[] with allowMultiple: true/false. Preserve the full intact text in options[].text!
+     * DISJUNCTIVE / ALTERNATIVE QUESTIONS RULE (e.g. "Do/Is/Are ... [Option A] or [Option B]?"):
+       - UNIVERSAL DETECTION RULE FOR 'selection':
+         When an interrogative prompt, instruction, or exercise question presents an explicit closed disjunction delimiting the possible candidate answers (e.g. linguistic pattern "Do/Is/Are ... [Option A] or [Option B]?", such as "Do the speakers agree or disagree?", "Is the sentence talking about the past or the present?", "Are the underlined verbs finished or unfinished?"):
+         * NEVER classify this interaction as free writing or essay ("writing").
+         * The interaction MUST be modeled strictly as interaction.type: "selection" (mode: "single_choice" in questions[]).
+         * Extract as candidate options exclusively the discrete alternatives delimited by the disjunction (e.g. options: [{ id: "opt-1", text: "agree", isCorrect: true }, { id: "opt-2", text: "disagree", isCorrect: false }], or ['past', 'present']).
+         * Infer the correct option ('correctAnswer' / isCorrect: true) analyzing the data, grammar rules, listening transcript, or contextual examples from the lesson clipping.
    - "buckets_matching": For categorization into buckets OR bijective correspondence between TWO differentiated domains (Column A <-> Column B, "Match words with definitions", "Match sentence halves"):
      * PRESERVE VERBATIM VISUAL IDENTIFIERS: Always preserve literal printed visual identifiers from the textbook (letters "a", "b", "c", numbers "1", "2", "3", or verbatim labels) in tokens and buckets/targetSlots. Do NOT omit them and do NOT invent synthetic names.
      * MATCHING HEADINGS / LABELS TO PARAGRAPHS: When the instruction explicitly directs to match or assign headings, titles, or labels to numbered sections or paragraphs (e.g. "Match headings a-d with paragraphs 1-4", "Match words with definitions"):
@@ -945,7 +1066,9 @@ CANONICAL ARCHETYPES:
        - Alternatively, if modeled as input_fields, it OBLIGATORIAMENTE must include the complete "wordBank" with the exact list of options to match.
        - NEVER emit orphan empty text fields without providing the printed bank of options/headings from the activity.
    - "sequence": For ordering disordered sentences or dialogue lines into chronological sequence.
-   - "writing": For free written production (paragraphs, emails, profiles) AND reflective grammar analysis questions without printed blanks ("How are the question forms in 1 and 2 different?"). Set isGraded: false.
+   - "writing": STRICT RESTRICTION (GENUINELY OPEN TASKS ONLY):
+     * Reserve interaction.type: "writing" EXCLUSIVELY for genuinely open-ended communicative or production tasks (personal opinion essays, paragraphs, emails, profiles, or open inquiry questions without finite discrete alternatives in the prompt, such as "Why...", "Describe...", "What do you think about..."). Set isGraded: false.
+     * STRICT PROHIBITION: NEVER classify alternative questions with closed binary or finite choices ("... [Option A] or [Option B]?") as "writing". If the prompt contains finite discrete choices delimited by "or", it MUST be classified as "selection".
 
 AUTONOMOUS RESOLUTION:
 - Act as an expert ELT teacher: all exercises MUST arrive 100% COMPLETELY SOLVED by default.
