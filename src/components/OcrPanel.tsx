@@ -1513,21 +1513,33 @@ export const OcrPanel: React.FC = () => {
                         </div>
                       ) : mappedPreview.interaction?.type === 'selection' && mappedPreview.interaction.options && mappedPreview.interaction.options.length > 0 ? (
                         /* Flat selection options preview */
-                        <div className="space-y-2">
-                          <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">
-                            Opciones de Selección ({mappedPreview.interaction.options.length}):
-                          </p>
-                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
-                            {mappedPreview.interaction.options.map((opt, optIdx) => (
-                              <div
-                                key={opt.id || optIdx}
-                                className={`p-2 rounded-lg bg-white border text-[11px] flex items-center justify-between gap-2 group hover:border-slate-300 transition ${
-                                  opt.isCorrect
-                                    ? 'border-emerald-300 bg-emerald-50/50 text-emerald-900 font-semibold'
-                                    : 'border-slate-200/80 text-slate-700'
-                                }`}
-                              >
-                                <input
+                        (() => {
+                          const isMulti = mappedPreview.interaction?.type === 'selection' && Boolean(mappedPreview.interaction.allowMultiple);
+                          const options = mappedPreview.interaction?.type === 'selection' && mappedPreview.interaction.options ? mappedPreview.interaction.options : [];
+                          return (
+                            <div className="space-y-2">
+                              <div className="flex items-center justify-between">
+                                <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">
+                                  Opciones de Selección ({options.length}):
+                                </p>
+                                <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-slate-100 text-slate-600">
+                                  {isMulti ? 'Casillas múltiples [✓]' : 'Opción única (•)'}
+                                </span>
+                              </div>
+                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                                {options.map((opt, optIdx) => (
+                                  <div
+                                    key={opt.id || optIdx}
+                                    className={`p-2 rounded-lg bg-white border text-[11px] flex items-center justify-between gap-2 group hover:border-slate-300 transition ${
+                                      opt.isCorrect
+                                        ? 'border-emerald-300 bg-emerald-50/50 text-emerald-900 font-semibold'
+                                        : 'border-slate-200/80 text-slate-700'
+                                    }`}
+                                  >
+                                    <span className="text-[11px] text-slate-400 font-mono select-none">
+                                      {isMulti ? '□' : '○'}
+                                    </span>
+                                    <input
                                   type="text"
                                   value={opt.text}
                                   onChange={(e) => handleUpdateItem(optIdx, e.target.value)}
@@ -1558,7 +1570,9 @@ export const OcrPanel: React.FC = () => {
                             <Plus className="w-3.5 h-3.5" />
                             <span>Añadir Opción</span>
                           </button>
-                        </div>
+                            </div>
+                          );
+                        })()
                       ) : mappedPreview.interaction?.type === 'selection' && mappedPreview.interaction.questions && mappedPreview.interaction.questions.length > 0 ? (
                         /* Selection questions */
                         <div className="space-y-2">

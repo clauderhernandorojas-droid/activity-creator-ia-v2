@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { SlideSchema } from '../../../types/schema';
+import { SlideSchema, SelectionBlockSchema } from '../../../types/schema';
+import { evaluateSelection } from '../../evaluators/evaluateSelection';
 import {
   validateAndParseSlides,
   slideToExtractedBlock,
@@ -1582,6 +1583,124 @@ describe('slideValidation - Direct Schema & Architectural Invariant Tests', () =
       if (slide.interaction?.type === 'input_fields') {
         expect(slide.interaction.listItems).toHaveLength(10);
       }
+    });
+  });
+
+  // =========================================================================
+  // CASO O: Soporte Nativo Universal para Selección Múltiple (allowMultiple)
+  // =========================================================================
+  describe('Caso O: Soporte Nativo Universal para Selección Múltiple (allowMultiple: true)', () => {
+    it('SelectionBlockSchema asigna allowMultiple: false por defecto garantizando 100% retrocompatibilidad', () => {
+      const parsed = SelectionBlockSchema.parse({
+        type: 'selection',
+        id: 'sel-test-compat',
+        instruction: 'Choose one answer:',
+        options: [
+          { id: 'opt-1', text: 'Option A', isCorrect: true },
+          { id: 'opt-2', text: 'Option B', isCorrect: false },
+        ],
+      });
+
+      expect(parsed.allowMultiple).toBe(false);
+    });
+
+    it('validateAndParseSlides valida y preserva allowMultiple: true en actividades de selección múltiple', () => {
+      const multiSelectSlide = JSON.stringify({
+        slides: [
+          {
+            id: 'slide-multi-sel',
+            title: 'Reading Check: Identify Key Facts',
+            subtitle: 'Select all statements that are true according to the text.',
+            layout: 'single_column',
+            isGraded: true,
+            referenceContent: null,
+            interaction: {
+              id: 'int-multi-sel',
+              type: 'selection',
+              instruction: 'Select all that apply:',
+              allowMultiple: true,
+              options: [
+                { id: 'opt-1', text: 'The concert started at 8 PM.', isCorrect: true },
+                { id: 'opt-2', text: 'The tickets were free.', isCorrect: false },
+                { id: 'opt-3', text: 'It rained during the show.', isCorrect: true },
+                { id: 'opt-4', text: 'The band played 10 songs.', isCorrect: false },
+              ],
+            },
+          },
+        ],
+      });
+
+      const slides = validateAndParseSlides(multiSelectSlide);
+      expect(slides).toHaveLength(1);
+      const slide = slides[0];
+      expect(slide.interaction?.type).toBe('selection');
+      if (slide.interaction?.type === 'selection') {
+        expect(slide.interaction.allowMultiple).toBe(true);
+        expect(slide.interaction.options).toHaveLength(4);
+      }
+    });
+
+    it('evaluateSelection puntúa con éxito la selección múltiple solo si el conjunto marcado coincide exactamente con isCorrect: true', () => {
+      const multiBlock = SelectionBlockSchema.parse({
+        type: 'selection',
+        id: 'block-multi',
+        instruction: 'Select all that apply:',
+        allowMultiple: true,
+        options: [
+          { id: 'opt-1', text: 'Fact 1', isCorrect: true },
+          { id: 'opt-2', text: 'Fact 2', isCorrect: false },
+          { id: 'opt-3', text: 'Fact 3', isCorrect: true },
+        ],
+      });
+
+      // 1. Acierto exacto: ambas opciones correctas marcadas y ninguna incorrecta
+      const exactResult = evaluateSelection(multiBlock, {
+        'block-multi': ['opt-1', 'opt-3'],
+      });
+      expect(exactResult.score).toBe(1);
+      expect(exactResult.maxScore).toBe(1);
+      expect(exactResult.details['block-multi']).toBe(true);
+
+      // 2. Respuesta incompleta: solo marcó una de las dos correctas
+      const incompleteResult = evaluateSelection(multiBlock, {
+        'block-multi': ['opt-1'],
+      });
+      expect(incompleteResult.score).toBe(0);
+      expect(incompleteResult.details['block-multi']).toBe(false);
+
+      // 3. Falso positivo: marcó las correctas pero además marcó un distractor
+      const distractorResult = evaluateSelection(multiBlock, {
+        'block-multi': ['opt-1', 'opt-2', 'opt-3'],
+      });
+      expect(distractorResult.score).toBe(0);
+      expect(distractorResult.details['block-multi']).toBe(false);
+    });
+
+    it('evaluateSelection con allowMultiple: false mantiene el comportamiento de selección única (radio button)', () => {
+      const singleBlock = SelectionBlockSchema.parse({
+        type: 'selection',
+        id: 'block-single',
+        instruction: 'Choose the best option:',
+        allowMultiple: false,
+        options: [
+          { id: 'opt-1', text: 'Answer A', isCorrect: true },
+          { id: 'opt-2', text: 'Answer B', isCorrect: false },
+        ],
+      });
+
+      // Acierto
+      const correctRes = evaluateSelection(singleBlock, {
+        'block-single': ['opt-1'],
+      });
+      expect(correctRes.score).toBe(1);
+      expect(correctRes.details['block-single']).toBe(true);
+
+      // Error
+      const incorrectRes = evaluateSelection(singleBlock, {
+        'block-single': ['opt-2'],
+      });
+      expect(incorrectRes.score).toBe(0);
+      expect(incorrectRes.details['block-single']).toBe(false);
     });
   });
 

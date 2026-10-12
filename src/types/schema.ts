@@ -142,6 +142,7 @@ export const SelectionQuestionSchema = z.object({
   mode: z.enum(['single_choice', 'multiple_choice', 'dropdown']),
   options: z.array(SelectionOptionSchema),
   isExample: z.boolean().optional(),
+  allowMultiple: z.boolean().default(false).optional(),
 });
 
 export const SelectionBlockSchema = z.object({
@@ -156,7 +157,7 @@ export const SelectionBlockSchema = z.object({
   questions: z.array(SelectionQuestionSchema).optional().default([]),
   // b) Flat Selection Mode: flat list of selectable items/cards
   options: z.array(SelectionOptionSchema).optional(),
-  allowMultiple: z.boolean().optional(),
+  allowMultiple: z.boolean().default(false).optional(),
 });
 
 export type SelectionOption = z.infer<typeof SelectionOptionSchema>;
@@ -377,6 +378,7 @@ export const ExtractedStructuredPayloadSchema = z.object({
   })).optional(),
   isGraded: z.boolean().default(true).optional(),
   visualImageIndices: z.array(z.number()).optional(),
+  allowMultiple: z.boolean().default(false).optional(),
 });
 
 export type ExtractedTableCell = z.infer<typeof ExtractedTableCellSchema>;

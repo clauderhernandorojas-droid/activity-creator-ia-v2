@@ -102,17 +102,29 @@ export const SelectionRenderer: React.FC<Props> = ({
 
   const toggleFlatStudentSelection = (optId: string) => {
     if (evaluation.isSubmitted) return;
+    const isMultiple = Boolean(block.allowMultiple);
     const currentList: string[] = Array.isArray(studentAnswers[block.id])
       ? studentAnswers[block.id]
+      : typeof studentAnswers[block.id] === 'string' && studentAnswers[block.id]
+      ? [studentAnswers[block.id]]
       : flatOptions.filter((opt) => studentAnswers[opt.id]).map((opt) => opt.id);
 
-    const isSelected = currentList.includes(optId);
-    const updated = isSelected
-      ? currentList.filter((id) => id !== optId)
-      : [...currentList, optId];
+    if (isMultiple) {
+      const isSelected = currentList.includes(optId);
+      const updated = isSelected
+        ? currentList.filter((id) => id !== optId)
+        : [...currentList, optId];
 
-    onAnswerChange?.(block.id, updated);
-    onAnswerChange?.(optId, !isSelected);
+      onAnswerChange?.(block.id, updated);
+      onAnswerChange?.(optId, !isSelected);
+    } else {
+      const isSelected = currentList.includes(optId);
+      const updated = isSelected ? [] : [optId];
+      onAnswerChange?.(block.id, updated);
+      flatOptions.forEach((opt) => {
+        onAnswerChange?.(opt.id, opt.id === optId && !isSelected);
+      });
+    }
   };
 
   // Convert between flat selection and quiz mode
@@ -288,7 +300,9 @@ export const SelectionRenderer: React.FC<Props> = ({
             </p>
             {isFlatMode && (
               <p className="text-xs text-slate-500 font-medium">
-                Haz clic sobre las tarjetas para marcarlas o desmarcarlas.
+                {block.allowMultiple
+                  ? 'Marca una o varias opciones según corresponda (casillas de verificación).'
+                  : 'Selecciona la opción correcta.'}
               </p>
             )}
           </div>
@@ -298,6 +312,15 @@ export const SelectionRenderer: React.FC<Props> = ({
           <div className="flex items-center gap-2 flex-wrap">
             {isFlatMode ? (
               <>
+                <label className="text-xs flex items-center gap-1.5 px-2.5 py-1.5 bg-slate-50 hover:bg-slate-100 text-slate-700 font-semibold rounded-lg border border-slate-200 transition cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(block.allowMultiple)}
+                    onChange={(e) => onChange?.({ ...block, allowMultiple: e.target.checked })}
+                    className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 w-3.5 h-3.5"
+                  />
+                  <span>Selección múltiple</span>
+                </label>
                 <button
                   onClick={addFlatOption}
                   className="text-xs flex items-center gap-1 px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-semibold rounded-lg border border-indigo-200 transition"
@@ -457,13 +480,15 @@ export const SelectionRenderer: React.FC<Props> = ({
                       >
                         <span className="flex items-center gap-2.5 flex-1 min-w-0">
                           <span
-                            className={`w-4 h-4 rounded-md border flex items-center justify-center text-[10px] flex-shrink-0 transition-colors ${
+                            className={`w-4 h-4 rounded-${
+                              block.allowMultiple ? 'md' : 'full'
+                            } border flex items-center justify-center text-[10px] flex-shrink-0 transition-colors ${
                               isSelected
                                 ? 'bg-indigo-600 border-indigo-600 text-white font-bold'
                                 : 'border-slate-300 bg-white text-transparent'
                             }`}
                           >
-                            ✓
+                            {block.allowMultiple ? '✓' : '•'}
                           </span>
                           <span className="font-medium leading-snug break-words">{opt.text}</span>
                         </span>
@@ -695,7 +720,7 @@ export const SelectionRenderer: React.FC<Props> = ({
                     return (
                       <div className={`grid gap-2 mt-2 ${isLongOptions ? 'grid-cols-1' : 'grid-cols-1 sm:grid-cols-2'}`}>
                         {q.options.map((opt) => {
-                          const isSingle = q.mode === 'single_choice';
+                          const isSingle = q.mode === 'single_choice' && !q.allowMultiple && !block.allowMultiple;
                           const isSelected = isSingle
                             ? studentAnswers[q.id] === opt.id
                             : Array.isArray(studentAnswers[q.id]) &&

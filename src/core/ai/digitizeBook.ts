@@ -589,6 +589,7 @@ export const STRUCTURED_SLIDE_SCHEMA = {
                     contextText: { type: 'string' },
                     mode: { type: 'string', enum: ['single_choice', 'multiple_choice', 'dropdown'] },
                     isExample: { type: 'boolean', description: 'true if this question/item is a solved textbook example' },
+                    allowMultiple: { type: 'boolean', description: 'true if multiple options can be chosen with checkboxes' },
                     options: {
                       type: 'array',
                       items: {
@@ -1225,6 +1226,16 @@ export function validateAndParseSlides(rawJsonText: string): Slide[] {
         }
       }
 
+      // Normalizar allowMultiple para interaction: selection
+      if (rawSlide.interaction && rawSlide.interaction.type === 'selection') {
+        if (typeof rawSlide.interaction.allowMultiple !== 'boolean') {
+          const isMultiDirective = /select\s+all\b|which\s+(?:of\s+these|appear|sentences|statements|phrases)\b|find\s+the\s+(?:target|responses|phrases)\b|tick\s+(?:all|the\s+phrases|the\s+sentences)\b/i.test(
+            `${rawSlide.title || ''} ${rawSlide.subtitle || ''} ${rawSlide.interaction.instruction || ''}`
+          );
+          rawSlide.interaction.allowMultiple = isMultiDirective;
+        }
+      }
+
       // Normalizar layoutMode para input_fields si fue omitido por el modelo
       if (rawSlide.interaction && rawSlide.interaction.type === 'input_fields') {
         if (!rawSlide.interaction.layoutMode) {
@@ -1563,6 +1574,7 @@ export function slideToExtractedBlock(
       content: contextBody || (ref?.type === 'text' ? ref.content : undefined),
       interactionType: interaction?.type === 'input_fields' ? 'fill_blanks' : interaction?.type,
       items: interaction?.type === 'input_fields' ? interaction.listItems : undefined,
+      allowMultiple: interaction?.type === 'selection' ? Boolean(interaction.allowMultiple) : undefined,
     },
   };
 }
@@ -1655,7 +1667,12 @@ CANONICAL ARCHETYPES:
        - INVARIANT FOR LAYOUT SEGMENTATION:
          If the entirety of the passage or exercise decomposes into the interactive items of the activity, referenceContent MUST be strictly null and layout MUST be "single_column".
      * CHECKLISTS & CANDIDATE SELECTION: When students mark, tick (✓), or choose valid candidates from a single domain ("Tick the phrases", "Which sentences are true?", "Select all that apply"):
-       - Use flat options[] with allowMultiple: true/false. Preserve the full intact text in options[].text!
+       - When a pedagogical directive asks to identify, find, or mark MULTIPLE valid elements that appear in a text or set (e.g. "Select all that apply", "Which of these appear...", "Find the target responses", "Tick the phrases that are true", "Which sentences are mentioned?"):
+         * The interaction MUST be emitted with 'allowMultiple: true'.
+         * Consolidate candidate options into a single clean list of alternatives (populating flat 'options[]' with 'isCorrect: true' on matching elements and 'isCorrect: false' on distractors), INSTEAD of fragmenting the activity into multiple artificial binary questions!
+         * Preserve the full intact text in options[].text without degrading sentences.
+       - When an exercise has a single correct answer (e.g. "Choose the correct word", "Circle the correct form"):
+         * Emit with 'allowMultiple: false' (default).
      * PROMPT CLEANLINESS & FORBIDDEN COMPLETION TOKENS:
        - It is STRICTLY FORBIDDEN to insert completion tokens or blanks (e.g. '[ ? ]', '{{blank}}', '___') inside the prompt of direct selection questions. The prompt MUST be a direct, clean interrogative sentence or instruction (e.g. "Do these people agree or disagree?", "Which sentence is grammatically accurate?").
        - ZERO PASSAGE/DIALOGUE DUPLICATION: If reading texts, dialogues, or examples are already populated in the reference panel (referenceContent), NEVER duplicate the full dialogue or reading passage inside the "prompt" string of the selection questions. Keep the prompt clean and concise, referencing the panel.
@@ -3012,6 +3029,7 @@ function sanitizeExtractedPayload(payload: ExtractedStructuredPayload): Extracte
           .filter((n) => !isNaN(n) && n > 0)
       : undefined,
     contextBody: payload.contextBody || undefined,
+    allowMultiple: payload.allowMultiple !== undefined ? Boolean(payload.allowMultiple) : undefined,
   };
 }
 
