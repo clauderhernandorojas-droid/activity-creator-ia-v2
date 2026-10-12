@@ -1704,7 +1704,219 @@ describe('slideValidation - Direct Schema & Architectural Invariant Tests', () =
     });
   });
 
+  // =========================================================================
+  // CASO P: Calibración Ontológica de Layout y Modelado de Ejemplos/Instrucciones
+  // =========================================================================
+  describe('Caso P: Calibración Ontológica de Layout y Modelado de Ejemplos e Instrucciones', () => {
+    it('elimina referenceContent si aloja únicamente una consigna o instrucción y normaliza layout a single_column', () => {
+      const rawSlideWithSpuriousInstruction = JSON.stringify({
+        slides: [
+          {
+            id: 'slide-spurious-inst',
+            title: 'Past Simple Practice',
+            subtitle: 'Complete the sentences with the correct form of the verbs in brackets',
+            layout: 'split_50_50',
+            referenceContent: {
+              id: 'ref-spurious-1',
+              type: 'text',
+              category: 'instructions',
+              content: 'Complete the sentences with the past simple form of the verbs in brackets.',
+            },
+            interaction: {
+              id: 'int-past-simple',
+              type: 'input_fields',
+              instruction: 'Fill in the blanks:',
+              listItems: [
+                {
+                  id: 'item-1',
+                  prompt: '1. She ___ (go) to the supermarket yesterday.',
+                  expectedAnswer: 'went',
+                  acceptedAnswers: ['went'],
+                  isExample: false,
+                },
+                {
+                  id: 'item-2',
+                  prompt: '2. We ___ (play) tennis last Sunday.',
+                  expectedAnswer: 'played',
+                  acceptedAnswers: ['played'],
+                  isExample: false,
+                },
+              ],
+            },
+          },
+        ],
+      });
+
+      const slides = validateAndParseSlides(rawSlideWithSpuriousInstruction);
+      expect(slides).toHaveLength(1);
+      const slide = slides[0];
+
+      // Invariante 1: Prohibido aislar instrucciones como si fueran un bloque de lectura de apoyo
+      expect(slide.referenceContent).toBeNull();
+
+      // Invariante 2: Ejercicio autosuficiente de oraciones adopta layout single_column
+      expect(slide.layout).toBe('single_column');
+
+      // Invariante 3: La consigna se preserva en los metadatos de la interacción
+      expect(slide.interaction?.instruction).toContain('Complete the sentences with the past simple form');
+    });
+
+    it('elimina referenceContent si aloja una oración modelo ("Example:") y la pliega dentro de la cabecera/metadatos', () => {
+      const rawSlideWithExample = JSON.stringify({
+        slides: [
+          {
+            id: 'slide-spurious-example',
+            title: 'Present Perfect Drill',
+            layout: 'split_50_50',
+            referenceContent: {
+              id: 'ref-spurious-ex',
+              type: 'text',
+              content: 'Example: 1. She has already visited London.',
+            },
+            interaction: {
+              id: 'int-pres-perf',
+              type: 'input_fields',
+              instruction: 'Write sentences with already or yet:',
+              listItems: [
+                {
+                  id: 'item-1',
+                  prompt: '1. She has already visited London.',
+                  expectedAnswer: 'has already visited',
+                  isExample: false,
+                },
+                {
+                  id: 'item-2',
+                  prompt: '2. They ___ (not arrive) yet.',
+                  expectedAnswer: "haven't arrived",
+                  acceptedAnswers: ["haven't arrived"],
+                  isExample: false,
+                },
+              ],
+            },
+          },
+        ],
+      });
+
+      const slides = validateAndParseSlides(rawSlideWithExample);
+      expect(slides).toHaveLength(1);
+      const slide = slides[0];
+
+      // Invariante 1: Prohibido crear bloque de lectura para una oración modelo
+      expect(slide.referenceContent).toBeNull();
+
+      // Invariante 2: Layout normalizado a single_column
+      expect(slide.layout).toBe('single_column');
+
+      // Invariante 3: El ejemplo se pliega en la instrucción del encabezado
+      expect(slide.interaction?.instruction).toContain('Example: 1. She has already visited London.');
+
+      // Invariante 4: El ítem correspondiente queda identificado como ejemplo
+      if (slide.interaction?.type === 'input_fields') {
+        expect(slide.interaction.listItems?.[0].isExample).toBe(true);
+      }
+    });
+
+    it('normaliza a single_column cualquier ejercicio autosuficiente emitido por error como split_50_50 sin texto de consulta', () => {
+      const rawSelfSufficientSlide = JSON.stringify({
+        slides: [
+          {
+            id: 'slide-self-suff',
+            title: 'Grammar Quiz',
+            subtitle: 'Choose the correct option',
+            layout: 'split_50_50',
+            referenceContent: null,
+            interaction: {
+              id: 'int-quiz-1',
+              type: 'selection',
+              instruction: 'Choose the correct option:',
+              options: [
+                { id: 'opt-1', text: 'I am a teacher.', isCorrect: true },
+                { id: 'opt-2', text: 'I is a teacher.', isCorrect: false },
+              ],
+            },
+          },
+        ],
+      });
+
+      const slides = validateAndParseSlides(rawSelfSufficientSlide);
+      expect(slides).toHaveLength(1);
+      const slide = slides[0];
+
+      expect(slide.referenceContent).toBeNull();
+      // Sin material de lectura externo, el layout ontológico DEBE ser single_column
+      expect(slide.layout).toBe('single_column');
+    });
+
+    it('preserva split_50_50 cuando existe un texto continuo de consulta autónomo (artículo, diálogo o audioscript)', () => {
+      const rawAutonomousReadingSlide = JSON.stringify({
+        slides: [
+          {
+            id: 'slide-reading-article',
+            title: 'The Great Exploration',
+            subtitle: 'Read the article and answer the questions.',
+            layout: 'split_50_50',
+            referenceContent: {
+              id: 'ref-article-1',
+              type: 'text',
+              category: 'reading',
+              title: 'The Great Exploration',
+              content: 'In 1911, two teams raced to reach the South Pole for the very first time.\n\nRoald Amundsen led the Norwegian expedition, reaching the pole in December.',
+            },
+            interaction: {
+              id: 'int-reading-questions',
+              type: 'selection',
+              instruction: 'Who reached the South Pole first?',
+              options: [
+                { id: 'opt-1', text: 'Roald Amundsen', isCorrect: true },
+                { id: 'opt-2', text: 'Robert Scott', isCorrect: false },
+              ],
+            },
+          },
+        ],
+      });
+
+      const slides = validateAndParseSlides(rawAutonomousReadingSlide);
+      expect(slides).toHaveLength(1);
+      const slide = slides[0];
+
+      // Invariante: split_50_50 se mantiene porque existe un artículo autónomo y preguntas interactivas
+      expect(slide.referenceContent).not.toBeNull();
+      expect(slide.referenceContent?.type).toBe('text');
+      expect(slide.layout).toBe('split_50_50');
+    });
+
+    it('normaliza a single_column una diapositiva puramente de lectura o teoría sin elementos interactivos', () => {
+      const rawPassiveSlide = JSON.stringify({
+        slides: [
+          {
+            id: 'slide-passive-rules',
+            title: 'Grammar Note: Conditionals',
+            layout: 'split_50_50',
+            referenceContent: {
+              id: 'ref-passive-cond',
+              type: 'text',
+              category: 'grammar_note',
+              title: 'Zero Conditional Structure',
+              content: 'If + present simple, present simple. Used for universal scientific facts and general truths.',
+            },
+            interaction: null,
+          },
+        ],
+      });
+
+      const slides = validateAndParseSlides(rawPassiveSlide);
+      expect(slides).toHaveLength(1);
+      const slide = slides[0];
+
+      expect(slide.referenceContent).not.toBeNull();
+      expect(slide.interaction).toBeNull();
+      // Sin panel interactivo, la diapositiva no se divide en dos columnas; es de una sola columna
+      expect(slide.layout).toBe('single_column');
+    });
+  });
+
 });
+
 
 
 

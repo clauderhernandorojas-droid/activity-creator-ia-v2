@@ -1016,6 +1016,115 @@ export function normalizeNonInteractiveInstruction(instruction?: string): string
 }
 
 /**
+ * Detects whether reference content is solely spurious metadata
+ * (an exercise instruction, task directive, or single model/example sentence)
+ * rather than an autonomous continuous reading or consultation text.
+ */
+export function isSpuriousReferenceMetadata(
+  ref: any,
+  interaction?: any,
+  subtitle?: string,
+  title?: string
+): boolean {
+  if (!ref) return false;
+  if (ref.type !== 'text') return false;
+
+  const content = (ref.body || ref.content || '').trim();
+  if (!content) return true;
+
+  // 1. Explicit instructions category or metadata title
+  if (ref.category === 'instructions') {
+    return true;
+  }
+  if (ref.title && /^(?:examples?|models?|instructions?|directions?|consigna)\b/i.test(ref.title.trim())) {
+    return true;
+  }
+
+  // 2. Identity or duplication with activity instructions, subtitle, or title
+  const normalizeForComparison = (s: string) =>
+    s.toLowerCase().replace(/[.,;:!?]/g, '').replace(/\s+/g, ' ').trim();
+
+  const normContent = normalizeForComparison(content);
+  const normSub = subtitle ? normalizeForComparison(subtitle) : '';
+  const normInst = interaction?.instruction ? normalizeForComparison(interaction.instruction) : '';
+  const normTitle = title ? normalizeForComparison(title) : '';
+
+  if (normSub && (normContent === normSub || normSub.includes(normContent))) {
+    return true;
+  }
+  if (normInst && (normContent === normInst || normInst.includes(normContent))) {
+    return true;
+  }
+  if (normTitle && normContent === normTitle) {
+    return true;
+  }
+
+  // 3. Solved demonstration or model sentence ("Example", "Model", "e.g.", "for example")
+  if (/^(?:examples?|models?|samples?|demos?|e\.g\.|for example)\b[:\s]/i.test(content)) {
+    const lines = content.split(/\n+/).map((l: string) => l.trim()).filter(Boolean);
+    const isMultiSpeakerDialogue = lines.length >= 3 && lines.every((l: string) => /^[A-Z][a-z]*\s*:\s*/.test(l));
+    if (!isMultiSpeakerDialogue && (lines.length <= 3 || !content.includes('\n\n'))) {
+      return true;
+    }
+  }
+
+  // 4. Pure imperative exercise directions / consignas (e.g. "Complete the sentences...", "Choose the correct option...")
+  const isDirectiveHeader = /^(?:instructions?|directions?|consigna|task)\b[:\s]/i.test(content);
+  const startsWithImperativeVerb = /^(?:complete|fill in|choose|circle|select|underline|match|tick|write|read and complete|look and write|put the words|rewrite|listen and check|ask and answer|answer the questions|cross out)\b/i.test(content);
+  if (isDirectiveHeader || startsWithImperativeVerb) {
+    const lines = content.split(/\n+/).map((l: string) => l.trim()).filter(Boolean);
+    if (lines.length <= 3 && !content.includes('\n\n')) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Folds spurious metadata (instruction or solved example) into activity headers/items.
+ */
+export function foldSpuriousMetadata(text: string, slide: any): void {
+  if (!text) return;
+  const trimmed = text.trim();
+  if (!trimmed) return;
+
+  const isExample = /^(?:examples?|models?|samples?|demos?|e\.g\.|for example)\b[:\s]/i.test(trimmed);
+
+  if (slide.interaction) {
+    const currentInst = slide.interaction.instruction ? slide.interaction.instruction.trim() : '';
+    const isGenericInst = !currentInst || ['activity', 'practice', 'exercise', 'task'].includes(currentInst.toLowerCase());
+
+    if (isGenericInst) {
+      slide.interaction.instruction = trimmed;
+    } else if (isExample) {
+      if (!currentInst.toLowerCase().includes(trimmed.toLowerCase())) {
+        slide.interaction.instruction = `${currentInst}\n${trimmed}`.trim();
+      }
+    } else {
+      if (!currentInst.toLowerCase().includes(trimmed.toLowerCase())) {
+        slide.interaction.instruction = trimmed;
+      }
+    }
+
+    if (isExample && Array.isArray(slide.interaction.listItems) && slide.interaction.listItems.length > 0) {
+      const firstItem = slide.interaction.listItems[0];
+      const cleanEx = trimmed.replace(/^(?:examples?|models?|samples?|demos?|e\.g\.|for example)\b[:\s]*/i, '').trim().toLowerCase();
+      if (firstItem && !firstItem.isExample) {
+        const promptLower = (firstItem.prompt || '').toLowerCase();
+        if (cleanEx && (promptLower.includes(cleanEx) || cleanEx.includes(promptLower))) {
+          firstItem.isExample = true;
+        }
+      }
+    }
+  }
+
+  if (!slide.subtitle && !isExample) {
+    slide.subtitle = trimmed;
+  }
+}
+
+/**
  * Validates raw model output strictly against canonical SlideSchema.
  * Throws explicit SchemaValidationError if validation fails.
  */
@@ -1247,6 +1356,16 @@ export function validateAndParseSlides(rawJsonText: string): Slide[] {
             rawSlide.interaction.layoutMode = 'list';
           }
         }
+
+        if (Array.isArray(rawSlide.interaction.listItems)) {
+          for (const item of rawSlide.interaction.listItems) {
+            if (item && typeof item === 'object') {
+              if (item.expectedAnswer && (!Array.isArray(item.acceptedAnswers) || item.acceptedAnswers.length === 0)) {
+                item.acceptedAnswers = [item.expectedAnswer];
+              }
+            }
+          }
+        }
       }
 
       // En ejercicios de tipo tabla/cuadrícula interactiva:
@@ -1398,27 +1517,46 @@ export function validateAndParseSlides(rawJsonText: string): Slide[] {
       rawSlide.interaction = null;
     }
 
+    // Detección y normalización ontológica de metadatos espurios en referenceContent:
+    // Las oraciones modelo ("Example"), instrucciones y demostraciones pedagógicas resueltas
+    // son metadatos de la actividad: DEBEN residir dentro del encabezado ('instruction' o el primer ítem con isExample),
+    // NUNCA separarse como si fueran un bloque de lectura independiente ('referenceContent').
+    if (rawSlide.referenceContent && isSpuriousReferenceMetadata(rawSlide.referenceContent, rawSlide.interaction, rawSlide.subtitle, rawSlide.title)) {
+      const spuriousText = (rawSlide.referenceContent.body || rawSlide.referenceContent.content || '').trim();
+      foldSpuriousMetadata(spuriousText, rawSlide);
+      rawSlide.referenceContent = null;
+      if (rawSlide.contextBody && (rawSlide.contextBody === spuriousText || spuriousText.includes(rawSlide.contextBody))) {
+        rawSlide.contextBody = undefined;
+      }
+    }
+
     if (!rawSlide.interaction && rawSlide.subtitle) {
       rawSlide.subtitle = normalizeNonInteractiveInstruction(rawSlide.subtitle);
     }
 
     if (!rawSlide.referenceContent && rawSlide.contextBody && rawSlide.interaction) {
-      rawSlide.referenceContent = {
-        id: `ref-ctx-${Date.now()}-${idx}`,
-        type: 'text',
-        category: 'grammar_note',
-        title: rawSlide.title || 'Reference Note',
-        content: rawSlide.contextBody,
-        body: rawSlide.contextBody,
-      };
-      rawSlide.layout = 'split_50_50';
-    } else if (!rawSlide.referenceContent) {
-      rawSlide.layout = 'single_column';
-    } else if (!rawSlide.interaction) {
-      rawSlide.layout = 'single_column';
-    } else if (!rawSlide.layout) {
-      rawSlide.layout = 'split_50_50';
+      if (isSpuriousReferenceMetadata({ type: 'text', content: rawSlide.contextBody }, rawSlide.interaction, rawSlide.subtitle, rawSlide.title)) {
+        foldSpuriousMetadata(rawSlide.contextBody, rawSlide);
+        rawSlide.contextBody = undefined;
+      } else {
+        rawSlide.referenceContent = {
+          id: `ref-ctx-${Date.now()}-${idx}`,
+          type: 'text',
+          category: 'grammar_note',
+          title: rawSlide.title || 'Reference Note',
+          content: rawSlide.contextBody,
+          body: rawSlide.contextBody,
+        };
+      }
     }
+
+    // Principio ontológico de selección de Layout:
+    // - 'split_50_50': Se utiliza ÚNICAMENTE cuando existe un texto continuo de consulta autónomo
+    //   (un artículo, un audioscript, un diálogo completo, o tabla de consulta) que el estudiante
+    //   necesita leer a la izquierda mientras interactúa a la derecha.
+    // - 'single_column': Es el layout por defecto para cualquier ejercicio de oraciones, listas o
+    //   reactivos donde el contenido sea autosuficiente, o cuando no hay interacción activa.
+    rawSlide.layout = (rawSlide.referenceContent && rawSlide.interaction) ? 'split_50_50' : 'single_column';
 
     // Principio Universal de Densidad Máxima por Diapositiva (Slide Ergonomics & Cognitive Load):
     // Cuando una actividad interactiva se basa en un texto o diálogo de referencia (layout split_50_50):
@@ -1618,11 +1756,17 @@ MULTI-SLIDE SEGMENTATION & CROSS-REFERENCING DIRECTIVES:
      * PROHIBICIÓN DE BATERÍAS MASIVAS: Queda estrictamente prohibido generar baterías masivas de reactivos que desborden visualmente la diapositiva o saturen el layout interactivo en dos columnas densas. Priorizar la síntesis pedagógica sobre la exhaustividad mecánica.
 
 CANONICAL ARCHETYPES:
-1. "referenceContent" (Passive consultation material):
-   - Set to null if the clipping does not contain an independent printed reading passage, dialogue, or grammar chart.
+1. "referenceContent" (Passive consultation material) & ONTOLOGICAL LAYOUT SELECTION:
+   - PRINCIPIO ONTOLÓGICO DE SELECCIÓN DE LAYOUT:
+     * 'split_50_50': Se utiliza ÚNICAMENTE cuando existe un texto continuo de consulta autónomo (un artículo, un audioscript, un diálogo completo, o una tabla de consulta) que el estudiante necesita leer a la izquierda mientras interactúa a la derecha.
+     * 'single_column': Es el layout por defecto para cualquier ejercicio de oraciones, listas o reactivos donde el contenido sea autosuficiente, así como para diapositivas puramente expositivas/teóricas sin elementos interactivos.
+   - MODELADO DE EJEMPLOS E INSTRUCCIONES (METADATOS vs CONTENIDO AUTÓNOMO):
+     * Las oraciones modelo ("Example"), las instrucciones y las demostraciones pedagógicas resueltas son metadatos de la actividad: DEBEN residir dentro del encabezado ('instruction', 'subtitle' o dentro del primer ítem con su campo de ejemplo resuelto isExample: true), NUNCA separarse como si fueran un bloque de lectura independiente ('referenceContent').
+     * Queda estrictamente prohibido generar un bloque 'referenceContent' para alojar únicamente una consigna o un ejemplo de una oración. En tales casos, 'referenceContent' DEBE ser estrictamente null y el layout 'single_column'.
    - CUÁNDO NO GENERAR 'referenceContent' (EJERCICIOS AUTOSUFICIENTES):
      * Celdas de ejemplo dentro de tablas o diagramas: Si una tabla, cuadro o lista contiene ejemplos ya resueltos (e.g. en cursiva, azul o como fila modelo), esos valores pertenecen exclusivamente a la estructura interna del ejercicio (como celdas fijas no editables con isInput: false o isExample: true). NUNCA deben extraerse ni aislarse como 'referenceContent'.
      * En ejercicios de tipo tabla/cuadrícula donde todo el contenido está dentro de la misma tabla, el diseño de la diapositiva debe ser de una sola columna ('single_column') sin panel de lectura lateral ('referenceContent: null').
+     * Ejercicios de oraciones aisladas, preguntas directas o listas de reactivos donde cada reactivo contiene toda la información necesaria: 'referenceContent' DEBE ser estrictamente null y layout 'single_column'.
    - ZERO TABLE DUPLICATION: If the activity is purely an interactive table (interaction.layoutMode: "table"), DO NOT duplicate the table inside referenceContent. In purely interactive table activities, referenceContent MUST be strictly null and layout MUST be "single_column".
    - CONTINUOUS READING TEXTS vs COLUMNS:
      * Use type: "text" for all reading articles, narrative stories, dialogues, or continuous texts divided into paragraphs. Use standard double line breaks (\n\n) between paragraphs. NEVER fragment a continuous reading text into independent vertical columns (even if formatted in newspaper columns on the original page!).
