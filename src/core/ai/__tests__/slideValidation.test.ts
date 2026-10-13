@@ -9,6 +9,7 @@ import {
   cleanSelectionPrompt,
   buildExtractionPrompt,
   detectCrossActivityReference,
+  formatPreviousSlideContext,
 } from '../digitizeBook';
 
 describe('slideValidation - Direct Schema & Architectural Invariant Tests', () => {
@@ -2357,15 +2358,16 @@ describe('slideValidation - Direct Schema & Architectural Invariant Tests', () =
 
       const promptWithContext = buildExtractionPrompt(1, undefined, samplePrevSlide as any);
 
-      // Invariante: La delimitación formal requerida se inyecta íntegra
-      expect(promptWithContext).toContain('PREVIOUS_SLIDE_CONTEXT: Contenido y reactivos de la diapositiva inmediatamente anterior para resolver referencias cruzadas legítimas.');
+      // Invariante: La delimitación formal requerida se inyecta íntegra con declaración de banco pasivo
+      expect(promptWithContext).toContain('PREVIOUS_SLIDE_CONTEXT: Contenido y material léxico pasivo de la diapositiva inmediatamente anterior');
+      expect(promptWithContext).toContain('[BANCO LÉXICO DE SOLO LECTURA (READ-ONLY)');
       expect(promptWithContext).toContain('Vocabulary: Morning Activities');
       expect(promptWithContext).toContain('get up early');
       expect(promptWithContext).toContain('have a coffee');
 
       // Invariante: Sin contexto previo, la sección delimitada no se inyecta
       const promptWithoutContext = buildExtractionPrompt(1, undefined, null);
-      expect(promptWithoutContext).not.toContain('PREVIOUS_SLIDE_CONTEXT: Contenido y reactivos');
+      expect(promptWithoutContext).not.toContain('PREVIOUS_SLIDE_CONTEXT:');
     });
 
     it('detectCrossActivityReference detecta patrones de referencia legítimos a ejercicios previos', () => {
@@ -2770,6 +2772,214 @@ describe('slideValidation - Direct Schema & Architectural Invariant Tests', () =
         expect(slide.referenceContent.cues).toContain('works in a hospital');
       }
       expect(slide.metadata?.diagnostics?.resolvedFromPreviousContext).toBe(true);
+    });
+  });
+
+  // =========================================================================
+  // CASO U: Saneamiento Arquitectónico de Contexto Pasivo y Desacoplamiento Oral
+  // =========================================================================
+  describe('Caso U: Contexto Léxico Pasivo (Read-Only) y Desacoplamiento de Dinámicas Orales', () => {
+    it('a) formatPreviousSlideContext emite exclusivamente léxico/referencia y no serializa estructuras interactivas técnicas', () => {
+      const mockInteractiveSlide: Slide = {
+        id: 'slide-prev-interactive',
+        title: '2a Vocabulary: Daily Routines',
+        subtitle: 'Listen and check',
+        layout: 'single_column',
+        contextBody: 'Read the vocabulary and listen carefully.',
+        interaction: {
+          id: 'int-2a-interactive',
+          type: 'selection',
+          instruction: 'Choose the correct option for each person',
+          mode: 'single_choice',
+          verificationAudioUrl: 'https://example.com/audio-2a.mp3',
+          questions: [
+            {
+              id: 'q-1',
+              prompt: 'Person 1 works outdoors',
+              options: [
+                { id: 'opt-1a', text: 'works outdoors', isCorrect: true },
+                { id: 'opt-1b', text: 'works indoors', isCorrect: false },
+              ],
+            },
+            {
+              id: 'q-2',
+              prompt: 'Person 2 travels a lot',
+              options: [
+                { id: 'opt-2a', text: 'travels a lot', isCorrect: true },
+                { id: 'opt-2b', text: 'stays home', isCorrect: false },
+              ],
+            },
+          ],
+        } as any,
+      };
+
+      const passiveOutput = formatPreviousSlideContext(mockInteractiveSlide);
+
+      // Invariante 1: Debe incluir el título, subtítulo, contextBody y banco léxico
+      expect(passiveOutput).toContain('Title: 2a Vocabulary: Daily Routines');
+      expect(passiveOutput).toContain('Subtitle: Listen and check');
+      expect(passiveOutput).toContain('Context/Body: Read the vocabulary and listen carefully.');
+      expect(passiveOutput).toContain('Vocabulary / Phrases Bank (Read-Only):');
+      expect(passiveOutput).toContain('Person 1 works outdoors');
+      expect(passiveOutput).toContain('Person 2 travels a lot');
+      expect(passiveOutput).toContain('works outdoors');
+      expect(passiveOutput).toContain('travels a lot');
+
+      // Invariante 2: NO debe emitir propiedades interactivas técnicas ni audios
+      expect(passiveOutput).not.toContain('interaction.type');
+      expect(passiveOutput).not.toContain('Interaction Type:');
+      expect(passiveOutput).not.toContain('verificationAudioUrl');
+      expect(passiveOutput).not.toContain('audio-2a.mp3');
+      expect(passiveOutput).not.toContain('"mode": "single_choice"');
+      expect(passiveOutput).not.toContain('Questions:');
+      expect(passiveOutput).not.toContain('Options:');
+      expect(passiveOutput).not.toContain('isCorrect');
+    });
+
+    it('b) Una diapositiva comunicativa no clona reactivos interactivos de previousSlideContext aunque el LLM devuelva selection', () => {
+      const mockSlide2a: Slide = {
+        id: 'slide-2a',
+        title: '2a Vocabulary',
+        subtitle: 'Listen to four people talking about their jobs',
+        layout: 'single_column',
+        interaction: {
+          id: 'int-2a',
+          type: 'selection',
+          instruction: 'Listen to four people talking about their jobs. Choose the correct job for each speaker.',
+          verificationAudioUrl: 'https://example.com/audio-unit2.mp3',
+          mode: 'single_choice',
+          questions: [
+            {
+              id: 'q1',
+              prompt: 'Speaker 1',
+              options: [
+                { id: 'opt-1', text: 'works in an office', isCorrect: true },
+                { id: 'opt-2', text: 'works from home', isCorrect: false },
+              ],
+            },
+            {
+              id: 'q2',
+              prompt: 'Speaker 2',
+              options: [
+                { id: 'opt-3', text: 'travels for work', isCorrect: true },
+                { id: 'opt-4', text: 'works in a shop', isCorrect: false },
+              ],
+            },
+          ],
+        } as any,
+      };
+
+      // Simulación del error de Gemini: devuelve ejercicio 2b ("Work in pairs") pero
+      // clonando la interacción tipo selection, las preguntas de 2a, el audio y concatenando instrucciones
+      const rawClonedSelectionJson = JSON.stringify({
+        slides: [
+          {
+            id: 'slide-2b',
+            title: '2b Speaking',
+            subtitle: 'Work in pairs',
+            layout: 'split_50_50', // Erróneamente emitido como split
+            interaction: {
+              id: 'int-cloned',
+              type: 'selection', // Erróneamente clonado de 2a
+              instruction: 'b Work in pairs. Use the phrases in 2a to talk about people you know. a Listen to four people talking about their jobs.', // Concatenado indebido
+              prompt: 'Do you know anyone who works in an office? What do they do?',
+              verificationAudioUrl: 'https://example.com/audio-unit2.mp3', // Audio clonado
+              mode: 'single_choice',
+              questions: [
+                {
+                  id: 'q1',
+                  prompt: 'Speaker 1',
+                  options: [
+                    { id: 'opt-1', text: 'works in an office', isCorrect: true },
+                    { id: 'opt-2', text: 'works from home', isCorrect: false },
+                  ],
+                },
+              ],
+            },
+          },
+        ],
+      });
+
+      const slides = validateAndParseSlides(rawClonedSelectionJson, mockSlide2a);
+      expect(slides).toHaveLength(1);
+      const slide = slides[0];
+
+      // Invariante 1: La interacción clonada queda completamente neutralizada (interaction = null)
+      expect(slide.interaction).toBeNull();
+
+      // Invariante 2: No es evaluable (isGraded = false)
+      expect(slide.isGraded).toBe(false);
+
+      // Invariante 3: Layout forzado a single_column
+      expect(slide.layout).toBe('single_column');
+
+      // Invariante 4: El audio clonado de 2a NO se conserva en la diapositiva oral
+      expect((slide as any).verificationAudioUrl).toBeUndefined();
+      expect((slide.referenceContent as any)?.audioUrl).toBeUndefined();
+
+      // Invariante 5: Consigna previa concatenada queda purgada
+      expect(slide.referenceContent?.type).toBe('text');
+      if (slide.referenceContent?.type === 'text') {
+        expect(slide.referenceContent.category).toBe('dialogue');
+        expect(slide.referenceContent.instruction).toContain('Work in pairs. Use the phrases in 2a to talk about people you know.');
+        expect(slide.referenceContent.instruction).not.toContain('Listen to four people talking about their jobs');
+
+        // Invariante 6: Model extraído verbatim y cues resueltos desde el banco léxico de 2a
+        expect(slide.referenceContent.model).toBe('Do you know anyone who works in an office? What do they do?');
+        expect(slide.referenceContent.cues).toBeDefined();
+        expect(slide.referenceContent.cues).toContain('works in an office');
+        expect(slide.referenceContent.cues).toContain('travels for work');
+      }
+    });
+
+    it('c) model y cues se estructuran limpiamente con interaction nula en consignas puramente orales sin reactivos', () => {
+      const mockSlide2a: Slide = {
+        id: 'slide-2a-vocab',
+        title: 'Vocabulary: Collocations',
+        layout: 'single_column',
+        interaction: {
+          id: 'int-vocab-bank',
+          type: 'input_fields',
+          instruction: 'Complete the collocations',
+          layoutMode: 'list',
+          wordBank: ['take photos', 'make dinner', 'have a shower', 'spend time'],
+          listItems: [],
+        } as any,
+      };
+
+      const rawOralJson = JSON.stringify({
+        slides: [
+          {
+            id: 'slide-speaking-clean',
+            title: 'Speaking',
+            subtitle: 'Discuss with a partner',
+            layout: 'single_column',
+            interaction: {
+              id: 'int-orphan-oral',
+              type: 'writing',
+              instruction: 'In pairs, ask and answer questions using the collocations in 2a.',
+              prompt: '"How often do you take photos?" "I take photos every weekend."',
+              isGraded: false,
+            },
+          },
+        ],
+      });
+
+      const slides = validateAndParseSlides(rawOralJson, mockSlide2a);
+      expect(slides).toHaveLength(1);
+      const slide = slides[0];
+
+      expect(slide.interaction).toBeNull();
+      expect(slide.isGraded).toBe(false);
+      expect(slide.layout).toBe('single_column');
+      expect(slide.referenceContent?.type).toBe('text');
+      if (slide.referenceContent?.type === 'text') {
+        expect(slide.referenceContent.instruction).toBe('In pairs, ask and answer questions using the collocations in 2a.');
+        expect(slide.referenceContent.model).toBe('"How often do you take photos?" "I take photos every weekend."');
+        expect(slide.referenceContent.cues).toEqual(
+          expect.arrayContaining(['take photos', 'make dinner', 'have a shower', 'spend time'])
+        );
+      }
     });
   });
 });

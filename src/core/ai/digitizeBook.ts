@@ -1288,8 +1288,8 @@ export function formatPreviousSlideContext(slide: Slide): string {
   if (slide.referenceContent) {
     const rc = slide.referenceContent as any;
     if (rc.title) parts.push(`Reference Title: ${rc.title}`);
-    if (rc.content) parts.push(`Reference Content:\n${rc.content}`);
-    if (rc.body && rc.body !== rc.content) parts.push(`Reference Body:\n${rc.body}`);
+    if (rc.content && rc.content !== slide.contextBody) parts.push(`Reference Content:\n${rc.content}`);
+    if (rc.body && rc.body !== rc.content && rc.body !== slide.contextBody) parts.push(`Reference Body:\n${rc.body}`);
     if (rc.columns) {
       parts.push(`Reference Columns:\n${JSON.stringify(rc.columns)}`);
     }
@@ -1299,35 +1299,13 @@ export function formatPreviousSlideContext(slide: Slide): string {
     }
   }
 
-  if (slide.interaction) {
-    const it = slide.interaction as any;
-    parts.push(`Interaction Type: ${it.type}`);
-    if (it.instruction) parts.push(`Instruction: ${it.instruction}`);
-    if (it.wordBank && it.wordBank.length > 0) parts.push(`Word Bank: ${it.wordBank.join(', ')}`);
-    if (it.listItems && it.listItems.length > 0) {
-      parts.push(`Items:\n${it.listItems.map((item: any, i: number) => `${i + 1}. ${item.prompt} -> Expected: ${item.expectedAnswer}`).join('\n')}`);
-    }
-    if (it.questions && it.questions.length > 0) {
-      parts.push(`Questions:\n${it.questions.map((q: any, i: number) => {
-        const opts = (q.options || []).map((o: any) => `${o.text}${o.isCorrect ? ' (CORRECT)' : ''}`).join(' / ');
-        return `${i + 1}. ${q.prompt || q.question} [Options: ${opts}]`;
-      }).join('\n')}`);
-    }
-    if (it.options && it.options.length > 0) {
-      parts.push(`Options:\n${it.options.map((o: any) => `${o.text}${o.isCorrect ? ' (CORRECT)' : ''}`).join(', ')}`);
-    }
-    if (it.tokens && it.tokens.length > 0) {
-      parts.push(`Tokens:\n${it.tokens.map((t: any) => `${t.text} (${t.category})`).join(', ')}`);
-    }
-    if (it.sourceItems && it.sourceItems.length > 0) {
-      parts.push(`Source Items:\n${it.sourceItems.map((s: any) => `${s.text} -> ${s.bucketId}`).join(', ')}`);
-    }
-    if (it.targetSlots && it.targetSlots.length > 0) {
-      parts.push(`Target Slots:\n${it.targetSlots.map((ts: any) => ts.label).join(', ')}`);
-    }
-    if (it.buckets && it.buckets.length > 0) {
-      parts.push(`Buckets: ${it.buckets.map((b: any) => b.name).join(', ')}`);
-    }
+  // Material textual y léxico disponible para consulta pasiva (Read-Only)
+  // NUNCA serializar estructuras interactivas técnicas (interaction.type, questions, options, verificationAudioUrl)
+  const extracted = extractItemsFromSlideContext(slide);
+  if (extracted.phrases.length > 0) {
+    parts.push(`Vocabulary / Phrases Bank (Read-Only):\n${extracted.phrases.map((p) => `- ${p}`).join('\n')}`);
+  } else if (extracted.words.length > 0) {
+    parts.push(`Word Bank (Read-Only):\n${extracted.words.map((w) => `- ${w}`).join('\n')}`);
   }
 
   return parts.join('\n');
@@ -1547,52 +1525,128 @@ export function validateAndParseSlides(
         rawSlide.interaction.id = `int-${Date.now()}-${idx}`;
       }
 
-      // A. Prohibición Ontológica: Tareas orales / speaking en parejas degradadas forzadamente a writing
-      if (rawSlide.interaction.type === 'writing') {
-        const writing = rawSlide.interaction as any;
-        const combinedText = `${rawSlide.title || ''} ${rawSlide.subtitle || ''} ${writing.instruction || ''} ${writing.prompt || ''} ${(writing.guidelines || []).join(' ')}`.toLowerCase();
+    const effectiveContext = (idx > 0 && validatedSlides[idx - 1]) ? validatedSlides[idx - 1] : (previousSlideContext || null);
 
-        const isOralDirective = /\b(?:work\s+in\s+pairs|in\s+pairs|speaking|ask\s+(?:your\s+partner|each\s+other|questions|about)|discuss\s+with|talk\s+to\s+your\s+partner|take\s+turns\s+to\s+ask|pair\s*work|role\s*play|conversation\s+practice|interview\s+your\s+partner|tell\s+your\s+partner)\b/i.test(combinedText);
-        const isExplicitComposition = /\b(?:write\s+an?\s+(?:essay|composition|paragraph|article|email|letter|review|story|report)|write\s+\d+\s*(?:words?|sentences?)|redacta\s+un?\s+(?:ensayo|párrafo|correo|informe))\b/i.test(combinedText);
+    // A. Prohibición Ontológica: Tareas orales / speaking en parejas (Desacoplada de 'writing')
+    const slideTextToScan = `${rawSlide.title || ''} ${rawSlide.subtitle || ''} ${(rawSlide.interaction as any)?.instruction || ''} ${(rawSlide.interaction as any)?.prompt || ''} ${(rawSlide.referenceContent as any)?.content || ''} ${(rawSlide.referenceContent as any)?.instruction || ''}`.toLowerCase();
 
-        if (isOralDirective && !isExplicitComposition) {
-          rawSlide.interaction = null;
-          rawSlide.isGraded = false;
-          rawSlide.layout = 'single_column';
+    const isOralDirective = /\b(?:work\s+in\s+pairs|in\s+pairs|speaking(?:\s+practice)?|ask\s+(?:your\s+partner|each\s+other|questions|about)|discuss\s+with|talk\s+to\s+your\s+partner|take\s+turns\s+to\s+ask|pair\s*work|role\s*play|conversation\s+practice|interview\s+your\s+partner|tell\s+your\s+partner)\b/i.test(slideTextToScan);
+    const isExplicitComposition = /\b(?:write\s+an?\s+(?:essay|composition|paragraph|article|email|letter|review|story|report)|write\s+\d+\s*(?:words?|sentences?)|redacta\s+un?\s+(?:ensayo|párrafo|correo|informe))\b/i.test(slideTextToScan);
 
-          const cleanInst = (writing.instruction || rawSlide.subtitle || 'Work in pairs.').trim();
-          const cleanPrompt = (writing.prompt || '').trim();
-          const hasPrompt = cleanPrompt && !cleanInst.includes(cleanPrompt);
+    // Detección de reactivos clonados indebidamente desde previousSlideContext
+    const isClonedFromPrevious = (() => {
+      if (!effectiveContext?.interaction || !rawSlide.interaction) return false;
+      const prevIt = effectiveContext.interaction as any;
+      const currIt = rawSlide.interaction as any;
 
-          // Extraer cues si venían como guidelines discretos en el bloque crudo
-          let initialCues: string[] = [];
-          if (Array.isArray(writing.guidelines) && writing.guidelines.length > 0) {
-            initialCues = writing.guidelines
-              .map((g: any) => typeof g === 'string' ? g.trim() : '')
-              .filter((g: string) => g.length > 0 && !isSyntheticPedagogicalText(g) && !/^(?:use\s+phrases|ask\s+follow|take\s+turns|work\s+in)/i.test(g));
-          }
-
-          const cardContent = hasPrompt
-            ? `${cleanInst}\n\n${cleanPrompt}`
-            : cleanInst;
-
-          rawSlide.referenceContent = {
-            id: `ref-speaking-${Date.now()}-${idx}`,
-            type: 'text',
-            category: 'dialogue',
-            title: rawSlide.title || 'Speaking / Pairwork',
-            instruction: cleanInst,
-            model: hasPrompt ? cleanPrompt : undefined,
-            cues: initialCues.length > 0 ? initialCues : undefined,
-            content: cardContent,
-            body: cardContent,
-          };
-
-          if (rawSlide.contextBody) {
-            rawSlide.contextBody = undefined;
-          }
+      if (Array.isArray(currIt.questions) && Array.isArray(prevIt.questions) && prevIt.questions.length > 0) {
+        const prevPrompts = prevIt.questions.map((q: any) => (q.prompt || q.question || '').trim().toLowerCase()).filter(Boolean);
+        const currPrompts = currIt.questions.map((q: any) => (q.prompt || q.question || '').trim().toLowerCase()).filter(Boolean);
+        if (currPrompts.length > 0 && currPrompts.every((p: string) => prevPrompts.includes(p))) {
+          return true;
         }
       }
+      if (Array.isArray(currIt.listItems) && Array.isArray(prevIt.listItems) && prevIt.listItems.length > 0) {
+        const prevPrompts = prevIt.listItems.map((it: any) => (it.prompt || '').trim().toLowerCase()).filter(Boolean);
+        const currPrompts = currIt.listItems.map((it: any) => (it.prompt || '').trim().toLowerCase()).filter(Boolean);
+        if (currPrompts.length > 0 && currPrompts.every((p: string) => prevPrompts.includes(p))) {
+          return true;
+        }
+      }
+      if (currIt.verificationAudioUrl && prevIt.verificationAudioUrl && currIt.verificationAudioUrl === prevIt.verificationAudioUrl) {
+        return true;
+      }
+      return false;
+    })();
+
+    if (isOralDirective && !isExplicitComposition) {
+      const shouldDemoteToOralSlide =
+        !rawSlide.interaction ||
+        rawSlide.interaction.type === 'writing' ||
+        isClonedFromPrevious ||
+        Boolean(rawSlide.interaction.verificationAudioUrl && isClonedFromPrevious);
+
+      if (shouldDemoteToOralSlide) {
+        let cleanInst = ((rawSlide.interaction as any)?.instruction || rawSlide.subtitle || rawSlide.title || 'Work in pairs.').trim();
+
+        // Purgar directivas previas si el LLM concatenó instrucciones o subtítulos del contexto anterior
+        if (effectiveContext) {
+          const prevCandidates: string[] = [];
+          if ((effectiveContext.interaction as any)?.instruction) {
+            prevCandidates.push((effectiveContext.interaction as any).instruction);
+          }
+          if (effectiveContext.subtitle) {
+            prevCandidates.push(effectiveContext.subtitle);
+          }
+          if (effectiveContext.title) {
+            prevCandidates.push(effectiveContext.title);
+          }
+
+          for (const cand of prevCandidates) {
+            const rawSentences = cand.split(/(?<=[.!?])\s+/).map((s) => s.trim()).filter((s) => s.length > 8);
+            for (const s of [cand, ...rawSentences]) {
+              const cleanedS = s.replace(/^[a-z0-9][.)]?\s*/i, '').replace(/[.!?]+$/, '').trim();
+              if (cleanedS.length > 8) {
+                const re = new RegExp(`(?:\\b[a-z0-9][.)]?\\s*)?` + cleanedS.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + `[.!?]?`, 'gi');
+                cleanInst = cleanInst.replace(re, '').trim();
+              }
+            }
+          }
+        }
+        cleanInst = cleanInst.replace(/^[:;.\s-]+/, '').trim();
+        if (!cleanInst) cleanInst = 'Work in pairs.';
+
+        let cleanPrompt = ((rawSlide.interaction as any)?.prompt || '').trim();
+        if (!cleanPrompt) {
+          const qMatch = cleanInst.match(/(?:^|\n|\.\s+)(["'‘“]?(?:Do|Does|Did|Are|Is|What|Where|Who|Why|When|How)\b[^?\n]+?\?["'’”]?)/i);
+          if (qMatch && qMatch[1]) {
+            cleanPrompt = qMatch[1].trim();
+          }
+        }
+
+        let initialCues: string[] = [];
+        if (Array.isArray((rawSlide.interaction as any)?.guidelines) && (rawSlide.interaction as any).guidelines.length > 0) {
+          initialCues = (rawSlide.interaction as any).guidelines
+            .map((g: any) => typeof g === 'string' ? g.trim() : '')
+            .filter((g: string) => g.length > 0 && !isSyntheticPedagogicalText(g) && !/^(?:use\s+phrases|ask\s+follow|take\s+turns|work\s+in)/i.test(g));
+        }
+
+        // Resolver cues desde el contexto pasivo si hay referencia cruzada legítima
+        const crossRef = detectCrossActivityReference(cleanInst) || detectCrossActivityReference(slideTextToScan);
+        if (initialCues.length === 0 && crossRef && effectiveContext) {
+          const extracted = extractItemsFromSlideContext(effectiveContext);
+          const candidatePool = extracted.phrases.length > 0 ? extracted.phrases : extracted.words;
+          if (candidatePool.length > 0) {
+            initialCues = candidatePool.slice(0, 12);
+          }
+        }
+
+        rawSlide.interaction = null;
+        rawSlide.isGraded = false;
+        rawSlide.layout = 'single_column';
+
+        const hasPrompt = cleanPrompt && !cleanInst.includes(cleanPrompt);
+        const cardContent = hasPrompt
+          ? `${cleanInst}\n\n${cleanPrompt}`
+          : cleanInst;
+
+        rawSlide.referenceContent = {
+          id: `ref-speaking-${Date.now()}-${idx}`,
+          type: 'text',
+          category: 'dialogue',
+          title: rawSlide.title || 'Speaking / Pairwork',
+          instruction: cleanInst,
+          model: cleanPrompt || undefined,
+          cues: initialCues.length > 0 ? initialCues : undefined,
+          content: cardContent,
+          body: cardContent,
+        };
+
+        if (rawSlide.contextBody) {
+          rawSlide.contextBody = undefined;
+        }
+      }
+    }
 
       // Regla de Detección Universal: preguntas alternativas/disyuntivas ("... A or B?") clasificadas erróneamente como writing
       if (rawSlide.interaction && rawSlide.interaction.type === 'writing') {
@@ -2389,7 +2443,8 @@ export function buildExtractionPrompt(
 You must analyze the provided ${imageCount} clipping(s) and emit directly a JSON object containing an array of "slides" matching the canonical ELT Slide schema.
 ${previousSlideContext ? `
 ================================================================================
-PREVIOUS_SLIDE_CONTEXT: Contenido y reactivos de la diapositiva inmediatamente anterior para resolver referencias cruzadas legítimas.
+PREVIOUS_SLIDE_CONTEXT: Contenido y material léxico pasivo de la diapositiva inmediatamente anterior para resolver referencias cruzadas legítimas.
+[BANCO LÉXICO DE SOLO LECTURA (READ-ONLY): Este bloque contiene únicamente el texto de referencia y vocabulario previo para resolver referencias cruzadas legítimas (ej. "Use the phrases in 2a"). QUEDA ESTRICTAMENTE PROHIBIDO CLONAR, ARRASTRAR O REEMITIR LA INTERACCIÓN, PREGUNTAS O AUDIOS DE ESTE CONTEXTO EN LA NUEVA DIAPOSITIVA.]
 ${formatPreviousSlideContext(previousSlideContext)}
 ================================================================================
 ` : ''}
@@ -2415,13 +2470,16 @@ MULTI-SLIDE SEGMENTATION & CROSS-REFERENCING DIRECTIVES:
    - When the input image contains TWO OR MORE pedagogically independent and delimited activities (e.g., sequential numbering or labeling such as "1", "2" or "a", "b", or separate exercise headers/instructions):
      * The model MUST emit one distinct element in the "slides" array for EACH identified activity (e.g. [slide-1, slide-2, ...]).
      * It is STRICTLY FORBIDDEN to ignore visible activities or to arbitrarily merge separate, independent exercises into a single slide.
-2. CROSS-REFERENCING RESOLUTION INVARIANT, GROUNDING & PREVIOUS_SLIDE_CONTEXT:
-   - When an activity includes instructions or prompts that explicitly reference another section or exercise (e.g., "in 1", "from the box in 2a", "with the verbs above", "from the dialogue in 2"):
-     * GROUNDING CON 'PREVIOUS_SLIDE_CONTEXT': Si la actividad hace referencia a un ejercicio previo y se proporciona la sección 'PREVIOUS_SLIDE_CONTEXT', el modelo DEBE reutilizar y extraer legítimamente las frases, palabras, ítems o claves de dicho contexto para resolver y configurar la actividad actual.
-     * CAPACIDAD DEDUCTIVA LEGÍTIMA: El modelo debe usar su razonamiento pedagógico para deducir claves de respuesta ('isCorrect', 'expectedAnswer') y configurar la interacción idónea a partir de la evidencia disponible en el recorte y en 'PREVIOUS_SLIDE_CONTEXT'.
-     * PROHIBICIÓN DE SÍNTESIS NO FUNDAMENTADA (ZERO-HALLUCINATION): El modelo tiene estrictamente prohibido inventar bancos de vocabulario, pautas de redacción, palabras o contenidos sustitutos que no existan ni en el recorte actual ni en 'PREVIOUS_SLIDE_CONTEXT'.
-     * OBSERVABILIDAD DE CONTEXTO FALTANTE: Si la consigna del recorte refiere a un ejercicio previo pero 'PREVIOUS_SLIDE_CONTEXT' no fue suministrado (o es nulo) y el material previo no es visible en la captura, el modelo NO debe inventar contenido sustituto; debe emitir los reactivos observables y registrar en metadatos:
-       "metadata": { "diagnostics": { "unresolvedContextReference": true } }
+2. CROSS-REFERENCING RESOLUTION INVARIANT & STRICT ISOLATION OF INTERACTIVE ITEMS:
+   - AISLAMIENTO ESTRICTO DE REACTIVOS (ZERO CROSS-SLIDE CLONING):
+     * Los reactivos interactivos (preguntas, reactivos, selecciones, casillas, y audios de verificación) de CADA diapositiva se originan ÚNICA Y EXCLUSIVAMENTE a partir de los elementos impresos y visibles en el recorte actual.
+     * Queda estrictamente prohibido arrastrar, clonar, fusionar o reemitir preguntas, opciones interactivas, audios ('verificationAudioUrl') o consignas presentes en 'PREVIOUS_SLIDE_CONTEXT'.
+     * 'PREVIOUS_SLIDE_CONTEXT' es un banco léxico pasivo de solo lectura (read-only): sirve ÚNICAMENTE para consultar vocabulario, frases o expresiones solicitadas por la consigna (ejemplo: "Use the phrases in 2a to talk...").
+     * Si el recorte actual corresponde a una dinámica oral/speaking ("Work in pairs", "Speaking"), NO debe crearse ninguna interacción evaluable ni copiarse la interacción de la diapositiva anterior: debe estructurarse con interaction: null, isGraded: false, y layout: 'single_column'.
+   - CAPACIDAD DEDUCTIVA LEGÍTIMA: El modelo debe usar su razonamiento pedagógico para deducir claves de respuesta ('isCorrect', 'expectedAnswer') y configurar la interacción idónea a partir de la evidencia disponible en el recorte y el vocabulario provisto en 'PREVIOUS_SLIDE_CONTEXT'.
+   - PROHIBICIÓN DE SÍNTESIS NO FUNDAMENTADA (ZERO-HALLUCINATION): El modelo tiene estrictamente prohibido inventar bancos de vocabulario o contenidos sustitutos que no existan ni en el recorte actual ni en 'PREVIOUS_SLIDE_CONTEXT'.
+   - OBSERVABILIDAD DE CONTEXTO FALTANTE: Si la consigna del recorte refiere a un ejercicio previo pero 'PREVIOUS_SLIDE_CONTEXT' no fue suministrado (o es nulo) y el material previo no es visible en la captura, el modelo NO debe inventar contenido sustituto; debe emitir los reactivos observables y registrar en metadatos:
+     "metadata": { "diagnostics": { "unresolvedContextReference": true } }
 3. PRINCIPIO UNIVERSAL DE DENSIDAD MÁXIMA Y ERGONOMÍA (SLIDE ERGONOMICS & COGNITIVE LOAD):
    - Al digitalizar cualquier actividad interactiva basada en un texto o diálogo de referencia:
      * INTEGRIDAD DEL CONTENIDO DE SOPORTE: El texto de lectura o soporte DEBE mantenerse íntegro en el contenedor de referencia ('contextBody' / 'referenceContent'). Queda estrictamente prohibido recortar, resumir o mutilar el material de lectura de apoyo.
