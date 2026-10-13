@@ -715,7 +715,7 @@ describe('slideValidation - Direct Schema & Architectural Invariant Tests', () =
   });
 
   describe('Caso J: Tolerancia y Normalización de referenceContent (Audio Track / Listening / Delimitadores)', () => {
-    it('debe normalizar pista de escucha R1.8 con mediaType: listening y sin url sin fallar la validación', () => {
+    it('debe mapear pista de audio a verificationAudioUrl sin activar split_50_50 cuando hay un ejercicio interactivo', () => {
       const rawAudioSlideJson = JSON.stringify({
         slides: [
           {
@@ -745,25 +745,53 @@ describe('slideValidation - Direct Schema & Architectural Invariant Tests', () =
       expect(slides).toHaveLength(1);
 
       const slide = slides[0];
-      expect(slide.referenceContent).not.toBeNull();
-      expect(slide.referenceContent?.type).toBe('media');
-
-      if (slide.referenceContent?.type === 'media') {
-        // Invariante 1: mediaType normalizado estrictamente a 'audio'
-        expect(slide.referenceContent.mediaType).toBe('audio');
-        // Invariante 2: url completada con placeholder canónico al no haber URL remota
-        expect(slide.referenceContent.url).toBe('placeholder:audio-track');
-        expect(slide.referenceContent.title).toBe('Audio Track R1.8');
-      }
+      // Invariante 1: No debe registrarse como referenceContent
+      expect(slide.referenceContent).toBeNull();
+      // Invariante 2: No debe activar split_50_50
+      expect(slide.layout).toBe('single_column');
+      // Invariante 3: Mapeo unívoco a los metadatos de la interacción
+      expect(slide.interaction?.verificationAudioUrl).toBeDefined();
+      expect(slide.interaction?.audioLabel).toBe('R1.8');
     });
 
-    it('acepta url vacía en media sin provocar rechazo de la diapositiva', () => {
+    it('preserva referenceContent media y layout single_column ante escucha autónoma sin ejercicio', () => {
+      const rawListeningAutonomousJson = JSON.stringify({
+        slides: [
+          {
+            id: 'slide-audio-autonomous',
+            title: 'Listening Passage: Track R1.8',
+            layout: 'split_50_50',
+            referenceContent: {
+              id: 'ref-audio-auto',
+              type: 'media',
+              mediaType: 'listening',
+              title: 'Audio Track R1.8'
+            },
+            interaction: null
+          }
+        ]
+      });
+
+      const slides = validateAndParseSlides(rawListeningAutonomousJson);
+      expect(slides).toHaveLength(1);
+
+      const slide = slides[0];
+      expect(slide.referenceContent).not.toBeNull();
+      expect(slide.referenceContent?.type).toBe('media');
+      if (slide.referenceContent?.type === 'media') {
+        expect(slide.referenceContent.mediaType).toBe('audio');
+        expect(slide.referenceContent.url).toBe('placeholder:audio-track');
+      }
+      expect(slide.layout).toBe('single_column');
+    });
+
+    it('acepta url vacía en media sin provocar rechazo de la diapositiva en escucha autónoma', () => {
       const rawSlideWithEmptyUrl = JSON.stringify({
         slides: [
           {
             id: 'slide-audio-empty-url',
             title: 'Listening Task',
-            layout: 'split_50_50',
+            layout: 'single_column',
             referenceContent: {
               id: 'ref-audio-empty',
               type: 'media',
@@ -771,12 +799,7 @@ describe('slideValidation - Direct Schema & Architectural Invariant Tests', () =
               url: '',
               title: 'Track 3'
             },
-            interaction: {
-              id: 'int-2',
-              type: 'selection',
-              instruction: 'Listen and choose',
-              options: [{ id: 'o1', text: 'Option A', isCorrect: true }]
-            }
+            interaction: null
           }
         ]
       });
@@ -784,6 +807,7 @@ describe('slideValidation - Direct Schema & Architectural Invariant Tests', () =
       const slides = validateAndParseSlides(rawSlideWithEmptyUrl);
       expect(slides).toHaveLength(1);
       expect(slides[0].referenceContent?.type).toBe('media');
+      expect(slides[0].layout).toBe('single_column');
     });
 
     it('remueve limpiamente referenceContent inválido o vacío en lugar de rechazar la diapositiva', () => {
@@ -791,7 +815,7 @@ describe('slideValidation - Direct Schema & Architectural Invariant Tests', () =
         slides: [
           {
             id: 'slide-garbage-ref',
-            title: 'Speaking Activity',
+            title: 'Writing Task',
             referenceContent: {
               type: 'unsupported_junk_type',
               data: {}
@@ -799,8 +823,8 @@ describe('slideValidation - Direct Schema & Architectural Invariant Tests', () =
             interaction: {
               id: 'int-3',
               type: 'writing',
-              instruction: 'Speak or write',
-              prompt: 'Tell about yourself',
+              instruction: 'Write an essay about your journey',
+              prompt: 'Describe your hometown in detail',
               guidelines: []
             }
           }
@@ -2555,6 +2579,139 @@ describe('slideValidation - Direct Schema & Architectural Invariant Tests', () =
     });
   });
 
+  // =========================================================================
+  // CASO T: Tratamiento Unívoco de Audio, Dinámicas Orales y Calificación Positiva
+  // =========================================================================
+  describe('Caso T: Tratamiento Unívoco de Audio, Dinámicas Orales y Calificación Positiva de ReferenceContent', () => {
+    it('a) Asignación correcta de audios de verificación sin activar split_50_50', () => {
+      const rawVerificationAudioSlide = JSON.stringify({
+        slides: [
+          {
+            id: 'slide-verify-v12',
+            title: 'Vocabulary: Jobs & Workplaces',
+            subtitle: 'Listen and check your answers',
+            layout: 'split_50_50',
+            referenceContent: {
+              id: 'ref-audio-v12',
+              type: 'media',
+              mediaType: 'audio',
+              title: 'Audio V1.2',
+              url: 'placeholder:audio-track'
+            },
+            interaction: {
+              id: 'int-selection-jobs',
+              type: 'selection',
+              instruction: 'Listen and check. Choose the correct workplace for each job:',
+              questions: [
+                {
+                  id: 'q-1',
+                  mode: 'single_choice',
+                  prompt: 'A nurse works in {{blank}}.',
+                  options: [
+                    { id: 'opt-1', text: 'a hospital', isCorrect: true },
+                    { id: 'opt-2', text: 'an office', isCorrect: false }
+                  ]
+                }
+              ]
+            }
+          }
+        ]
+      });
+
+      const slides = validateAndParseSlides(rawVerificationAudioSlide);
+      expect(slides).toHaveLength(1);
+      const slide = slides[0];
+
+      // Invariante 1: Audio de verificación se mapea a interaction.verificationAudioUrl
+      expect(slide.interaction?.verificationAudioUrl).toBeDefined();
+      expect(slide.interaction?.audioLabel).toBe('V1.2');
+      // Invariante 2: referenceContent debe ser estrictamente null
+      expect(slide.referenceContent).toBeNull();
+      // Invariante 3: El layout debe ser single_column, nunca split_50_50
+      expect(slide.layout).toBe('single_column');
+    });
+
+    it('b) Clasificación limpia de actividades de speaking sin mutar a writing con textarea ni minWords', () => {
+      const rawSpeakingPairworkSlide = JSON.stringify({
+        slides: [
+          {
+            id: 'slide-speaking-2b',
+            title: '2b Speaking Practice',
+            subtitle: 'Work in pairs. Talk about people you know.',
+            layout: 'single_column',
+            referenceContent: null,
+            interaction: {
+              id: 'int-fake-writing-pairwork',
+              type: 'writing',
+              instruction: 'Work in pairs. Use the phrases in 2a to talk about people you know.',
+              prompt: 'Do you know anyone who travels a lot for work? Where do they go?',
+              guidelines: ['Use phrases from 2a', 'Ask follow-up questions'],
+              minWords: 40,
+              maxWords: 100,
+              isGraded: false
+            }
+          }
+        ]
+      });
+
+      const slides = validateAndParseSlides(rawSpeakingPairworkSlide);
+      expect(slides).toHaveLength(1);
+      const slide = slides[0];
+
+      // Invariante 1: No debe degradarse a writing ni tener canal interactivo con textarea
+      expect(slide.interaction).toBeNull();
+      // Invariante 2: No es una actividad evaluable
+      expect(slide.isGraded).toBe(false);
+      // Invariante 3: Layout single_column con la consigna clara y modelo visible en referenceContent
+      expect(slide.layout).toBe('single_column');
+      expect(slide.referenceContent).not.toBeNull();
+      expect(slide.referenceContent?.type).toBe('text');
+      if (slide.referenceContent?.type === 'text') {
+        expect(slide.referenceContent.category).toBe('dialogue');
+        expect(slide.referenceContent.content).toContain('Work in pairs');
+        expect(slide.referenceContent.content).toContain('Do you know anyone who');
+      }
+    });
+
+    it('c) Ausencia de referenceContent ante consignas aisladas tipo "Use the phrases..."', () => {
+      const rawOrphanDirectiveSlide = JSON.stringify({
+        slides: [
+          {
+            id: 'slide-orphan-directive',
+            title: 'Vocabulary Application',
+            subtitle: 'Complete the sentences',
+            layout: 'split_50_50',
+            referenceContent: {
+              id: 'ref-orphan-dir',
+              type: 'text',
+              category: 'instructions',
+              content: 'Use the phrases in 2a to complete the sentences below.'
+            },
+            interaction: {
+              id: 'int-fill-sentences',
+              type: 'input_fields',
+              instruction: 'Fill in the blanks:',
+              layoutMode: 'list',
+              listItems: [
+                { id: 'it-1', prompt: 'I always ___ coffee in the morning.', expectedAnswer: 'drink', acceptedAnswers: ['drink'] }
+              ]
+            }
+          }
+        ]
+      });
+
+      const slides = validateAndParseSlides(rawOrphanDirectiveSlide);
+      expect(slides).toHaveLength(1);
+      const slide = slides[0];
+
+      // Invariante 1: Consigna huérfana aislada no califica como referenceContent
+      expect(slide.referenceContent).toBeNull();
+      // Invariante 2: Layout normalizado a single_column
+      expect(slide.layout).toBe('single_column');
+      // Invariante 3: La directiva es absorbida en el encabezado de interacción
+      expect(slide.interaction?.instruction).toContain('Use the phrases in 2a to complete the sentences below.');
+    });
+  });
 });
 
 

@@ -182,10 +182,6 @@ export function isSyntheticPedagogicalText(text: string | null | undefined): boo
   const directiveRegex = /^(?:to (?:write|complete|produce) (?:a|an|your|this)|before you (?:write|start|begin)|when (?:writing|answering|completing),?\s*(?:remember|make sure|think)|make sure (?:you|to)|remember to check|don't forget to|you (?:should|must|need to) (?:write|use|include|check))/i;
   if (directiveRegex.test(trimmed)) return true;
 
-  // 4. Summaries or restatements of exercise prompts ("Write ten questions about...", "Ask each other...")
-  if (/^(?:write|make|ask|complete|match|choose|underline|circle)\s+(?:ten|eight|five|the|\d+)?\s*(?:questions|sentences|items|answers|dialogue)/i.test(trimmed) && trimmed.length < 120) {
-    return true;
-  }
 
   // 5. Fabricated task descriptions or artificial pedagogical purpose summaries (e.g. "Practice expressing...", "Students practice...")
   const taskDescRegex = /^(?:practice\s+(?:expressing|using|talking|speaking|writing|forming|identifying|differentiating|asking|answering|practicing|making|discussing|describing)\b|practise\s+(?:expressing|using|talking|speaking|writing|forming|identifying|differentiating|asking|answering|practicing|making|discussing|describing)\b|(?:students\s+practice|practice\s+and\s+review)\b)/i;

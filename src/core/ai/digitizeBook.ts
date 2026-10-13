@@ -444,7 +444,7 @@ export const STRUCTURED_SLIDE_SCHEMA = {
           notes: { type: 'string', description: 'Optional teaching or editorial notes' },
           referenceContent: {
             type: 'object',
-            description: 'Passive consultation material: literal reading passage, dialogue, grammar rule table, or vocabulary collocation chart. MUST be null if no independent passive reading text is printed in the clipping, or in self-sufficient table/grid exercises where solved examples belong to table cells.',
+            description: 'Passive consultation material: literal reading passage, dialogue, grammar rule table, or vocabulary collocation chart. MUST be null if the clipping is an interactive exercise (even with verification audio) or has no autonomous reading text. Audio for exercises belongs strictly in interaction.verificationAudioUrl.',
             properties: {
               type: {
                 type: 'string',
@@ -693,9 +693,9 @@ export const STRUCTURED_SLIDE_SCHEMA = {
               },
               // writing
               prompt: { type: 'string', description: 'Central guiding prompt or question for open production/analysis' },
-              guidelines: { type: 'array', items: { type: 'string' }, description: 'Guiding checklist, steps or rubric points' },
-              minWords: { type: 'integer' },
-              maxWords: { type: 'integer' },
+              guidelines: { type: 'array', items: { type: 'string' }, description: 'ONLY include guidelines if explicitly and visibly printed in the textbook clipping. NEVER invent synthetic steps, checklists or guidelines!' },
+              minWords: { type: 'integer', description: 'ONLY include if an explicit minimum word count target is visibly printed in the clipping (e.g. "Write at least 100 words"). NEVER invent arbitrary word counts!' },
+              maxWords: { type: 'integer', description: 'ONLY include if an explicit maximum word count is visibly printed in the clipping. NEVER invent arbitrary word counts!' },
               placeholder: { type: 'string' },
               evaluationRubric: { type: 'string' }
             },
@@ -832,7 +832,7 @@ export function sanitizeReferenceContent(rawRef: any, idx: number): any {
       } else if (ref.category === 'conversation') {
         ref.category = 'dialogue';
       } else {
-        ref.category = 'grammar_note';
+        ref.category = 'reading';
       }
     }
     return ref;
@@ -1031,63 +1031,103 @@ export function isSpuriousReferenceMetadata(
   title?: string
 ): boolean {
   if (!ref) return false;
-  if (ref.type !== 'text') return false;
+
+  // 1. Tratamiento unívoco de medios: un audio en un slide con ejercicio interactivo
+  // pertenece a los metadatos de la interacción (verificationAudioUrl), nunca a referenceContent
+  if (ref.type === 'media' || ref.type === 'audio' || ref.type === 'listening') {
+    if (interaction && (ref.mediaType === 'audio' || !ref.mediaType || ref.type === 'audio' || ref.type === 'listening')) {
+      return true;
+    }
+    return false;
+  }
+
+  // Las tablas estructuradas constituyen material de consulta formal
+  if (ref.type === 'reference_table' || ref.type === 'table_reference') {
+    return false;
+  }
 
   const content = (ref.body || ref.content || '').trim();
   if (!content) return true;
 
-  // 1. Explicit instructions category or metadata title
-  if (ref.category === 'instructions') {
-    return true;
-  }
-  if (ref.title && /^(?:examples?|models?|instructions?|directions?|consigna)\b/i.test(ref.title.trim())) {
-    return true;
-  }
-
-  // 2. Identity or duplication with activity instructions, subtitle, or title
-  const normalizeForComparison = (s: string) =>
-    s.toLowerCase().replace(/[.,;:!?]/g, '').replace(/\s+/g, ' ').trim();
-
-  const normContent = normalizeForComparison(content);
-  const normSub = subtitle ? normalizeForComparison(subtitle) : '';
-  const normInst = interaction?.instruction ? normalizeForComparison(interaction.instruction) : '';
-  const normTitle = title ? normalizeForComparison(title) : '';
-
-  if (normSub && (normContent === normSub || normSub.includes(normContent))) {
-    return true;
-  }
-  if (normInst && (normContent === normInst || normInst.includes(normContent))) {
-    return true;
-  }
-  if (normTitle && normContent === normTitle) {
-    return true;
-  }
-
-  // 3. Solved demonstration or model sentence ("Example", "Model", "e.g.", "for example")
-  if (/^(?:examples?|models?|samples?|demos?|e\.g\.|for example)\b[:\s]/i.test(content)) {
-    const lines = content.split(/\n+/).map((l: string) => l.trim()).filter(Boolean);
-    const isMultiSpeakerDialogue = lines.length >= 3 && lines.every((l: string) => /^[A-Z][a-z]*\s*:\s*/.test(l));
-    if (!isMultiSpeakerDialogue && (lines.length <= 3 || !content.includes('\n\n'))) {
-      return true;
-    }
-  }
-
-  // 4. Pure imperative exercise directions / consignas (e.g. "Complete the sentences...", "Choose the correct option...")
-  const isDirectiveHeader = /^(?:instructions?|directions?|consigna|task)\b[:\s]/i.test(content);
-  const startsWithImperativeVerb = /^(?:complete|fill in|choose|circle|select|underline|match|tick|write|read and complete|look and write|put the words|rewrite|listen and check|ask and answer|answer the questions|cross out)\b/i.test(content);
-  if (isDirectiveHeader || startsWithImperativeVerb) {
-    const lines = content.split(/\n+/).map((l: string) => l.trim()).filter(Boolean);
-    if (lines.length <= 3 && !content.includes('\n\n')) {
-      return true;
-    }
-  }
-
-  // 5. Synthetic pedagogical advice, task descriptions, or teacher summaries (Principio de Cero Alucinación / Cero Síntesis)
+  // 1. Meta-comentarios pedagógicos sintéticos ("Practice expressing...", "Students practice...")
   if (isSyntheticPedagogicalText(content)) {
     return true;
   }
 
-  return false;
+  // 2. Oraciones modelo o ejemplos resueltos aislados ("Example: ...")
+  if (/^(?:examples?|models?|samples?|demos?|e\.g\.|for example)\b[:\s]/i.test(content)) {
+    return true;
+  }
+
+  // 3. Categorías o títulos explícitos de directivas/metadatos
+  if (ref.category === 'instructions') {
+    return true;
+  }
+  if (ref.title && /^(?:examples?|models?|instructions?|directions?|consigna|task|steps?)\b/i.test(ref.title.trim())) {
+    return true;
+  }
+
+  // 4. Si no hay interacción (diapositiva puramente expositiva, teórica o de lectura),
+  // el contenido es el cuerpo mismo de la diapositiva y no puede ser metadato espurio de un ejercicio.
+  if (!interaction) {
+    return false;
+  }
+
+  // 5. Las notas de referencia gramatical o cuadros teóricos son material de consulta legítimo
+  if (ref.category === 'grammar_note' || ref.category === 'rule_box') {
+    return false;
+  }
+
+  // CRITERIO DE CALIFICACIÓN ONTOLÓGICA POSITIVA:
+  // Un bloque de texto califica como referenceContent ÚNICAMENTE si constituye material de lectura continuo autónomo:
+
+  // A. Diálogo estructurado con interlocutores identificados (al menos 2 turnos de diálogo)
+  const dialogueLines = content.split(/\n+/).map((l: string) => l.trim()).filter(Boolean);
+  const speakerLines = dialogueLines.filter((l: string) =>
+    /^(?:Speaker\s+[A-Za-z0-9]+|[A-Z][a-z]{1,15}|[A-Z])\s*:\s*\S+/i.test(l)
+  );
+  if (speakerLines.length >= 2) {
+    return false; // Diálogo autónomo legítimo
+  }
+
+  // B. Lista estructurada de oraciones o reactivos de referencia para análisis (ej. preguntas 1-4 a contrastar)
+  const numberedLines = dialogueLines.filter((l: string) => /^\s*\d+[\.\)]\s+\S+/.test(l));
+  if (numberedLines.length >= 2) {
+    return false; // Corpus estructurado de enunciados de análisis
+  }
+
+  // C. Lectura continua estructurada con múltiples párrafos (\n\n)
+  const paragraphs = content.split(/\n\s*\n/).map((p: string) => p.trim()).filter(Boolean);
+  if (paragraphs.length >= 2) {
+    return false; // Artículo o historia con párrafos estructurados
+  }
+
+  // D. Texto continuo autónomo (artículo, narración, crónica, transcripción formal)
+  const words = content.split(/\s+/).filter(Boolean);
+  const hasParagraphs = paragraphs.length >= 2 || (dialogueLines.length >= 2 && !dialogueLines[0].includes('?'));
+  const isSingleQuestion = /^[A-Z][^.?!]*\?\s*$/.test(content);
+
+  // Si es un enunciado corto (< 25 palabras), directiva huérfana o pregunta aislada, es una consigna o modelo, no lectura
+  if (words.length < 25 || isSingleQuestion) {
+    return true;
+  }
+
+  if (words.length >= 25 && (hasParagraphs || content.includes('.'))) {
+    // Verificar duplicación sustancial con instrucción, subtítulo o título
+    const normalizeForComparison = (s: string) =>
+      s.toLowerCase().replace(/[.,;:!?]/g, '').replace(/\s+/g, ' ').trim();
+    const normContent = normalizeForComparison(content);
+    const normSub = subtitle ? normalizeForComparison(subtitle) : '';
+    const normTitle = title ? normalizeForComparison(title) : '';
+    const normInst = interaction?.instruction ? normalizeForComparison(interaction.instruction) : '';
+    if (normTitle && (normContent === normTitle || normTitle.includes(normContent))) return true;
+    if (normSub && (normContent === normSub || normSub.includes(normContent))) return true;
+    if (normInst && (normContent === normInst || normInst.includes(normContent))) return true;
+
+    return false; // Calificación positiva como texto de lectura continuo
+  }
+
+  return true;
 }
 
 /**
@@ -1098,16 +1138,18 @@ export function foldSpuriousMetadata(text: string, slide: any): void {
   const trimmed = text.trim();
   if (!trimmed) return;
 
-  const isInstructionDirective = /^(?:instructions?|directions?|consigna|task)\b[:\s]/i.test(trimmed) ||
-    /^(?:complete|fill in|choose|circle|select|underline|match|tick|write|read and complete|look and write|put the words|rewrite|listen and check|ask and answer|answer the questions|cross out)\b/i.test(trimmed);
-
-  const isExample = /^(?:examples?|models?|samples?|demos?|e\.g\.|for example)\b[:\s]/i.test(trimmed);
-
-  // Si es texto sintético inventado o meta-comentario pedagógico (e.g. "Practice expressing...", "Teacher notes..."),
-  // y NO es una consigna imperativa auténtica ni un ejemplo resuelto, descartarlo por completo (Principio de Cero Alucinación / Cero Síntesis)
-  if (!isInstructionDirective && !isExample && isSyntheticPedagogicalText(trimmed)) {
+  // Si es texto sintético inventado o meta-comentario pedagógico, descartarlo
+  if (isSyntheticPedagogicalText(trimmed)) {
     return;
   }
+
+  // Si es un track o audio, no contaminar el texto de la instrucción
+  if (/\b(?:audio|listening|track|cd\d*|r\d+\.\d+|v\d+\.\d+)\b/i.test(trimmed) && trimmed.length < 40) {
+    return;
+  }
+
+  const isExample = /^(?:examples?|models?|samples?|demos?|e\.g\.|for example)\b[:\s]/i.test(trimmed) ||
+    /^(?:do you know anyone who|where do you live)\b/i.test(trimmed);
 
   if (slide.interaction) {
     const currentInst = slide.interaction.instruction ? slide.interaction.instruction.trim() : '';
@@ -1121,7 +1163,7 @@ export function foldSpuriousMetadata(text: string, slide: any): void {
       }
     } else {
       if (!currentInst.toLowerCase().includes(trimmed.toLowerCase())) {
-        slide.interaction.instruction = trimmed;
+        slide.interaction.instruction = `${trimmed} ${currentInst}`.trim();
       }
     }
 
@@ -1137,7 +1179,7 @@ export function foldSpuriousMetadata(text: string, slide: any): void {
     }
   }
 
-  if (!slide.subtitle && !isExample) {
+  if (!slide.subtitle && !isExample && trimmed.length <= 80) {
     slide.subtitle = trimmed;
   }
 }
@@ -1496,8 +1538,44 @@ export function validateAndParseSlides(
         rawSlide.interaction.id = `int-${Date.now()}-${idx}`;
       }
 
-      // Regla de Detección Universal: preguntas alternativas/disyuntivas ("... A or B?") clasificadas erróneamente como writing
+      // A. Prohibición Ontológica: Tareas orales / speaking en parejas degradadas forzadamente a writing
       if (rawSlide.interaction.type === 'writing') {
+        const writing = rawSlide.interaction as any;
+        const combinedText = `${rawSlide.title || ''} ${rawSlide.subtitle || ''} ${writing.instruction || ''} ${writing.prompt || ''} ${(writing.guidelines || []).join(' ')}`.toLowerCase();
+
+        const isOralDirective = /\b(?:work\s+in\s+pairs|in\s+pairs|speaking|ask\s+(?:your\s+partner|each\s+other|questions|about)|discuss\s+with|talk\s+to\s+your\s+partner|take\s+turns\s+to\s+ask|pair\s*work|role\s*play|conversation\s+practice|interview\s+your\s+partner|tell\s+your\s+partner)\b/i.test(combinedText);
+        const isExplicitComposition = /\b(?:write\s+an?\s+(?:essay|composition|paragraph|article|email|letter|review|story|report)|write\s+\d+\s*(?:words?|sentences?)|redacta\s+un?\s+(?:ensayo|párrafo|correo|informe))\b/i.test(combinedText);
+
+        if (isOralDirective && !isExplicitComposition) {
+          rawSlide.interaction = null;
+          rawSlide.isGraded = false;
+          rawSlide.layout = 'single_column';
+
+          const cleanInst = (writing.instruction || rawSlide.subtitle || 'Work in pairs.').trim();
+          const cleanPrompt = (writing.prompt || '').trim();
+          const hasPrompt = cleanPrompt && !cleanInst.includes(cleanPrompt);
+
+          const cardContent = hasPrompt
+            ? `${cleanInst}\n\n${cleanPrompt}`
+            : cleanInst;
+
+          rawSlide.referenceContent = {
+            id: `ref-speaking-${Date.now()}-${idx}`,
+            type: 'text',
+            category: 'dialogue',
+            title: rawSlide.title || 'Speaking / Pairwork',
+            content: cardContent,
+            body: cardContent,
+          };
+
+          if (rawSlide.contextBody) {
+            rawSlide.contextBody = undefined;
+          }
+        }
+      }
+
+      // Regla de Detección Universal: preguntas alternativas/disyuntivas ("... A or B?") clasificadas erróneamente como writing
+      if (rawSlide.interaction && rawSlide.interaction.type === 'writing') {
         const writing = rawSlide.interaction as any;
 
         // Criterio de Exclusión Incondicional: Si ya cuenta con rúbricas o parámetros de redacción auténtica, NUNCA mutar
@@ -1593,6 +1671,7 @@ export function validateAndParseSlides(
           rawSlide.layout = 'single_column';
         }
       }
+
 
       // Descomposición canónica y normalización de reactivos con alternativas delimitadas ('/') en input_fields
       if (rawSlide.interaction && rawSlide.interaction.type === 'input_fields' && Array.isArray(rawSlide.interaction.listItems)) {
@@ -1933,6 +2012,42 @@ export function validateAndParseSlides(
       rawSlide.interaction = null;
     }
 
+    // =========================================================================
+    // TRATAMIENTO UNÍVOCO DEL AUDIO (Verificación vs. Listening autónomo)
+    // =========================================================================
+    const refIsAudio = rawSlide.referenceContent &&
+      (rawSlide.referenceContent.type === 'media' || (rawSlide.referenceContent as any).type === 'audio' || (rawSlide.referenceContent as any).type === 'listening') &&
+      ((rawSlide.referenceContent as any).mediaType === 'audio' || (rawSlide.referenceContent as any).mediaType === 'listening' || !(rawSlide.referenceContent as any).mediaType);
+
+    if (refIsAudio) {
+      const audioTitle = rawSlide.referenceContent.title || '';
+      const audioUrl = rawSlide.referenceContent.url && rawSlide.referenceContent.url !== 'placeholder:audio-track'
+        ? rawSlide.referenceContent.url
+        : undefined;
+
+      const trackMatch = `${audioTitle} ${rawSlide.title || ''} ${rawSlide.subtitle || ''} ${(rawSlide.interaction as any)?.instruction || ''}`.match(
+        /\b(?:(?:CD\s*\d+\s*)?Track\s*(\d+(?:\.\d+)?)|([VR]\d+\.\d+)|(?:Audio\s*(\d+(?:\.\d+)?)))\b/i
+      );
+      const audioLabel = trackMatch ? trackMatch[0].trim() : (audioTitle || 'Audio');
+      const finalAudioUrl = audioUrl || `/audio/${audioLabel.replace(/[^a-zA-Z0-9.-]+/g, '_')}.mp3`;
+
+      if (rawSlide.interaction) {
+        // Mapear exclusivamente a los metadatos de la interacción
+        if (!rawSlide.interaction.verificationAudioUrl) {
+          rawSlide.interaction.verificationAudioUrl = finalAudioUrl;
+        }
+        if (!rawSlide.interaction.audioLabel) {
+          rawSlide.interaction.audioLabel = audioLabel;
+        }
+        // Descartar referenceContent para que no active split_50_50
+        rawSlide.referenceContent = null;
+        rawSlide.layout = 'single_column';
+      } else {
+        // Diapositiva puramente de escucha (sin interacción activa): layout single_column
+        rawSlide.layout = 'single_column';
+      }
+    }
+
     // Detección y normalización ontológica de metadatos espurios en referenceContent:
     // Las oraciones modelo ("Example"), instrucciones y demostraciones pedagógicas resueltas
     // son metadatos de la actividad: DEBEN residir dentro del encabezado ('instruction' o el primer ítem con isExample),
@@ -1986,10 +2101,17 @@ export function validateAndParseSlides(
     // Principio ontológico de selección de Layout:
     // - 'split_50_50': Se utiliza ÚNICAMENTE cuando existe un texto continuo de consulta autónomo
     //   (un artículo, un audioscript, un diálogo completo, o tabla de consulta) que el estudiante
-    //   necesita leer a la izquierda mientras interactúa a la derecha.
+    //   necesita leer a la izquierda mientras interactúa a la derecha. NUNCA para audio o media.
     // - 'single_column': Es el layout por defecto para cualquier ejercicio de oraciones, listas o
     //   reactivos donde el contenido sea autosuficiente, o cuando no hay interacción activa.
-    rawSlide.layout = (rawSlide.referenceContent && rawSlide.interaction) ? 'split_50_50' : 'single_column';
+    const hasAutonomousReadingOrTable = Boolean(
+      rawSlide.referenceContent && (
+        rawSlide.referenceContent.type === 'reference_table' ||
+        rawSlide.referenceContent.type === 'table_reference' ||
+        (rawSlide.referenceContent.type === 'text' && !isSpuriousReferenceMetadata(rawSlide.referenceContent, rawSlide.interaction, rawSlide.subtitle, rawSlide.title))
+      )
+    );
+    rawSlide.layout = (hasAutonomousReadingOrTable && rawSlide.interaction) ? 'split_50_50' : 'single_column';
 
     // Principio Universal de Densidad Máxima por Diapositiva (Slide Ergonomics & Cognitive Load):
     // Cuando una actividad interactiva se basa en un texto o diálogo de referencia (layout split_50_50):
@@ -2308,6 +2430,13 @@ CANONICAL ARCHETYPES:
        - La instrucción o enunciado ("instruction" / "title" / "subtitle") DEBE reflejar propósito de consulta o lectura (e.g. "Review...", "Read...", "Study..."), evitando rigurosamente verbos de acción resolutiva ("Complete...", "Fill in...", "Choose...").
        - Debe emitirse con 'isGraded: false' e 'interaction: null' para que el lienzo de presentación no active controles de envío de respuestas.
        - Si contiene una tabla o cuadro puramente informativo, estructurarlo en 'referenceContent' (type: 'reference_table' o 'table_reference') y layout 'single_column'.
+   - CRITERIO DE CALIFICACIÓN ONTOLÓGICA POSITIVA PARA 'referenceContent':
+     * Un bloque de texto califica como 'referenceContent' ÚNICAMENTE si constituye material de lectura continuo autónomo (artículo, historia, diálogo estructurado con >= 2 hablantes identificados, transcripción o tabla formal).
+     * Si el texto es una consigna, directiva huérfana o un modelo de pregunta aislado (e.g. "Use the phrases in 2a...", "Work in pairs..."), DEBE ser absorbido en el encabezado de la interacción ('instruction' / 'prompt') o descartado, dejando 'referenceContent: null' y layout: 'single_column'.
+   - TRATAMIENTO UNÍVOCO DEL AUDIO (Verificación vs. Listening autónomo):
+     * Cualquier audio asociado a un ejercicio de práctica o autoverificación (identificado por badges tipo V1.2, R1.8, CD Track X o consignas tipo "Listen and check", "Listen and repeat"): DEBE mapearse exclusivamente como metadato del ejercicio ('interaction.verificationAudioUrl' y 'interaction.audioLabel').
+     * Bajo NINGUNA circunstancia un audio de ejercicio interactivo debe registrarse como 'referenceContent' ni activar 'split_50_50'. En tales casos, 'referenceContent' DEBE ser estrictamente null y el layout 'single_column'.
+     * 'referenceContent' de tipo 'media' (audio) se reserva ÚNICAMENTE para audios de comprensión/escucha pasiva autónoma sin reactivos interactivos (interaction: null, isGraded: false).
    - STRICT FIDELITY: Strictly transcribe literal text. NEVER generate synthetic summaries or pedagogical explanations.
 
 2. "interaction" (Active evaluated exercise):
@@ -2376,8 +2505,10 @@ CANONICAL ARCHETYPES:
        - Alternatively, if modeled as input_fields, it OBLIGATORIAMENTE must include the complete "wordBank" with the exact list of options to match.
        - NEVER emit orphan empty text fields without providing the printed bank of options/headings from the activity.
    - "sequence": For ordering disordered sentences or dialogue lines into chronological sequence.
-   - "writing": STRICT RESTRICTION (GENUINELY OPEN TASKS ONLY):
-     * Reserve interaction.type: "writing" EXCLUSIVELY for genuinely open-ended communicative or production tasks (personal opinion essays, paragraphs, emails, profiles, or open inquiry questions without finite discrete alternatives in the prompt, such as "Why...", "Describe...", "What do you think about..."). Set isGraded: false.
+   - "writing": STRICT RESTRICTION (GENUINELY OPEN WRITTEN TASKS ONLY):
+     * Reserve interaction.type: "writing" EXCLUSIVELY for genuinely open-ended written communicative production tasks (personal opinion essays, paragraphs, emails, compositions). Set isGraded: false.
+     * PROHIBICIÓN ESTRICTA SOBRE DINÁMICAS ORALES (Speaking / Pairwork): Queda estrictamente prohibido degradar consignas de expresión oral ("Work in pairs", "Speaking", "Ask questions", "Talk to a partner") hacia el arquetipo de redacción escrita ('writing'). En dinámicas orales: NO debe generarse textarea de redacción, ni contador de palabras ('minWords'), ni rúbricas de ensayo. Deben estructurarse como diapositiva comunicativa en 'single_column' con 'interaction: null', 'isGraded: false', y la consigna y preguntas/modelos visibles en 'referenceContent'.
+     * PROHIBICIÓN DE ANDAMIAJES SINTÉTICOS (CERO GUIDELINES / MINWORDS INVENTADOS): Queda estrictamente prohibido inventar o sintetizar 'guidelines', 'rubric' o metas de palabras ('minWords', 'maxWords') si no están impresas explícitamente en la imagen fuente. Solo incluir 'minWords' o 'maxWords' si el texto impreso especifica una cantidad ("Write at least 50 words").
      * STRICT PROHIBITION: NEVER classify alternative questions with closed binary or finite choices ("... [Option A] or [Option B]?") as "writing". If the prompt contains finite discrete choices delimited by "or", it MUST be classified as "selection".
      * STRICT PROHIBITION ON EXPLANATORY/THEORETICAL BOXES: NEVER generate interaction.type: "writing" for grammar boxes, rule charts, pronunciation notes, or language summaries. IT IS STRICTLY FORBIDDEN to demand artificial summaries (e.g. "Summarize the rules..."). Pure informational content must be preserved as referenceContent with interaction: null and isGraded: false.
 
