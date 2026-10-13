@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import type { ReferenceTextBlock } from '../../types/schema';
-import { Camera, Image as ImageIcon, Upload, Link as LinkIcon, X, Plus } from 'lucide-react';
+import { Camera, Image as ImageIcon, Upload, Link as LinkIcon, X, Plus, MessagesSquare, Quote, Layers } from 'lucide-react';
 import { compressImageBase64 } from '../../core/utils/imageCompressor';
 import { useLessonStore } from '../../store/useLessonStore';
 import { renderFormattedMarkdown } from '../../core/text/markdownRenderer';
@@ -75,6 +75,63 @@ export const TextReferenceRenderer: React.FC<Props> = ({
     }
     return [normalized.trim()];
   }, [block.content]);
+
+  const [newCueText, setNewCueText] = useState('');
+
+  // Identificación ontológica de actividad comunicativa oral / pairwork
+  const isSpeakingActivity = React.useMemo(() => {
+    if (block.category === 'dialogue') {
+      if (block.model || block.instruction || (Array.isArray(block.cues) && block.cues.length > 0)) {
+        return true;
+      }
+      const combined = `${block.title || ''} ${block.content || ''}`.toLowerCase();
+      return /\b(?:work\s+in\s+pairs|in\s+pairs|speaking|ask\s+(?:your\s+partner|each\s+other|questions)|talk\s+to\s+your\s+partner|pair\s*work)\b/i.test(combined);
+    }
+    return Boolean(block.model);
+  }, [block.category, block.model, block.instruction, block.cues, block.title, block.content]);
+
+  const effectiveInstruction = React.useMemo(() => {
+    if (block.instruction?.trim()) return block.instruction.trim();
+    if (!block.content) return '';
+    const parts = block.content.split(/\n{2,}/).map((p) => p.trim()).filter(Boolean);
+    return parts[0] || block.content.trim();
+  }, [block.instruction, block.content]);
+
+  const effectiveModel = React.useMemo(() => {
+    if (block.model?.trim()) return block.model.trim();
+    if (!block.content) return '';
+    const parts = block.content.split(/\n{2,}/).map((p) => p.trim()).filter(Boolean);
+    if (parts.length > 1) {
+      return parts.slice(1).join('\n\n');
+    }
+    return '';
+  }, [block.model, block.content]);
+
+  const effectiveCues = React.useMemo(() => {
+    if (Array.isArray(block.cues) && block.cues.length > 0) {
+      return block.cues;
+    }
+    return [];
+  }, [block.cues]);
+
+  const handleAddCue = () => {
+    const trimmed = newCueText.trim();
+    if (!trimmed) return;
+    const nextCues = [...effectiveCues, trimmed];
+    onChange?.({
+      ...block,
+      cues: nextCues,
+    });
+    setNewCueText('');
+  };
+
+  const handleRemoveCue = (cueIndex: number) => {
+    const nextCues = effectiveCues.filter((_, i) => i !== cueIndex);
+    onChange?.({
+      ...block,
+      cues: nextCues.length > 0 ? nextCues : undefined,
+    });
+  };
 
   const addImages = (newImagesList: string[]) => {
     if (newImagesList.length === 0) return;
@@ -427,13 +484,115 @@ export const TextReferenceRenderer: React.FC<Props> = ({
               </div>
             )}
 
-            <textarea
-              value={block.content}
-              onChange={(e) => onChange?.({ ...block, content: e.target.value })}
-              placeholder="Escribe el pasaje de lectura, diálogo o explicación..."
-              rows={7}
-              className="w-full flex-1 min-h-[140px] text-sm leading-relaxed text-slate-700 bg-slate-50/70 border border-slate-200 rounded-xl p-3.5 outline-none focus:border-indigo-500 focus:bg-white resize-y whitespace-pre-line font-sans"
-            />
+            {isSpeakingActivity ? (
+              <div className="space-y-4 bg-slate-50/70 p-4 sm:p-5 rounded-2xl border border-slate-200">
+                <div>
+                  <label className="text-xs font-bold text-slate-700 block mb-1">
+                    Consigna del Ejercicio (Instruction):
+                  </label>
+                  <textarea
+                    value={effectiveInstruction}
+                    onChange={(e) => {
+                      const newInst = e.target.value;
+                      const newContent = [newInst.trim(), effectiveModel].filter(Boolean).join('\n\n');
+                      onChange?.({
+                        ...block,
+                        instruction: newInst,
+                        content: newContent,
+                        body: newContent,
+                      });
+                    }}
+                    placeholder="Ej: Work in pairs. Use the phrases in 2a to talk about people you know."
+                    rows={2}
+                    className="w-full text-sm leading-relaxed text-slate-800 bg-white border border-slate-200 rounded-xl p-3 outline-none focus:border-indigo-500 font-sans"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-xs font-bold text-indigo-800 block mb-1">
+                    Patrón Lingüístico / Modelo de Conversación (Model):
+                  </label>
+                  <textarea
+                    value={effectiveModel}
+                    onChange={(e) => {
+                      const newModel = e.target.value;
+                      const newContent = [effectiveInstruction, newModel.trim()].filter(Boolean).join('\n\n');
+                      onChange?.({
+                        ...block,
+                        model: newModel,
+                        content: newContent,
+                        body: newContent,
+                      });
+                    }}
+                    placeholder="Ej: Do you know anyone who travels a lot for work? Where do they go?"
+                    rows={3}
+                    className="w-full text-sm leading-relaxed text-slate-900 bg-white border border-indigo-200 rounded-xl p-3 outline-none focus:border-indigo-500 font-sans"
+                  />
+                </div>
+
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="text-xs font-bold text-slate-700">
+                      Banco de Apoyo / Frases de Soporte ({effectiveCues.length}):
+                    </label>
+                    <span className="text-[11px] text-slate-400">
+                      Estímulos resueltos o contextuales
+                    </span>
+                  </div>
+                  {effectiveCues.length > 0 && (
+                    <div className="flex flex-wrap gap-2 mb-2.5">
+                      {effectiveCues.map((cue, idx) => (
+                        <span
+                          key={idx}
+                          className="inline-flex items-center gap-1.5 px-3 py-1 bg-white border border-slate-200 rounded-lg text-xs font-medium text-slate-700 shadow-2xs"
+                        >
+                          <span>{cue}</span>
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveCue(idx)}
+                            className="hover:text-rose-600 transition cursor-pointer"
+                            title="Eliminar frase"
+                          >
+                            <X className="w-3 h-3" />
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      value={newCueText}
+                      onChange={(e) => setNewCueText(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          handleAddCue();
+                        }
+                      }}
+                      placeholder="Añadir nueva frase de apoyo..."
+                      className="text-xs bg-white border border-slate-200 rounded-xl px-3 py-2 outline-none focus:border-indigo-500 flex-1"
+                    />
+                    <button
+                      type="button"
+                      onClick={handleAddCue}
+                      className="flex items-center gap-1 px-3 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-xl shadow-xs transition cursor-pointer"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>Añadir</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <textarea
+                value={block.content}
+                onChange={(e) => onChange?.({ ...block, content: e.target.value })}
+                placeholder="Escribe el pasaje de lectura, diálogo o explicación..."
+                rows={7}
+                className="w-full flex-1 min-h-[140px] text-sm leading-relaxed text-slate-700 bg-slate-50/70 border border-slate-200 rounded-xl p-3.5 outline-none focus:border-indigo-500 focus:bg-white resize-y whitespace-pre-line font-sans"
+              />
+            )}
           </div>
         ) : (
           /* Student / Preview Mode: Responsive Adaptive Gallery or Editorial layout */
@@ -487,7 +646,71 @@ export const TextReferenceRenderer: React.FC<Props> = ({
               </div>
             ) : null}
 
-            {block.content && (
+            {isSpeakingActivity ? (
+              <div className="w-full flex flex-col space-y-5">
+                {/* 1. Encabezado: Consigna literal del ejercicio */}
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2">
+                    <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold tracking-wide uppercase bg-indigo-50 text-indigo-700 border border-indigo-200/80 shadow-2xs">
+                      <MessagesSquare className="w-3.5 h-3.5 text-indigo-600" />
+                      <span>Speaking & Pairwork</span>
+                    </span>
+                    <span className="text-[11px] font-medium text-slate-400">
+                      Práctica Comunicativa en Parejas
+                    </span>
+                  </div>
+                  {effectiveInstruction && (
+                    <div className="text-base sm:text-lg font-semibold text-slate-800 leading-relaxed tracking-tight">
+                      {renderFormattedMarkdown(effectiveInstruction)}
+                    </div>
+                  )}
+                </div>
+
+                {/* 2. Foco central: El marco o patrón lingüístico ('model') destacado como tarjeta o contenedor de habla */}
+                {effectiveModel ? (
+                  <div className="relative my-2 rounded-2xl bg-gradient-to-br from-indigo-50/70 via-white to-violet-50/50 border border-indigo-200/90 p-5 sm:p-7 shadow-xs">
+                    <div className="flex items-center gap-2 text-xs font-bold text-indigo-800 uppercase tracking-wider mb-2.5">
+                      <Quote className="w-4 h-4 text-indigo-600" />
+                      <span>Patrón Lingüístico / Modelo de Conversación</span>
+                    </div>
+                    <div className="text-lg sm:text-xl font-medium text-slate-900 leading-relaxed sm:leading-loose">
+                      {renderFormattedMarkdown(effectiveModel)}
+                    </div>
+                  </div>
+                ) : null}
+
+                {/* 3. Banco de soporte ('cues'): estímulos o frases provistas/heredadas para consulta directa */}
+                {effectiveCues.length > 0 ? (
+                  <div className="mt-4 pt-4 border-t border-slate-100 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2 text-xs font-bold text-slate-700 uppercase tracking-wider">
+                        <Layers className="w-3.5 h-3.5 text-indigo-600" />
+                        <span>Banco de Apoyo / Frases para la Conversación</span>
+                        <span className="text-[10px] font-semibold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded-full border border-indigo-200/60">
+                          {effectiveCues.length} frases
+                        </span>
+                      </div>
+                      <span className="text-[11px] text-slate-400 hidden sm:inline">
+                        Usa estos estímulos con tu compañero
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2.5">
+                      {effectiveCues.map((cue, idx) => (
+                        <div
+                          key={idx}
+                          className="group flex items-center gap-2.5 px-3.5 py-2.5 bg-white hover:bg-indigo-50/30 border border-slate-200/90 hover:border-indigo-300 rounded-xl shadow-2xs transition-all select-text"
+                        >
+                          <div className="w-1.5 h-1.5 rounded-full bg-indigo-500 shrink-0 group-hover:scale-125 transition-transform" />
+                          <span className="text-xs sm:text-sm font-medium text-slate-700 group-hover:text-slate-900">
+                            {cue}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            ) : block.content ? (
               <div className="w-full flex flex-col space-y-4 font-normal text-slate-800 leading-relaxed text-sm sm:text-base whitespace-pre-line break-words">
                 {paragraphs.length > 0 ? (
                   paragraphs.map((paragraph, idx) => (
@@ -501,7 +724,7 @@ export const TextReferenceRenderer: React.FC<Props> = ({
                   </div>
                 )}
               </div>
-            )}
+            ) : null}
             {/* Clearfix */}
             <div className="clear-both" />
           </div>

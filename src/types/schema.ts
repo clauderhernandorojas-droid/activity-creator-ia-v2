@@ -11,6 +11,9 @@ export const ReferenceTextBlockSchema = z.object({
   content: z.string(),
   body: z.string().optional(),
   category: z.enum(['reading', 'grammar_note', 'instructions', 'dialogue']).default('grammar_note'),
+  instruction: z.string().optional(),
+  model: z.string().optional(),
+  cues: z.array(z.string()).optional(),
   imageUrl: z.string().optional(),
   images: z.array(z.string()).optional(),
 });

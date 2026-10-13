@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { SlideSchema, SelectionBlockSchema } from '../../../types/schema';
+import { SlideSchema, SelectionBlockSchema, type Slide } from '../../../types/schema';
 import { evaluateSelection } from '../../evaluators/evaluateSelection';
 import {
   validateAndParseSlides,
@@ -2668,6 +2668,8 @@ describe('slideValidation - Direct Schema & Architectural Invariant Tests', () =
       expect(slide.referenceContent?.type).toBe('text');
       if (slide.referenceContent?.type === 'text') {
         expect(slide.referenceContent.category).toBe('dialogue');
+        expect(slide.referenceContent.instruction).toBe('Work in pairs. Use the phrases in 2a to talk about people you know.');
+        expect(slide.referenceContent.model).toBe('Do you know anyone who travels a lot for work? Where do they go?');
         expect(slide.referenceContent.content).toContain('Work in pairs');
         expect(slide.referenceContent.content).toContain('Do you know anyone who');
       }
@@ -2710,6 +2712,64 @@ describe('slideValidation - Direct Schema & Architectural Invariant Tests', () =
       expect(slide.layout).toBe('single_column');
       // Invariante 3: La directiva es absorbida en el encabezado de interacción
       expect(slide.interaction?.instruction).toContain('Use the phrases in 2a to complete the sentences below.');
+    });
+
+    it('d) Estructuración ontológica completa de Speaking con cues resueltos desde previousSlideContext', () => {
+      const mockSlide2a: Slide = {
+        id: 'slide-2a',
+        title: '2a Vocabulary: Jobs',
+        layout: 'single_column',
+        interaction: {
+          id: 'int-2a',
+          type: 'input_fields',
+          instruction: 'Match the jobs with the descriptions',
+          layoutMode: 'list',
+          wordBank: ['travels a lot for work', 'works outdoors', 'works in a hospital'],
+          listItems: [],
+          tableHeaders: [],
+          tableRows: [],
+          paragraphTemplate: '',
+          paragraphInputs: {}
+        }
+      };
+
+      const rawSpeakingWithContext = JSON.stringify({
+        slides: [
+          {
+            id: 'slide-speaking-with-context',
+            title: '2b Speaking Practice',
+            subtitle: 'Work in pairs',
+            layout: 'single_column',
+            referenceContent: null,
+            interaction: {
+              id: 'int-oral-task',
+              type: 'writing',
+              instruction: 'Work in pairs. Use the phrases in 2a to talk about people you know.',
+              prompt: 'Do you know anyone who travels a lot for work? Where do they go?',
+              isGraded: false
+            }
+          }
+        ]
+      });
+
+      const slides = validateAndParseSlides(rawSpeakingWithContext, mockSlide2a);
+      expect(slides).toHaveLength(1);
+      const slide = slides[0];
+
+      expect(slide.interaction).toBeNull();
+      expect(slide.layout).toBe('single_column');
+      expect(slide.referenceContent?.type).toBe('text');
+      if (slide.referenceContent?.type === 'text') {
+        expect(slide.referenceContent.category).toBe('dialogue');
+        expect(slide.referenceContent.instruction).toBe('Work in pairs. Use the phrases in 2a to talk about people you know.');
+        expect(slide.referenceContent.model).toBe('Do you know anyone who travels a lot for work? Where do they go?');
+        // Cues resueltos legítimamente a partir del banco de 2a
+        expect(slide.referenceContent.cues).toBeDefined();
+        expect(slide.referenceContent.cues).toContain('travels a lot for work');
+        expect(slide.referenceContent.cues).toContain('works outdoors');
+        expect(slide.referenceContent.cues).toContain('works in a hospital');
+      }
+      expect(slide.metadata?.diagnostics?.resolvedFromPreviousContext).toBe(true);
     });
   });
 });

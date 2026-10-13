@@ -462,7 +462,16 @@ export const STRUCTURED_SLIDE_SCHEMA = {
                 enum: ['reading', 'grammar_note', 'instructions', 'dialogue'],
                 description: 'Category of reference text.'
               },
-              instruction: { type: 'string', description: 'Instruction for reference table if applicable' },
+              instruction: { type: 'string', description: 'Instruction for reference table or oral activity if applicable' },
+              model: {
+                type: 'string',
+                description: 'For speaking / communicative tasks: the model sentence, speech frame or question pattern provided in the clipping (verbatim, e.g. "Do you know anyone who travels a lot for work? Where do they go?"). Strictly forbidden to paraphrase or generate synthetic prose.'
+              },
+              cues: {
+                type: 'array',
+                items: { type: 'string' },
+                description: 'For speaking / communicative tasks: discrete list of lexical cues, prompts, or target phrases to be used in the oral exchange.'
+              },
               columns: {
                 type: 'array',
                 items: {
@@ -1555,6 +1564,14 @@ export function validateAndParseSlides(
           const cleanPrompt = (writing.prompt || '').trim();
           const hasPrompt = cleanPrompt && !cleanInst.includes(cleanPrompt);
 
+          // Extraer cues si venían como guidelines discretos en el bloque crudo
+          let initialCues: string[] = [];
+          if (Array.isArray(writing.guidelines) && writing.guidelines.length > 0) {
+            initialCues = writing.guidelines
+              .map((g: any) => typeof g === 'string' ? g.trim() : '')
+              .filter((g: string) => g.length > 0 && !isSyntheticPedagogicalText(g) && !/^(?:use\s+phrases|ask\s+follow|take\s+turns|work\s+in)/i.test(g));
+          }
+
           const cardContent = hasPrompt
             ? `${cleanInst}\n\n${cleanPrompt}`
             : cleanInst;
@@ -1564,6 +1581,9 @@ export function validateAndParseSlides(
             type: 'text',
             category: 'dialogue',
             title: rawSlide.title || 'Speaking / Pairwork',
+            instruction: cleanInst,
+            model: hasPrompt ? cleanPrompt : undefined,
+            cues: initialCues.length > 0 ? initialCues : undefined,
             content: cardContent,
             body: cardContent,
           };
@@ -2147,7 +2167,7 @@ export function validateAndParseSlides(
     }
 
     // Observabilidad y Diagnóstico de Contexto Faltante / Resolución de Referencias
-    const textToScan = `${rawSlide.title || ''} ${rawSlide.subtitle || ''} ${(rawSlide.interaction as any)?.instruction || ''}`.trim();
+    const textToScan = `${rawSlide.title || ''} ${rawSlide.subtitle || ''} ${(rawSlide.interaction as any)?.instruction || ''} ${(rawSlide.referenceContent as any)?.instruction || ''} ${(rawSlide.referenceContent as any)?.content || ''}`.trim();
     const crossRef = detectCrossActivityReference(textToScan);
     const effectiveContext = (idx > 0 && validatedSlides[idx - 1]) ? validatedSlides[idx - 1] : (previousSlideContext || null);
 
@@ -2155,6 +2175,15 @@ export function validateAndParseSlides(
       if (effectiveContext) {
         // Grounding legítimo con contexto previo
         const extracted = extractItemsFromSlideContext(effectiveContext);
+
+        if (rawSlide.referenceContent && rawSlide.referenceContent.type === 'text' && rawSlide.referenceContent.category === 'dialogue') {
+          if (!Array.isArray(rawSlide.referenceContent.cues) || rawSlide.referenceContent.cues.length === 0) {
+            const candidatePool = extracted.phrases.length > 0 ? extracted.phrases : extracted.words;
+            if (candidatePool.length > 0) {
+              rawSlide.referenceContent.cues = candidatePool.slice(0, 12);
+            }
+          }
+        }
 
         if (rawSlide.interaction && rawSlide.interaction.type === 'input_fields') {
           if (!Array.isArray(rawSlide.interaction.wordBank) || rawSlide.interaction.wordBank.length === 0) {
@@ -2187,8 +2216,9 @@ export function validateAndParseSlides(
         };
       } else {
         // Contexto no disponible: emitir advertencia estructurada y diagnóstico formal
+        const activityLabel = rawSlide.title || (rawSlide.interaction as any)?.instruction || (rawSlide.referenceContent as any)?.instruction || '';
         console.warn(
-          `[digitizeBook] Actividad con referencia cruzada sin diapositiva previa suministrada: "${crossRef}" en "${rawSlide.title || (rawSlide.interaction as any)?.instruction || ''}"`
+          `[digitizeBook] Actividad con referencia cruzada sin diapositiva previa suministrada: "${crossRef}" en "${activityLabel}"`
         );
         rawSlide.metadata = {
           ...(rawSlide.metadata || {}),
