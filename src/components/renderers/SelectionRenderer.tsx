@@ -678,15 +678,14 @@ export const SelectionRenderer: React.FC<Props> = ({
                   </>
                 ) : isCompactPillMode ? (
                   /* COMPACT PILL MODE: Contiguous to anchor node */
-                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-                    <div className="flex items-center gap-2">
-                      <p className="text-sm font-semibold text-slate-800 leading-relaxed">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-start gap-3 sm:gap-4">
+                    <div className="font-semibold text-slate-800 shrink-0 min-w-[3.5rem] flex items-center gap-2">
+                      <span className="text-sm leading-relaxed">
                         {renderedStatement}
-                      </p>
-                      {evaluationBadge}
+                      </span>
                     </div>
 
-                    <div className="inline-flex flex-wrap items-center gap-2 shrink-0">
+                    <div className="inline-flex flex-wrap items-center gap-2">
                       {optionsList.map((opt) => {
                         const isSingle = q.mode === 'single_choice' && !q.allowMultiple && !block.allowMultiple;
                         const isSelected = isSingle
@@ -747,6 +746,12 @@ export const SelectionRenderer: React.FC<Props> = ({
                         );
                       })}
                     </div>
+
+                    {evaluationBadge && (
+                      <div className="sm:ml-auto shrink-0">
+                        {evaluationBadge}
+                      </div>
+                    )}
                   </div>
                 ) : (
                   /* STANDARD / FULL-WIDTH CARDS MODE (Oraciones o sintagmas extensos) */
