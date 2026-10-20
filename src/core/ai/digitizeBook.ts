@@ -741,6 +741,58 @@ export class SchemaValidationError extends Error {
 }
 
 /**
+ * Normaliza y preserva marcadores de posición canónicos en textos de lectura o referencia
+ * (e.g. superscripts ¹, ², números de hueco [1], [ 1 ], o anclas numéricas al inicio de párrafo)
+ * asegurando el formato canónico visible '[ 1 ]', '[ 2 ]', '[ 3 ]' y prohibiendo su purga.
+ */
+export function canonicalizeReferencePositionMarkers(text: string): string {
+  if (!text || typeof text !== 'string') return '';
+
+  let normalized = text;
+
+  // 1. Superscripts ¹ ² ³ ⁴ ⁵ ⁶ ⁷ ⁸ ⁹ ¹⁰ -> [ 1 ], [ 2 ], etc.
+  const superscriptMap: Record<string, string> = {
+    '¹': '[ 1 ]',
+    '²': '[ 2 ]',
+    '³': '[ 3 ]',
+    '⁴': '[ 4 ]',
+    '⁵': '[ 5 ]',
+    '⁶': '[ 6 ]',
+    '⁷': '[ 7 ]',
+    '⁸': '[ 8 ]',
+    '⁹': '[ 9 ]',
+    '¹⁰': '[ 10 ]',
+  };
+  normalized = normalized.replace(/[¹²³⁴⁵⁶⁷⁸⁹]|¹⁰/g, (m) => superscriptMap[m] || m);
+
+  // 2. Circled digits ① ② ③ ④ ⑤ ⑥ ⑦ ⑧ ⑨ ⑩ -> [ 1 ], [ 2 ], etc.
+  const circledMap: Record<string, string> = {
+    '①': '[ 1 ]', '②': '[ 2 ]', '③': '[ 3 ]', '④': '[ 4 ]', '⑤': '[ 5 ]',
+    '⑥': '[ 6 ]', '⑦': '[ 7 ]', '⑧': '[ 8 ]', '⑨': '[ 9 ]', '⑩': '[ 10 ]',
+  };
+  normalized = normalized.replace(/[①②③④⑤⑥⑦⑧⑨⑩]/g, (m) => circledMap[m] || m);
+
+  // 3. Brackets con números: [1], [ 1 ], [  1  ] -> [ 1 ]
+  normalized = normalized.replace(/\[\s*(\d{1,2})\s*\]/g, '[ $1 ]');
+
+  // 4. Marcadores de plantilla tipo {{1}}, [blank 1], [gap 1] -> [ 1 ]
+  normalized = normalized.replace(/\{\{\s*(\d{1,2})\s*\}\}/g, '[ $1 ]');
+  normalized = normalized.replace(/\[\s*(?:blank|gap)\s*(\d{1,2})\s*\]/gi, '[ $1 ]');
+
+  // 5. Huecos numéricos al inicio de párrafo o diálogo: e.g. "(1) " o "1 ___" al inicio de línea
+  normalized = normalized.replace(/(?:^|\n\n?)\s*\((\d{1,2})\)\s+/g, (match, d) => {
+    const prefix = match.startsWith('\n\n') ? '\n\n' : match.startsWith('\n') ? '\n' : '';
+    return `${prefix}[ ${d} ] `;
+  });
+  normalized = normalized.replace(/(?:^|\n\n?)\s*(\d{1,2})\s*_{2,}\s*/g, (match, d) => {
+    const prefix = match.startsWith('\n\n') ? '\n\n' : match.startsWith('\n') ? '\n' : '';
+    return `${prefix}[ ${d} ] `;
+  });
+
+  return normalized;
+}
+
+/**
  * Sanitizes referenceContent prior to SlideSchema validation.
  * Normalizes listening tracks, media types, and missing URLs, or removes invalid blocks
  * cleanly to prevent fatal rejection of the slide.
@@ -832,6 +884,14 @@ export function sanitizeReferenceContent(rawRef: any, idx: number): any {
       } else {
         return null;
       }
+    }
+
+    // Preservación y normalización canónica de marcadores de posición [ 1 ], [ 2 ], etc.
+    if (typeof ref.content === 'string') {
+      ref.content = canonicalizeReferencePositionMarkers(ref.content);
+    }
+    if (typeof ref.body === 'string') {
+      ref.body = canonicalizeReferencePositionMarkers(ref.body);
     }
     if (!ref.category || !['reading', 'grammar_note', 'instructions', 'dialogue'].includes(ref.category)) {
       if (ref.category === 'grammar_reference' || ref.category === 'grammar_rules' || ref.category === 'theory') {
@@ -968,22 +1028,34 @@ export function isolateCanonicalInstruction(text?: string): string {
   let trimmed = text.trim();
   if (!trimmed) return '';
 
+  // Proteger rangos numéricos y alfabéticos unidos por guion, guion corto, en-dash o 'to' (e.g. '1–5', '1-5', '1 to 5', 'A–D', 'a–d')
+  // para evitar que la presencia de dígitos con guion sea interpretada como inicio de ítem filtrado o genere un truncamiento con ':'
+  const preservedRanges: string[] = [];
+  const rangeRegex = /\b(?:\d+\s*(?:[-–—]|\bto\b)\s*\d+|[a-zA-Z]\s*(?:[-–—]|\bto\b)\s*[a-zA-Z])\b/g;
+  const protectedText = trimmed.replace(rangeRegex, (match) => {
+    preservedRanges.push(match);
+    return `__RANGE_MARKER_${preservedRanges.length - 1}__`;
+  });
+
+  const restoreRanges = (s: string) =>
+    s.replace(/__RANGE_MARKER_(\d+)__/g, (_, idx) => preservedRanges[Number(idx)] || '');
+
   // Has child items / delimiters signature
   const hasChildLeak =
     /[\/]|(?:^|\s+)(?:\b\d+[.)]|\(\d+\)|\bitem\s*\d+\b)\s+.*?(?:[\/]|(?:\b\d+[.)]|\(\d+\)|\bitem\s*\d+\b)\s+)|_{2,}|\{\{\s*blank\s*\}\}|\[\s*(?:blank|\?)\s*\]|[:–—]\s*(?:\b\d+[.)]|\(\d+\)|_{2,}|\{\{)/i.test(
-      trimmed
+      protectedText
     );
   if (!hasChildLeak) return trimmed;
 
   // 1. Pure leaked item without directive (e.g. "1. work in a school / an office / a receptionist")
-  if (/^(?:\(?\d+[.)]?\s*|[a-z][.)]\s*)(?:.*?\s*\/\s*.*)$/i.test(trimmed)) {
+  if (/^(?:\(?\d+[.)]?\s*|[a-z][.)]\s*)(?:.*?\s*\/\s*.*)$/i.test(protectedText)) {
     return '';
   }
 
   // 2. Directive followed by colon/dash and slash breakdown or numbered item
-  const colonMatch = trimmed.match(/^([^:\n]+?)\s*[:–—]\s*(.*)$/);
+  const colonMatch = protectedText.match(/^([^:\n]+?)\s*[:–—]\s*(.*)$/);
   if (colonMatch && colonMatch[1].trim().length >= 5) {
-    const candidateDirective = colonMatch[1].trim();
+    const candidateDirective = restoreRanges(colonMatch[1].trim());
     const rest = colonMatch[2].trim();
     if (/[\/]|\b\d+[.)]|\(\d+\)|_{2,}|\{\{\s*blank/i.test(rest)) {
       return candidateDirective.endsWith(':') ? candidateDirective : `${candidateDirective}:`;
@@ -991,11 +1063,11 @@ export function isolateCanonicalInstruction(text?: string): string {
   }
 
   // 3. Directive followed by numbered item e.g. "Choose the correct words. 1. Yesterday I was / were..."
-  const numMatch = trimmed.match(
+  const numMatch = protectedText.match(
     /^([\s\S]+?)(?:\s*(?:[:;–—\n]\s*|\.\s+)(?:\(?\d+[.)]|\b\d+[:.-]|\bitem\s*\d+)\s+|\s+(?:\(?\d+[.)]|\b\d+[:.-])\s+[a-zA-Z])/i
   );
   if (numMatch && numMatch[1].trim().length >= 5) {
-    const candidateDirective = numMatch[1].trim();
+    const candidateDirective = restoreRanges(numMatch[1].trim());
     if (trimmed.includes(':') && !candidateDirective.endsWith(':') && !candidateDirective.endsWith('.')) {
       return `${candidateDirective}:`;
     }
@@ -1005,9 +1077,9 @@ export function isolateCanonicalInstruction(text?: string): string {
   }
 
   // 4. Directive sentence followed by slash tokens
-  const sentenceSlashMatch = trimmed.match(/^([^.?!]+[.?!])\s+(?:.*?\s*\/\s*.*)$/);
+  const sentenceSlashMatch = protectedText.match(/^([^.?!]+[.?!])\s+(?:.*?\s*\/\s*.*)$/);
   if (sentenceSlashMatch && sentenceSlashMatch[1].trim().length >= 5) {
-    return sentenceSlashMatch[1].trim();
+    return restoreRanges(sentenceSlashMatch[1].trim());
   }
 
   return trimmed;
@@ -1664,6 +1736,35 @@ export function decoupleWordBankTokensAndPreserveContext(
   slide.interaction.listItems.forEach((item: any, idx: number) => {
     if (!item || typeof item !== 'object') return;
     if (isSentenceScrambleReactive(item.prompt || '', fullHeader)) return;
+
+    // Si el reactivo es un ejemplo resuelto (isExample: true), no desacoplar tokens del banco:
+    // El prompt debe ser el ordinal canónico ('1.') y expectedAnswer la estructura completa resuelta
+    // si la respuesta ya contiene la estructura completa
+    if (item.isExample) {
+      const ordMatch = (item.prompt || '').trim().match(/^(\(?\d+[.)]?)/);
+      const canonicalOrdinal = ordMatch
+        ? (ordMatch[1].replace(/[()]/g, '').endsWith('.') ? ordMatch[1].replace(/[()]/g, '') : `${ordMatch[1].replace(/[()]/g, '')}.`)
+        : `${idx + 1}.`;
+      const expected = (item.expectedAnswer || '').trim();
+      const rawPromptWithoutOrd = String(item.prompt || '').trim().replace(/^(\(?\d+[.)]?\s*)/, '').trim();
+      const isCompleteStructure =
+        Boolean(expected) &&
+        (
+          expected.split(/\s+/).length >= 3 ||
+          expected.includes('?') ||
+          /^\s*(?:\(?\d+[.)]?|[a-z][.)])?\s*$/i.test(item.prompt || '') ||
+          (Boolean(rawPromptWithoutOrd) && (
+            expected.toLowerCase() === rawPromptWithoutOrd.toLowerCase() ||
+            expected.toLowerCase().includes(rawPromptWithoutOrd.toLowerCase()) ||
+            rawPromptWithoutOrd.toLowerCase().includes(expected.toLowerCase())
+          ))
+        );
+
+      if (isCompleteStructure) {
+        item.prompt = canonicalOrdinal;
+      }
+      return;
+    }
 
     let currentPrompt = cleanInputBlankMarkers(item.prompt || '');
     let expected = (item.expectedAnswer || '').trim();
@@ -2920,17 +3021,59 @@ export function validateAndParseSlides(
 
         if (Array.isArray(rawSlide.interaction.listItems)) {
           const fullHeader = `${rawSlide.title || ''} ${rawSlide.subtitle || ''} ${rawSlide.interaction.instruction || ''}`;
-          for (const item of rawSlide.interaction.listItems) {
+          for (let itemIdx = 0; itemIdx < rawSlide.interaction.listItems.length; itemIdx++) {
+            const item = rawSlide.interaction.listItems[itemIdx];
             if (item && typeof item === 'object') {
-              if (item.prompt) {
-                if (isSentenceScrambleReactive(item.prompt, fullHeader)) {
-                  item.prompt = item.prompt.replace(/_{2,}|\[\s*(?:blank|\?)\s*\]|\{\{\s*blank\s*\}\}/gi, '').trim();
+              if (item.isExample) {
+                // Normalización de Ejemplos Resueltos en input_fields (isExample: true):
+                // 'prompt' debe contener únicamente el prefijo u ordinal canónico ('1.') y 'expectedAnswer' la oración completa resuelta
+                // si la respuesta ya contiene la estructura completa o el prompt ya es solo un ordinal
+                const ordMatch = String(item.prompt || '').trim().match(/^(\(?\d+[.)]?)/);
+                const canonicalOrdinal = ordMatch
+                  ? (ordMatch[1].replace(/[()]/g, '').endsWith('.') ? ordMatch[1].replace(/[()]/g, '') : `${ordMatch[1].replace(/[()]/g, '')}.`)
+                  : `${itemIdx + 1}.`;
+
+                const expected = (item.expectedAnswer || '').trim();
+                const rawPromptWithoutOrd = String(item.prompt || '').trim().replace(/^(\(?\d+[.)]?\s*)/, '').trim();
+
+                const isCompleteStructure =
+                  Boolean(expected) &&
+                  (
+                    expected.split(/\s+/).length >= 3 ||
+                    expected.includes('?') ||
+                    /^\s*(?:\(?\d+[.)]?|[a-z][.)])?\s*$/i.test(item.prompt || '') ||
+                    (Boolean(rawPromptWithoutOrd) && (
+                      expected.toLowerCase() === rawPromptWithoutOrd.toLowerCase() ||
+                      expected.toLowerCase().includes(rawPromptWithoutOrd.toLowerCase()) ||
+                      rawPromptWithoutOrd.toLowerCase().includes(expected.toLowerCase())
+                    ))
+                  );
+
+                if (isCompleteStructure) {
+                  item.prompt = canonicalOrdinal;
+                  item.expectedAnswer = cleanTokenString(expected);
                 } else {
-                  item.prompt = cleanInputBlankMarkers(item.prompt);
+                  if (item.prompt) {
+                    item.prompt = cleanInputBlankMarkers(item.prompt);
+                  }
+                  if (item.expectedAnswer) {
+                    item.expectedAnswer = cleanTokenString(item.expectedAnswer);
+                  }
+                }
+              } else {
+                if (item.prompt) {
+                  if (isSentenceScrambleReactive(item.prompt, fullHeader)) {
+                    item.prompt = item.prompt.replace(/_{2,}|\[\s*(?:blank|\?)\s*\]|\{\{\s*blank\s*\}\}/gi, '').trim();
+                  } else {
+                    item.prompt = cleanInputBlankMarkers(item.prompt);
+                  }
+                }
+                if (item.expectedAnswer) {
+                  item.expectedAnswer = cleanTokenString(item.expectedAnswer);
                 }
               }
+
               if (item.expectedAnswer) {
-                item.expectedAnswer = cleanTokenString(item.expectedAnswer);
                 if (!Array.isArray(item.acceptedAnswers) || item.acceptedAnswers.length === 0) {
                   item.acceptedAnswers = [item.expectedAnswer];
                 } else {
@@ -3619,10 +3762,17 @@ CANONICAL ARCHETYPES:
      * Si existe evidencia física de audio asociada a un ejercicio de práctica o autoverificación: DEBE mapearse exclusivamente como metadato del ejercicio ('interaction.verificationAudioUrl' y 'interaction.audioLabel').
      * Bajo NINGUNA circunstancia un audio de ejercicio interactivo debe registrarse como 'referenceContent' ni activar 'split_50_50'. En tales casos, 'referenceContent' DEBE ser estrictamente null y el layout 'single_column'.
      * 'referenceContent' de tipo 'media' (audio) se reserva ÚNICAMENTE para audios de comprensión/escucha pasiva autónoma sin reactivos interactivos (interaction: null, isGraded: false).
+   - PRESERVACIÓN OBLIGATORIA DE MARCADORES DE POSICIÓN / ANCLAS DE INSERCIÓN:
+     * En textos de lectura, artículos o diálogos que contengan números de inserción de huecos (e.g. números volados/superscripts ¹, ², números de reactivo 1, 2, 3... al inicio de párrafos, encabezados de sección o dentro del flujo de lectura):
+       - Preservar OBLIGATORIAMENTE la marca posicional dentro del texto en formato canónico visible: '[ 1 ]', '[ 2 ]', '[ 3 ]', etc.
+       - Queda estrictamente PROHIBIDO purgar, omitir o eliminar estos dígitos del cuerpo de lectura ('referenceContent.content' / 'referenceContent.body') cuando representen anclas de inserción para los reactivos interactivos.
    - STRICT FIDELITY: Strictly transcribe literal text. NEVER generate synthetic summaries or pedagogical explanations.
 
 2. "interaction" (Active evaluated exercise):
    - "input_fields": For fill-in-the-blanks, Cloze sentences, or 2D fill-in grids (layoutMode: "table").
+     * NORMALIZACIÓN DE EJEMPLOS RESUELTOS (isExample: true):
+       - Evitar recortar o truncar sintagmas del prompt si la respuesta ya contiene la estructura completa.
+       - 'prompt' debe contener únicamente el prefijo u ordinal canónico ('1.') y 'expectedAnswer' la oración completa resuelta, renderizándose como bloque cerrado de lectura de modelo.
      * STRICT PROHIBITION AGAINST DEGRADING CLOSED SELECTION: It is STRICTLY FORBIDDEN to degrade closed-selection exercises (e.g. options separated by slashes "was / were", bold contrasting words, or instructions like "Circle/Choose the correct word/number") into free-text input fields ("input_fields"). Never fragment sentences artificially or force the student to type what they were only meant to select!
      * MISSING LETTERS / VOWELS EXERCISES (e.g. "Write the vowels", "Fill in the missing letters"):
        - NO MICROSCOPIC LETTER FRAGMENTATION: DO NOT fragment words into multiple tiny single-letter inputs (e.g. NEVER generate separate inputs for each missing letter in "v_ll_yb_ll"). Each interactive input field MUST correspond to the whole completed word that the student writes (expectedAnswer: "volleyball"). The prompt or prefix can show the partial word pattern (e.g. "v_ll_yb_ll").
@@ -4567,14 +4717,41 @@ function sanitizeExtractedPayload(payload: ExtractedStructuredPayload): Extracte
     const rawPrompt = stripOrphanTypographicalMarkers(String(it.prompt || '').trim());
     const explanation = stripOrphanTypographicalMarkers(String(it.explanation || '').trim());
     const isPureNumber = /^(?:item\s*)?\d+[.)]?$/i.test(rawPrompt) || rawPrompt === '';
+    const isExample = Boolean(it.isExample);
     
     let prompt = (isPureNumber && explanation)
       ? (rawPrompt ? `${rawPrompt} _______ : ${explanation}` : `${idx + 1}. _______ : ${explanation}`)
       : (rawPrompt || `Item ${idx + 1}`);
+
+    if (isExample) {
+      const ordMatch = rawPrompt.match(/^(\(?\d+[.)]?)/);
+      const canonicalOrdinal = ordMatch
+        ? (ordMatch[1].replace(/[()]/g, '').endsWith('.') ? ordMatch[1].replace(/[()]/g, '') : `${ordMatch[1].replace(/[()]/g, '')}.`)
+        : `${idx + 1}.`;
+      const rawPromptWithoutOrd = rawPrompt.replace(/^(\(?\d+[.)]?\s*)/, '').trim();
+      const expected = stripOrphanTypographicalMarkers(String(it.expectedAnswer || '').trim());
+      const isCompleteStructure =
+        Boolean(expected) &&
+        (
+          expected.split(/\s+/).length >= 3 ||
+          expected.includes('?') ||
+          /^\s*(?:\(?\d+[.)]?|[a-z][.)])?\s*$/i.test(rawPrompt) ||
+          (Boolean(rawPromptWithoutOrd) && (
+            expected.toLowerCase() === rawPromptWithoutOrd.toLowerCase() ||
+            expected.toLowerCase().includes(rawPromptWithoutOrd.toLowerCase()) ||
+            rawPromptWithoutOrd.toLowerCase().includes(expected.toLowerCase())
+          ))
+        );
+
+      if (isCompleteStructure) {
+        prompt = canonicalOrdinal;
+      }
+    }
+
     const expectedAnswer = stripOrphanTypographicalMarkers(String(it.expectedAnswer || '').trim()) || (isOpenProductionTask ? '' : `Respuesta ${idx + 1}`);
 
     // If this is an identification task ("Underline / Circle / Identify"), restore full intact sentence if blank was created
-    if (isIdentifyDirective && /_{2,}/.test(prompt) && expectedAnswer) {
+    if (isIdentifyDirective && /_{2,}/.test(prompt) && expectedAnswer && !isExample) {
       prompt = prompt.replace(/_{2,}/g, expectedAnswer);
     }
 
@@ -4602,7 +4779,7 @@ function sanitizeExtractedPayload(payload: ExtractedStructuredPayload): Extracte
       prompt,
       expectedAnswer,
       acceptedAnswers,
-      isExample: Boolean(it.isExample),
+      isExample,
       explanation: String(it.explanation || '').trim(),
       options: itemOptions,
     };

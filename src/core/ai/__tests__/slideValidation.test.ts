@@ -11,6 +11,7 @@ import {
   buildExtractionPrompt,
   detectCrossActivityReference,
   formatPreviousSlideContext,
+  canonicalizeReferencePositionMarkers,
 } from '../digitizeBook';
 
 describe('slideValidation - Direct Schema & Architectural Invariant Tests', () => {
@@ -3606,6 +3607,200 @@ describe('slideValidation - Direct Schema & Architectural Invariant Tests', () =
         // Nodo ancla limpio sin marcador de hueco
         const sel = slide.interaction as any;
         expect(sel.questions[0].prompt).toBe('1. work in:');
+      });
+    });
+  });
+
+  // =========================================================================
+  // CASO E: Integridad Textual, Marcadores de Posición en referenceContent y Ejemplos Resueltos
+  // =========================================================================
+  describe('Caso E: Integridad Textual, Marcadores de Posición y Ejemplos Resueltos', () => {
+    describe('1. Preservación de Marcadores de Posición en referenceContent', () => {
+      it('canonicaliza superscripts, números entre corchetes y anclas de inserción a formato visible "[ 1 ]", "[ 2 ]"', () => {
+        const inputWithSuperscripts = 'Paragraph 1¹ has info. Paragraph 2² has more. Paragraph 3³ concludes.';
+        const result1 = canonicalizeReferencePositionMarkers(inputWithSuperscripts);
+        expect(result1).toContain('[ 1 ]');
+        expect(result1).toContain('[ 2 ]');
+        expect(result1).toContain('[ 3 ]');
+
+        const inputWithBrackets = 'First section [1] and second section [ 2 ] and third [  3  ].';
+        const result2 = canonicalizeReferencePositionMarkers(inputWithBrackets);
+        expect(result2).toContain('[ 1 ]');
+        expect(result2).toContain('[ 2 ]');
+        expect(result2).toContain('[ 3 ]');
+
+        const inputWithCircled = 'Step ① is crucial. Step ② follows.';
+        const result3 = canonicalizeReferencePositionMarkers(inputWithCircled);
+        expect(result3).toContain('[ 1 ]');
+        expect(result3).toContain('[ 2 ]');
+
+        const inputParagraphAnchors = '(1) In recent years, researchers discovered...\n\n(2) Furthermore, another aspect...';
+        const result4 = canonicalizeReferencePositionMarkers(inputParagraphAnchors);
+        expect(result4).toContain('[ 1 ] In recent years');
+        expect(result4).toContain('[ 2 ] Furthermore');
+      });
+
+      it('prohíbe purgar anclas de inserción en el cuerpo de lectura de referenceContent en validateAndParseSlides', () => {
+        const rawJson = JSON.stringify({
+          slides: [
+            {
+              id: 'slide-reading-anchors',
+              title: 'Reading: Technology and Daily Life',
+              subtitle: 'Read the article and write a question from 2 in the correct places 1–5.',
+              layout: 'split_50_50',
+              referenceContent: {
+                id: 'ref-article-1',
+                type: 'text',
+                category: 'reading',
+                title: 'The Future of AI',
+                content: '[ 1 ] Many people wonder about the future of artificial intelligence in education.\n\n[ 2 ] Scientists are now developing conversational tutors that adapt to each student.\n\n[ 3 ] However, ethical considerations remain paramount for educators worldwide.\n\n[ 4 ] Finally, collaborative classrooms are blending digital tools with human guidance.\n\n[ 5 ] What do you think about this revolution?',
+                body: '[ 1 ] Many people wonder about the future of artificial intelligence in education.\n\n[ 2 ] Scientists are now developing conversational tutors that adapt to each student.\n\n[ 3 ] However, ethical considerations remain paramount for educators worldwide.\n\n[ 4 ] Finally, collaborative classrooms are blending digital tools with human guidance.\n\n[ 5 ] What do you think about this revolution?'
+              },
+              interaction: {
+                id: 'int-q-match',
+                type: 'input_fields',
+                instruction: 'Write the matching question in places 1–5:',
+                listItems: [
+                  { id: 'item-1', prompt: '1.', expectedAnswer: 'How does AI affect students?', isExample: false },
+                  { id: 'item-2', prompt: '2.', expectedAnswer: 'Who is developing the tutors?', isExample: false }
+                ]
+              }
+            }
+          ]
+        });
+
+        const slides = validateAndParseSlides(rawJson);
+        expect(slides).toHaveLength(1);
+        const ref = slides[0].referenceContent as any;
+        expect(ref).not.toBeNull();
+        expect(ref.type).toBe('text');
+        expect(ref.content).toContain('[ 1 ]');
+        expect(ref.content).toContain('[ 2 ]');
+        expect(ref.content).toContain('[ 3 ]');
+        expect(ref.content).toContain('[ 4 ]');
+        expect(ref.content).toContain('[ 5 ]');
+      });
+    });
+
+    describe('2. Ajuste de isolateCanonicalInstruction para Rangos Numéricos', () => {
+      it('preserva la consigna completa ante rangos numéricos con en-dash (1–5) sin truncamientos ni colon espurio', () => {
+        const directive = 'Read the article and write a question from 2 in the correct places 1–5.';
+        const clean = isolateCanonicalInstruction(directive);
+        expect(clean).toBe('Read the article and write a question from 2 in the correct places 1–5.');
+      });
+
+      it('preserva la consigna completa ante rangos numéricos con guion corto regular (1-5)', () => {
+        const directive = 'Read the article and write a question from 2 in the correct places 1-5.';
+        const clean = isolateCanonicalInstruction(directive);
+        expect(clean).toBe('Read the article and write a question from 2 in the correct places 1-5.');
+      });
+
+      it('preserva rangos con "to" y rangos de letras (1 to 5, A–D)', () => {
+        const directive = 'Match the headings 1 to 5 with paragraphs A–D.';
+        const clean = isolateCanonicalInstruction(directive);
+        expect(clean).toBe('Match the headings 1 to 5 with paragraphs A–D.');
+      });
+
+      it('aísla limpiamente la consigna con rango cuando contiene fuga posterior con dos puntos e ítems hijos', () => {
+        const directiveWithLeak = 'Complete the sentences 1–5 with words from the box: 1. She is an engineer / doctor / nurse';
+        const clean = isolateCanonicalInstruction(directiveWithLeak);
+        expect(clean).toBe('Complete the sentences 1–5 with words from the box:');
+      });
+    });
+
+    describe('3. Normalización de Ejemplos Resueltos en input_fields (isExample: true)', () => {
+      it('normaliza prompt a ordinal canónico y expectedAnswer a estructura completa resuelta sin truncar sintagmas', () => {
+        const rawJson = JSON.stringify({
+          slides: [
+            {
+              id: 'slide-ex-1',
+              title: 'Grammar: Question Formation',
+              subtitle: 'Write complete questions for each situation.',
+              layout: 'single_column',
+              referenceContent: null,
+              interaction: {
+                id: 'int-questions',
+                type: 'input_fields',
+                instruction: 'Write the complete questions:',
+                listItems: [
+                  {
+                    id: 'it-1',
+                    prompt: '1. Where do you live?',
+                    expectedAnswer: 'Where do you live?',
+                    isExample: true
+                  },
+                  {
+                    id: 'it-2',
+                    prompt: '2. What / your name / ?',
+                    expectedAnswer: 'What is your name?',
+                    isExample: false
+                  }
+                ]
+              }
+            }
+          ]
+        });
+
+        const slides = validateAndParseSlides(rawJson);
+        expect(slides).toHaveLength(1);
+        const items = (slides[0].interaction as any).listItems;
+
+        // El reactivo de ejemplo debe tener como prompt únicamente el ordinal canónico ('1.')
+        expect(items[0].isExample).toBe(true);
+        expect(items[0].prompt).toBe('1.');
+        expect(items[0].expectedAnswer).toBe('Where do you live?');
+
+        // El ítem no-ejemplo mantiene su prompt para interactuar
+        expect(items[1].isExample).toBe(false);
+        expect(items[1].prompt).toBe('2. What / your name / ?');
+        expect(items[1].expectedAnswer).toBe('What is your name?');
+      });
+
+      it('evita desacoplar tokens del wordBank en reactivos con isExample: true preservando la respuesta modelo intacta', () => {
+        const rawJson = JSON.stringify({
+          slides: [
+            {
+              id: 'slide-wb-ex',
+              title: 'Phrasal Verbs with Word Bank',
+              subtitle: 'Complete the sentences with verbs from the box.',
+              layout: 'single_column',
+              referenceContent: null,
+              interaction: {
+                id: 'int-phrasal',
+                type: 'input_fields',
+                instruction: 'Complete the sentences:',
+                wordBank: ['tidy', 'look', 'switch', 'wake'],
+                listItems: [
+                  {
+                    id: 'it-1',
+                    prompt: '1.',
+                    expectedAnswer: 'tidy up',
+                    isExample: true
+                  },
+                  {
+                    id: 'it-2',
+                    prompt: '2. Can you please {{blank}} after the cat?',
+                    expectedAnswer: 'look after',
+                    isExample: false
+                  }
+                ]
+              }
+            }
+          ]
+        });
+
+        const slides = validateAndParseSlides(rawJson);
+        const items = (slides[0].interaction as any).listItems;
+
+        // El ejemplo NO fue truncado a solo "tidy"
+        expect(items[0].isExample).toBe(true);
+        expect(items[0].prompt).toBe('1.');
+        expect(items[0].expectedAnswer).toBe('tidy up');
+
+        // El reactivo interactivo sí desacopló el token correspondiente del banco
+        expect(items[1].isExample).toBe(false);
+        expect(items[1].expectedAnswer).toBe('look');
+        expect(items[1].prompt).toContain('after');
       });
     });
   });

@@ -835,6 +835,42 @@ export const InputFieldsRenderer: React.FC<Props> = ({
                     </div>
                   </div>
                 </div>
+              ) : item.isExample ? (
+                /* BLOQUE CERRADO DE LECTURA DE MODELO (SOLVED EXAMPLE CARD) */
+                <div className="flex items-start sm:items-center justify-between gap-3 select-text">
+                  <div className="flex items-baseline sm:items-center gap-2.5 flex-1 min-w-0">
+                    <span className="text-sm font-bold text-slate-500 shrink-0 min-w-[1.5rem]">
+                      {(() => {
+                        const m = (item.prompt || '').trim().match(/^(\(?\d+[.)]?)/);
+                        if (m) {
+                          const clean = m[1].replace(/[()]/g, '');
+                          return clean.endsWith('.') ? clean : `${clean}.`;
+                        }
+                        return `${idx + 1}.`;
+                      })()}
+                    </span>
+                    <p className="text-sm sm:text-base font-semibold text-slate-900 leading-relaxed break-words">
+                      {(() => {
+                        const expected = (item.expectedAnswer || item.acceptedAnswers?.[0] || '').trim();
+                        const rawPromptWithoutOrd = (item.prompt || '').trim().replace(/^(\(?\d+[.)]?\s*)/, '').trim();
+                        if (expected && (expected.split(/\s+/).length >= 2 || !rawPromptWithoutOrd || expected.includes(rawPromptWithoutOrd))) {
+                          return expected;
+                        }
+                        if (rawPromptWithoutOrd && !rawPromptWithoutOrd.includes('{{blank}}') && !rawPromptWithoutOrd.includes('___')) {
+                          return rawPromptWithoutOrd;
+                        }
+                        if (rawPromptWithoutOrd && expected) {
+                          return rawPromptWithoutOrd.replace('{{blank}}', expected).replace(/_{2,}/g, expected);
+                        }
+                        return expected || rawPromptWithoutOrd || 'Modelo resuelto';
+                      })()}
+                    </p>
+                  </div>
+                  <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold uppercase tracking-wider bg-slate-200 text-slate-700 border border-slate-300/80 shadow-2xs shrink-0 select-none">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-slate-600" />
+                    <span>Ejemplo</span>
+                  </span>
+                </div>
               ) : (
                 /* PREVIEW / STUDENT MODE */
                 <div className="space-y-2.5">

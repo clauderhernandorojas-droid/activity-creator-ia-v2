@@ -7,11 +7,24 @@ import React from 'react';
 export function renderFormattedMarkdown(text: string): React.ReactNode {
   if (!text) return null;
 
-  // Split by markdown bold (**text** or __text__), inline code (`code`), or italic (*text*)
-  const tokens = text.split(/(\*\*[^*\n]+\*\*|__[^_\n]+__|`[^`\n]+`|\*[^*\n]+\*)/g);
+  // Split by markdown bold (**text** or __text__), inline code (`code`), italic (*text*), or canonical position markers ([ 1 ], [ 2 ], etc.)
+  const tokens = text.split(/(\*\*[^*\n]+\*\*|__[^_\n]+__|`[^`\n]+`|\*[^*\n]+\*|\[\s*\d{1,2}\s*\])/g);
 
   return tokens.map((token, idx) => {
     if (!token) return null;
+
+    // Canonical position markers: [ 1 ], [ 2 ], etc.
+    const posMatch = token.match(/^\[\s*(\d{1,2})\s*\]$/);
+    if (posMatch) {
+      return (
+        <span
+          key={idx}
+          className="inline-flex items-center justify-center px-2 py-0.5 mx-1 font-bold text-xs bg-indigo-100 text-indigo-700 rounded-md border border-indigo-200/90 shadow-2xs select-all align-middle"
+        >
+          [ {posMatch[1]} ]
+        </span>
+      );
+    }
 
     // Bold (**...** or __...__)
     if (
