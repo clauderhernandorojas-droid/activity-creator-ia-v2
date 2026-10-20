@@ -7,6 +7,7 @@ import {
   SchemaValidationError,
   extractDisjunctiveAlternatives,
   cleanSelectionPrompt,
+  isolateCanonicalInstruction,
   buildExtractionPrompt,
   detectCrossActivityReference,
   formatPreviousSlideContext,
@@ -3512,7 +3513,104 @@ describe('slideValidation - Direct Schema & Architectural Invariant Tests', () =
       expect(inputFields.listItems[0].expectedAnswer).toBe('Where were you born?');
     });
   });
+
+  // =========================================================================
+  // CASO D: Invariante de Aislamiento de la Consigna y Nodos Ancla Verbatim
+  // =========================================================================
+  describe('Caso D: Invariante de Aislamiento de la Consigna y Nodos Ancla Verbatim (Selection)', () => {
+    describe('isolateCanonicalInstruction', () => {
+      it('purga reactivos hijos contiguos con delimitadores slash concatenados tras dos puntos', () => {
+        const raw = 'Cross out the incorrect option: 1. work in a school / an office / a receptionist';
+        expect(isolateCanonicalInstruction(raw)).toBe('Cross out the incorrect option:');
+      });
+
+      it('purga reactivos hijos con slash tras oración de directiva canónica', () => {
+        const raw = 'Cross out the incorrect option. 1. work in a school / an office / a receptionist';
+        expect(isolateCanonicalInstruction(raw)).toBe('Cross out the incorrect option.');
+      });
+
+      it('purga listas numeradas concatenadas en la consigna directiva', () => {
+        const raw = 'Complete the sentences: 1. She lives in Madrid. 2. He lives in Paris.';
+        expect(isolateCanonicalInstruction(raw)).toBe('Complete the sentences:');
+      });
+
+      it('elimina strings que son puramente un reactivo hijo filtrado sin directiva rectora', () => {
+        const raw = '1. work in a school / an office / a receptionist';
+        expect(isolateCanonicalInstruction(raw)).toBe('');
+      });
+
+      it('preserva directivas canónicas legítimas sin modificarlas', () => {
+        expect(isolateCanonicalInstruction('Put the verbs from 1 into the correct column.')).toBe(
+          'Put the verbs from 1 into the correct column.'
+        );
+        expect(isolateCanonicalInstruction('Choose the correct words to complete the dialogue:')).toBe(
+          'Choose the correct words to complete the dialogue:'
+        );
+        expect(isolateCanonicalInstruction('Which sentence best summarizes the article?')).toBe(
+          'Which sentence best summarizes the article?'
+        );
+      });
+    });
+
+    describe('cleanSelectionPrompt', () => {
+      it('remueve marcadores sintéticos [ ? ] y [?] de enunciados de selección', () => {
+        expect(cleanSelectionPrompt('1. work in [ ? ]')).toBe('1. work in');
+        expect(cleanSelectionPrompt('2. What time do you wake up? [?]')).toBe('2. What time do you wake up?');
+      });
+
+      it('neutraliza marcadores de hueco al final de nodos ancla o encabezados de opciones', () => {
+        expect(cleanSelectionPrompt('1. work in: {{blank}}')).toBe('1. work in:');
+        expect(cleanSelectionPrompt('work in {{blank}}')).toBe('work in');
+        expect(cleanSelectionPrompt('2. have: [blank]')).toBe('2. have:');
+        expect(cleanSelectionPrompt('3. earn _______')).toBe('3. earn');
+      });
+    });
+
+    describe('validateAndParseSlides - Pipeline Integration', () => {
+      it('purga automáticamente residuos de reactivos hijos en subtitle e interaction.instruction', () => {
+        const rawJson = JSON.stringify({
+          slides: [
+            {
+              id: 'slide-iso-1',
+              title: 'Vocabulary: Jobs & Workplaces',
+              subtitle: 'Cross out the incorrect option: 1. work in a school / an office / a receptionist',
+              layout: 'single_column',
+              interaction: {
+                id: 'int-iso-1',
+                type: 'selection',
+                instruction: 'Cross out the incorrect option: 1. work in a school / an office / a receptionist',
+                questions: [
+                  {
+                    id: 'q-1',
+                    prompt: '1. work in: {{blank}}',
+                    options: [
+                      { id: 'opt-1', text: 'a school', isCorrect: false },
+                      { id: 'opt-2', text: 'an office', isCorrect: false },
+                      { id: 'opt-3', text: 'a receptionist', isCorrect: true }
+                    ]
+                  }
+                ]
+              }
+            }
+          ]
+        });
+
+        const slides = validateAndParseSlides(rawJson);
+        expect(slides).toHaveLength(1);
+        const slide = slides[0];
+
+        // Directiva canónica aislada en subtitle e instruction
+        expect(slide.subtitle).toBe('Cross out the incorrect option:');
+        expect(slide.interaction?.instruction).toBe('Cross out the incorrect option:');
+
+        // Nodo ancla limpio sin marcador de hueco
+        const sel = slide.interaction as any;
+        expect(sel.questions[0].prompt).toBe('1. work in:');
+      });
+    });
+  });
 });
+
 
 
 

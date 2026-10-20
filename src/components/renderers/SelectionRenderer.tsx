@@ -17,6 +17,7 @@ interface Props {
 /**
  * Renders a question statement, replacing blank placeholders (e.g. {{blank}}, [blank], ___)
  * with an interactive filled slot or visual underline, without exposing internal template markers.
+ * Prohibits synthetic markers ('[ ? ]', '[blank]') in anchor nodes / headings.
  */
 const renderQuestionStatement = (rawText: string, selectedText?: string) => {
   if (!rawText) return null;
@@ -24,6 +25,13 @@ const renderQuestionStatement = (rawText: string, selectedText?: string) => {
     return cleanBlankMarkers(rawText);
   }
   const split = splitSentenceAtBlank(rawText);
+  // Neutralización de marcadores de hueco en nodos raíz (Headings):
+  // Si no hay sufijo posterior (el estímulo actúa como ancla o encabezado de opciones),
+  // se renderiza el string verbatim limpio sin inyección de marcadores sintéticos.
+  if (!split.suffix || !split.suffix.trim()) {
+    return cleanBlankMarkers(rawText);
+  }
+
   return (
     <span>
       {split.prefix}
@@ -36,11 +44,9 @@ const renderQuestionStatement = (rawText: string, selectedText?: string) => {
         </span>
       ) : (
         <span
-          className="inline-block border-b-2 border-indigo-300 bg-indigo-50/50 text-indigo-500 font-semibold px-2.5 py-0.5 mx-1 rounded text-xs select-none align-middle"
+          className="inline-block border-b-2 border-slate-300 w-12 mx-1.5 align-middle select-none"
           title="Espacio de selección"
-        >
-          [&nbsp;?&nbsp;]
-        </span>
+        />
       )}
       {split.suffix}
     </span>
@@ -438,10 +444,21 @@ export const SelectionRenderer: React.FC<Props> = ({
               const isGraded = evaluation.isGraded !== false;
               const hasMandatoryCorrect = isGraded && flatOptions.some((o) => o.isCorrect === true);
 
+              const maxFlatOptLength = Math.max(...flatOptions.map((o) => (o.text || '').trim().length), 0);
+              const avgFlatOptLength = flatOptions.length > 0
+                ? flatOptions.reduce((sum, o) => sum + (o.text || '').trim().length, 0) / flatOptions.length
+                : 0;
+              const isCompactFlatPills = flatOptions.length <= 8 && maxFlatOptLength <= 24 && avgFlatOptLength <= 18;
               const isMultiColumn = flatOptions.length >= 4;
 
               return (
-                <div className={`grid grid-cols-1 ${isMultiColumn ? 'md:grid-cols-2' : 'sm:grid-cols-2'} gap-3`}>
+                <div
+                  className={
+                    isCompactFlatPills
+                      ? 'flex flex-wrap items-center gap-2.5'
+                      : `grid grid-cols-1 ${isMultiColumn ? 'md:grid-cols-2' : 'sm:grid-cols-2'} gap-3`
+                  }
+                >
                   {flatOptions.map((opt) => {
                     const isSelected = selectedOptionIds.includes(opt.id);
 
@@ -476,7 +493,11 @@ export const SelectionRenderer: React.FC<Props> = ({
                         type="button"
                         disabled={isEvaluated}
                         onClick={() => toggleFlatStudentSelection(opt.id)}
-                        className={`p-3.5 rounded-2xl border text-left text-sm flex items-center justify-between gap-3 transition-all transform active:scale-95 cursor-pointer ${cardClasses}`}
+                        className={`${
+                          isCompactFlatPills
+                            ? 'px-3.5 py-2 rounded-xl border text-sm font-semibold inline-flex items-center gap-2 transition-all cursor-pointer'
+                            : 'p-3.5 rounded-2xl border text-left text-sm flex items-center justify-between gap-3 transition-all transform active:scale-95 cursor-pointer'
+                        } ${cardClasses}`}
                       >
                         <span className="flex items-center gap-2.5 flex-1 min-w-0">
                           <span
@@ -530,6 +551,41 @@ export const SelectionRenderer: React.FC<Props> = ({
             const isGraded = evaluation.isGraded !== false;
             const isCorrect = isGraded ? evaluation.details[q.id] : true;
 
+            const optionsList = q.options || [];
+            const maxOptionLength = Math.max(...optionsList.map((o) => (o.text || '').trim().length), 0);
+            const avgOptionLength = optionsList.length > 0
+              ? optionsList.reduce((sum, o) => sum + (o.text || '').trim().length, 0) / optionsList.length
+              : 0;
+
+            // Adaptabilidad de Densidad Visual (Responsive Density Layout):
+            // Si la totalidad de las opciones de un grupo presenta una longitud individual reducida (<= 24 chars y prom <= 18),
+            // el contenedor adopta una distribución compacta en línea (inline-flex / pills / chips) contigua al nodo ancla.
+            const isCompactPillMode = !isEditMode && q.mode !== 'dropdown' && optionsList.length <= 6 && maxOptionLength <= 24 && avgOptionLength <= 18;
+            const isLongOptions = maxOptionLength > 40 || optionsList.length > 3;
+
+            const selectedOptionId = studentAnswers[q.id];
+            const selectedOpt = optionsList.find((opt) => opt.id === selectedOptionId);
+            const selectedText = selectedOpt?.text || (q.isExample ? optionsList.find((o) => o.isCorrect)?.text : undefined);
+            const renderedStatement = renderQuestionStatement(q.question || q.prompt || '', selectedText);
+
+            const evaluationBadge = isEvaluated ? (
+              <span>
+                {!isGraded ? (
+                  <span className="flex items-center gap-1 text-[11px] font-bold text-indigo-700 bg-indigo-100 px-2 py-0.5 rounded-full">
+                    <CheckCircle2 className="w-3.5 h-3.5" /> Registrado ✓
+                  </span>
+                ) : isCorrect ? (
+                  <span className="flex items-center gap-1 text-[11px] font-bold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full">
+                    <CheckCircle2 className="w-3.5 h-3.5" /> Correcto
+                  </span>
+                ) : (
+                  <span className="flex items-center gap-1 text-[11px] font-bold text-rose-700 bg-rose-100 px-2 py-0.5 rounded-full">
+                    <XCircle className="w-3.5 h-3.5" /> Incorrecto
+                  </span>
+                )}
+              </span>
+            ) : null;
+
             return (
               <div
                 key={q.id}
@@ -543,183 +599,232 @@ export const SelectionRenderer: React.FC<Props> = ({
                     : 'bg-slate-50/70 border-slate-200/80'
                 }`}
               >
-                {/* Question Header */}
-                <div className="flex items-start justify-between gap-2 mb-3">
-                  {isEditMode ? (
-                    <div className="flex items-center gap-2 w-full flex-wrap sm:flex-nowrap">
-                      <input
-                        type="text"
-                        value={q.question || q.prompt || ''}
-                        onChange={(e) => handleQuestionPromptChange(qIdx, e.target.value)}
-                        className="flex-1 text-sm font-semibold text-slate-800 bg-white border border-slate-200 rounded-lg px-3 py-1.5 outline-none focus:border-indigo-500 min-w-[180px]"
-                        placeholder="Enunciado o ítem a relacionar..."
-                      />
-                      <select
-                        value={q.mode}
-                        onChange={(e) => handleQuestionModeChange(qIdx, e.target.value as any)}
-                        className="text-xs bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 font-semibold text-slate-700 outline-none focus:border-indigo-500 shadow-2xs cursor-pointer"
-                        title="Tipo de interacción"
-                      >
-                        <option value="single_choice">Opción única</option>
-                        <option value="multiple_choice">Opción múltiple</option>
-                        <option value="dropdown">Desplegable / Matching</option>
-                      </select>
-                      <button
-                        onClick={() => removeQuestion(qIdx)}
-                        disabled={(block.questions || []).length <= 1}
-                        className="p-1.5 text-slate-400 hover:text-rose-600 disabled:opacity-20 rounded"
-                        title="Eliminar ítem"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    </div>
-                  ) : (
-                    <div className="flex items-center justify-between w-full">
-                      <p className="text-sm font-semibold text-slate-800 leading-relaxed">
-                        {(() => {
-                          const selectedOptionId = studentAnswers[q.id];
-                          const selectedOpt = (q.options || []).find((opt) => opt.id === selectedOptionId);
-                          const selectedText = selectedOpt?.text || (q.isExample ? (q.options || []).find((o) => o.isCorrect)?.text : undefined);
-                          return renderQuestionStatement(q.question || q.prompt || '', selectedText);
-                        })()}
-                      </p>
-                      {isEvaluated && (
-                        <span>
-                          {!isGraded ? (
-                            <span className="flex items-center gap-1 text-xs font-bold text-indigo-700 bg-indigo-100 px-2.5 py-0.5 rounded-full">
-                              <CheckCircle2 className="w-3.5 h-3.5" /> Registrado ✓
-                            </span>
-                          ) : isCorrect ? (
-                            <span className="flex items-center gap-1 text-xs font-bold text-emerald-700 bg-emerald-100 px-2.5 py-0.5 rounded-full">
-                              <CheckCircle2 className="w-3.5 h-3.5" /> Correcto
-                            </span>
-                          ) : (
-                            <span className="flex items-center gap-1 text-xs font-bold text-rose-700 bg-rose-100 px-2.5 py-0.5 rounded-full">
-                              <XCircle className="w-3.5 h-3.5" /> Incorrecto
-                            </span>
-                          )}
-                        </span>
-                      )}
-                    </div>
-                  )}
-                </div>
-
-                {/* Options */}
                 {isEditMode ? (
-                  /* EDIT MODE */
-                  <div className="space-y-1.5">
-                    {q.options.map((opt, optIdx) => (
-                      <div key={opt.id} className="flex items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={() => toggleOptionCorrect(qIdx, optIdx)}
-                          className={`w-6 h-6 rounded-md flex items-center justify-center border transition ${
-                            opt.isCorrect
-                              ? 'bg-emerald-600 border-emerald-600 text-white shadow-2xs'
-                              : 'bg-white border-slate-300 text-slate-300 hover:border-slate-400'
-                          }`}
-                          title={opt.isCorrect ? 'Respuesta Correcta' : 'Clic para marcar como correcta'}
-                        >
-                          <Check className="w-3.5 h-3.5" />
-                        </button>
-
+                  <>
+                    {/* Question Header (Edit) */}
+                    <div className="flex items-start justify-between gap-2 mb-3">
+                      <div className="flex items-center gap-2 w-full flex-wrap sm:flex-nowrap">
                         <input
                           type="text"
-                          value={opt.text}
-                          onChange={(e) => handleOptionChange(qIdx, optIdx, 'text', e.target.value)}
-                          className="flex-1 text-xs text-slate-800 bg-white border border-slate-200 rounded-lg px-2.5 py-1 outline-none focus:border-indigo-500 font-medium"
-                          placeholder="Opción..."
+                          value={q.question || q.prompt || ''}
+                          onChange={(e) => handleQuestionPromptChange(qIdx, e.target.value)}
+                          className="flex-1 text-sm font-semibold text-slate-800 bg-white border border-slate-200 rounded-lg px-3 py-1.5 outline-none focus:border-indigo-500 min-w-[180px]"
+                          placeholder="Enunciado o ítem a relacionar..."
                         />
-
-                        <button
-                          onClick={() => removeOption(qIdx, optIdx)}
-                          disabled={q.options.length <= 2}
-                          className="p-1 text-slate-400 hover:text-rose-600 disabled:opacity-20"
+                        <select
+                          value={q.mode}
+                          onChange={(e) => handleQuestionModeChange(qIdx, e.target.value as any)}
+                          className="text-xs bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 font-semibold text-slate-700 outline-none focus:border-indigo-500 shadow-2xs cursor-pointer"
+                          title="Tipo de interacción"
                         >
-                          <Trash2 className="w-3 h-3" />
+                          <option value="single_choice">Opción única</option>
+                          <option value="multiple_choice">Opción múltiple</option>
+                          <option value="dropdown">Desplegable / Matching</option>
+                        </select>
+                        <button
+                          onClick={() => removeQuestion(qIdx)}
+                          disabled={(block.questions || []).length <= 1}
+                          className="p-1.5 text-slate-400 hover:text-rose-600 disabled:opacity-20 rounded"
+                          title="Eliminar ítem"
+                        >
+                          <Trash2 className="w-4 h-4" />
                         </button>
                       </div>
-                    ))}
+                    </div>
 
-                    <button
-                      onClick={() => addOption(qIdx)}
-                      className="mt-1 text-xs text-indigo-600 hover:text-indigo-800 font-semibold flex items-center gap-1"
-                    >
-                      <Plus className="w-3 h-3" />
-                      <span>Añadir opción</span>
-                    </button>
+                    {/* Options (Edit) */}
+                    <div className="space-y-1.5">
+                      {q.options.map((opt, optIdx) => (
+                        <div key={opt.id} className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => toggleOptionCorrect(qIdx, optIdx)}
+                            className={`w-6 h-6 rounded-md flex items-center justify-center border transition ${
+                              opt.isCorrect
+                                ? 'bg-emerald-600 border-emerald-600 text-white shadow-2xs'
+                                : 'bg-white border-slate-300 text-slate-300 hover:border-slate-400'
+                            }`}
+                            title={opt.isCorrect ? 'Respuesta Correcta' : 'Clic para marcar como correcta'}
+                          >
+                            <Check className="w-3.5 h-3.5" />
+                          </button>
+
+                          <input
+                            type="text"
+                            value={opt.text}
+                            onChange={(e) => handleOptionChange(qIdx, optIdx, 'text', e.target.value)}
+                            className="flex-1 text-xs text-slate-800 bg-white border border-slate-200 rounded-lg px-2.5 py-1 outline-none focus:border-indigo-500 font-medium"
+                            placeholder="Opción..."
+                          />
+
+                          <button
+                            onClick={() => removeOption(qIdx, optIdx)}
+                            disabled={q.options.length <= 2}
+                            className="p-1 text-slate-400 hover:text-rose-600 disabled:opacity-20"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                          </button>
+                        </div>
+                      ))}
+
+                      <button
+                        onClick={() => addOption(qIdx)}
+                        className="mt-1 text-xs text-indigo-600 hover:text-indigo-800 font-semibold flex items-center gap-1"
+                      >
+                        <Plus className="w-3 h-3" />
+                        <span>Añadir opción</span>
+                      </button>
+                    </div>
+                  </>
+                ) : isCompactPillMode ? (
+                  /* COMPACT PILL MODE: Contiguous to anchor node */
+                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                    <div className="flex items-center gap-2">
+                      <p className="text-sm font-semibold text-slate-800 leading-relaxed">
+                        {renderedStatement}
+                      </p>
+                      {evaluationBadge}
+                    </div>
+
+                    <div className="inline-flex flex-wrap items-center gap-2 shrink-0">
+                      {optionsList.map((opt) => {
+                        const isSingle = q.mode === 'single_choice' && !q.allowMultiple && !block.allowMultiple;
+                        const isSelected = isSingle
+                          ? studentAnswers[q.id] === opt.id
+                          : Array.isArray(studentAnswers[q.id]) &&
+                            (studentAnswers[q.id] as string[]).includes(opt.id);
+
+                        let chipClasses = 'bg-white border-slate-200 text-slate-700 hover:border-indigo-300 hover:bg-indigo-50/40 shadow-2xs';
+
+                        if (isEvaluated) {
+                          if (!isGraded) {
+                            if (isSelected) {
+                              chipClasses = 'bg-indigo-50/90 border-indigo-500 text-indigo-950 font-bold ring-1 ring-indigo-400/50 shadow-2xs';
+                            } else {
+                              chipClasses = 'bg-white border-slate-200 text-slate-400 opacity-75';
+                            }
+                          } else if (opt.isCorrect) {
+                            chipClasses = 'bg-emerald-50 border-emerald-500 text-emerald-950 font-bold shadow-2xs ring-1 ring-emerald-400/50';
+                          } else if (isSelected && !opt.isCorrect) {
+                            chipClasses = 'bg-rose-50 border-rose-400 text-rose-800 line-through';
+                          } else {
+                            chipClasses = 'bg-white border-slate-200 text-slate-400 opacity-60';
+                          }
+                        } else if (isSelected) {
+                          chipClasses = 'bg-indigo-50 border-indigo-600 text-indigo-950 font-bold ring-1 ring-indigo-400/50 shadow-2xs';
+                        }
+
+                        return (
+                          <button
+                            key={opt.id}
+                            type="button"
+                            disabled={isEvaluated}
+                            onClick={() => {
+                              if (isSingle) {
+                                onAnswerChange?.(q.id, opt.id);
+                              } else {
+                                toggleStudentMultiChoice(q.id, opt.id);
+                              }
+                            }}
+                            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-semibold transition-all cursor-pointer disabled:cursor-default ${chipClasses}`}
+                          >
+                            <span
+                              className={`w-3.5 h-3.5 rounded-${
+                                isSingle ? 'full' : 'md'
+                              } border flex items-center justify-center text-[9px] shrink-0 ${
+                                isSelected
+                                  ? 'bg-indigo-600 border-indigo-600 text-white font-bold'
+                                  : 'border-slate-300 bg-white text-transparent'
+                              }`}
+                            >
+                              {isSingle ? '•' : '✓'}
+                            </span>
+                            <span className="leading-snug">{opt.text}</span>
+                            {isEvaluated && isGraded && opt.isCorrect && (
+                              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
                   </div>
                 ) : (
-                  /* PREVIEW / STUDENT MODE */
-                  (() => {
-                    if (q.mode === 'dropdown') {
-                      const selectedOptId = (studentAnswers[q.id] as string) || '';
-                      const selectedOpt = q.options.find((o) => o.id === selectedOptId);
-                      const correctOpt = q.options.find((o) => o.isCorrect);
-                      const isRight = selectedOpt?.isCorrect === true;
+                  /* STANDARD / FULL-WIDTH CARDS MODE (Oraciones o sintagmas extensos) */
+                  <>
+                    <div className="flex items-start justify-between gap-2 mb-2.5">
+                      <p className="text-sm font-semibold text-slate-800 leading-relaxed">
+                        {renderedStatement}
+                      </p>
+                      {evaluationBadge}
+                    </div>
 
-                      let selectWrapClasses = 'border-slate-300 bg-white hover:border-slate-400 focus-within:border-indigo-500 focus-within:ring-2 focus-within:ring-indigo-100';
-                      if (isEvaluated) {
-                        if (!isGraded) {
-                          selectWrapClasses = selectedOptId
-                            ? 'border-indigo-400 bg-indigo-50/60 font-semibold'
-                            : 'border-slate-200 bg-slate-50 opacity-75';
-                        } else if (isRight) {
-                          selectWrapClasses = 'border-emerald-500 bg-emerald-50/90 text-emerald-950 font-bold ring-1 ring-emerald-400';
-                        } else if (selectedOptId && !isRight) {
-                          selectWrapClasses = 'border-rose-400 bg-rose-50/90 text-rose-950 ring-1 ring-rose-300';
-                        } else {
-                          selectWrapClasses = 'border-slate-300 bg-slate-50 opacity-60';
+                    {q.mode === 'dropdown' ? (
+                      (() => {
+                        const selectedOptId = (studentAnswers[q.id] as string) || '';
+                        const selectedOpt = optionsList.find((o) => o.id === selectedOptId);
+                        const correctOpt = optionsList.find((o) => o.isCorrect);
+                        const isRight = selectedOpt?.isCorrect === true;
+
+                        let selectWrapClasses = 'border-slate-300 bg-white hover:border-slate-400 focus-within:border-indigo-500 focus-within:ring-2 focus-within:ring-indigo-100';
+                        if (isEvaluated) {
+                          if (!isGraded) {
+                            selectWrapClasses = selectedOptId
+                              ? 'border-indigo-400 bg-indigo-50/60 font-semibold'
+                              : 'border-slate-200 bg-slate-50 opacity-75';
+                          } else if (isRight) {
+                            selectWrapClasses = 'border-emerald-500 bg-emerald-50/90 text-emerald-950 font-bold ring-1 ring-emerald-400';
+                          } else if (selectedOptId && !isRight) {
+                            selectWrapClasses = 'border-rose-400 bg-rose-50/90 text-rose-950 ring-1 ring-rose-300';
+                          } else {
+                            selectWrapClasses = 'border-slate-300 bg-slate-50 opacity-60';
+                          }
+                        } else if (selectedOptId) {
+                          selectWrapClasses = 'border-indigo-400 bg-indigo-50/40 text-indigo-950 font-semibold shadow-2xs';
                         }
-                      } else if (selectedOptId) {
-                        selectWrapClasses = 'border-indigo-400 bg-indigo-50/40 text-indigo-950 font-semibold shadow-2xs';
-                      }
 
-                      return (
-                        <div className="mt-2.5 flex flex-col sm:flex-row sm:items-center gap-2.5">
-                          <div className={`relative flex items-center rounded-xl border transition-all ${selectWrapClasses} w-full sm:w-auto sm:min-w-[280px]`}>
-                            <select
-                              value={selectedOptId}
-                              disabled={isEvaluated}
-                              onChange={(e) => onAnswerChange?.(q.id, e.target.value)}
-                              className="w-full py-2.5 pl-3.5 pr-10 bg-transparent text-sm font-medium text-slate-800 rounded-xl appearance-none cursor-pointer focus:outline-none disabled:cursor-default"
-                            >
-                              <option value="" disabled>
-                                -- Selecciona correspondencia --
-                              </option>
-                              {q.options.map((opt) => (
-                                <option key={opt.id} value={opt.id}>
-                                  {opt.text}
+                        return (
+                          <div className="mt-2.5 flex flex-col sm:flex-row sm:items-center gap-2.5">
+                            <div className={`relative flex items-center rounded-xl border transition-all ${selectWrapClasses} w-full sm:w-auto sm:min-w-[280px]`}>
+                              <select
+                                value={selectedOptId}
+                                disabled={isEvaluated}
+                                onChange={(e) => onAnswerChange?.(q.id, e.target.value)}
+                                className="w-full py-2.5 pl-3.5 pr-10 bg-transparent text-sm font-medium text-slate-800 rounded-xl appearance-none cursor-pointer focus:outline-none disabled:cursor-default"
+                              >
+                                <option value="" disabled>
+                                  -- Selecciona correspondencia --
                                 </option>
-                              ))}
-                            </select>
-                            <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-3 text-slate-400">
-                              <ChevronDown className="w-4 h-4" />
+                                {optionsList.map((opt) => (
+                                  <option key={opt.id} value={opt.id}>
+                                    {opt.text}
+                                  </option>
+                                ))}
+                              </select>
+                              <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-3 text-slate-400">
+                                <ChevronDown className="w-4 h-4" />
+                              </div>
                             </div>
+
+                            {isEvaluated && isGraded && (
+                              <div className="flex items-center gap-1.5 text-xs font-semibold shrink-0">
+                                {isRight ? (
+                                  <span className="flex items-center gap-1 text-emerald-600 bg-emerald-50 px-2.5 py-1 rounded-md border border-emerald-200">
+                                    <CheckCircle2 className="w-4 h-4" /> Correcto
+                                  </span>
+                                ) : (
+                                  <span className="flex items-center gap-1 text-rose-600 bg-rose-50 px-2.5 py-1 rounded-md border border-rose-200">
+                                    <XCircle className="w-4 h-4" />
+                                    {correctOpt ? `Correcto: ${correctOpt.text}` : 'Incorrecto'}
+                                  </span>
+                                )}
+                              </div>
+                            )}
                           </div>
-
-                          {isEvaluated && isGraded && (
-                            <div className="flex items-center gap-1.5 text-xs font-semibold shrink-0">
-                              {isRight ? (
-                                <span className="flex items-center gap-1 text-emerald-600 bg-emerald-50 px-2.5 py-1 rounded-md border border-emerald-200">
-                                  <CheckCircle2 className="w-4 h-4" /> Correcto
-                                </span>
-                              ) : (
-                                <span className="flex items-center gap-1 text-rose-600 bg-rose-50 px-2.5 py-1 rounded-md border border-rose-200">
-                                  <XCircle className="w-4 h-4" />
-                                  {correctOpt ? `Correcto: ${correctOpt.text}` : 'Incorrecto'}
-                                </span>
-                              )}
-                            </div>
-                          )}
-                        </div>
-                      );
-                    }
-
-                    const isLongOptions = q.options.some((o) => (o.text || '').length > 25) || q.options.length > 2;
-                    return (
+                        );
+                      })()
+                    ) : (
                       <div className={`grid gap-2 mt-2 ${isLongOptions ? 'grid-cols-1' : 'grid-cols-1 sm:grid-cols-2'}`}>
-                        {q.options.map((opt) => {
+                        {optionsList.map((opt) => {
                           const isSingle = q.mode === 'single_choice' && !q.allowMultiple && !block.allowMultiple;
                           const isSelected = isSingle
                             ? studentAnswers[q.id] === opt.id
@@ -749,6 +854,7 @@ export const SelectionRenderer: React.FC<Props> = ({
                           return (
                             <button
                               key={opt.id}
+                              type="button"
                               disabled={isEvaluated}
                               onClick={() => {
                                 if (isSingle) {
@@ -781,8 +887,8 @@ export const SelectionRenderer: React.FC<Props> = ({
                           );
                         })}
                       </div>
-                    );
-                  })()
+                    )}
+                  </>
                 )}
               </div>
             );

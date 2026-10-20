@@ -959,9 +959,64 @@ export function extractDisjunctiveAlternatives(text: string): { prompt: string; 
 }
 
 /**
+ * Isolates the canonical pedagogical directive in instructions or subtitles,
+ * pruning any child reactive items, numbered sequences, or slash-delimited breakdowns
+ * that leaked into the instruction node (Instruction Isolation Principle).
+ */
+export function isolateCanonicalInstruction(text?: string): string {
+  if (!text || typeof text !== 'string') return '';
+  let trimmed = text.trim();
+  if (!trimmed) return '';
+
+  // Has child items / delimiters signature
+  const hasChildLeak =
+    /[\/]|(?:^|\s+)(?:\b\d+[.)]|\(\d+\)|\bitem\s*\d+\b)\s+.*?(?:[\/]|(?:\b\d+[.)]|\(\d+\)|\bitem\s*\d+\b)\s+)|_{2,}|\{\{\s*blank\s*\}\}|\[\s*(?:blank|\?)\s*\]|[:–—]\s*(?:\b\d+[.)]|\(\d+\)|_{2,}|\{\{)/i.test(
+      trimmed
+    );
+  if (!hasChildLeak) return trimmed;
+
+  // 1. Pure leaked item without directive (e.g. "1. work in a school / an office / a receptionist")
+  if (/^(?:\(?\d+[.)]?\s*|[a-z][.)]\s*)(?:.*?\s*\/\s*.*)$/i.test(trimmed)) {
+    return '';
+  }
+
+  // 2. Directive followed by colon/dash and slash breakdown or numbered item
+  const colonMatch = trimmed.match(/^([^:\n]+?)\s*[:–—]\s*(.*)$/);
+  if (colonMatch && colonMatch[1].trim().length >= 5) {
+    const candidateDirective = colonMatch[1].trim();
+    const rest = colonMatch[2].trim();
+    if (/[\/]|\b\d+[.)]|\(\d+\)|_{2,}|\{\{\s*blank/i.test(rest)) {
+      return candidateDirective.endsWith(':') ? candidateDirective : `${candidateDirective}:`;
+    }
+  }
+
+  // 3. Directive followed by numbered item e.g. "Choose the correct words. 1. Yesterday I was / were..."
+  const numMatch = trimmed.match(
+    /^([\s\S]+?)(?:\s*(?:[:;–—\n]\s*|\.\s+)(?:\(?\d+[.)]|\b\d+[:.-]|\bitem\s*\d+)\s+|\s+(?:\(?\d+[.)]|\b\d+[:.-])\s+[a-zA-Z])/i
+  );
+  if (numMatch && numMatch[1].trim().length >= 5) {
+    const candidateDirective = numMatch[1].trim();
+    if (trimmed.includes(':') && !candidateDirective.endsWith(':') && !candidateDirective.endsWith('.')) {
+      return `${candidateDirective}:`;
+    }
+    return candidateDirective.endsWith('.') || candidateDirective.endsWith(':') || candidateDirective.endsWith('?')
+      ? candidateDirective
+      : `${candidateDirective}.`;
+  }
+
+  // 4. Directive sentence followed by slash tokens
+  const sentenceSlashMatch = trimmed.match(/^([^.?!]+[.?!])\s+(?:.*?\s*\/\s*.*)$/);
+  if (sentenceSlashMatch && sentenceSlashMatch[1].trim().length >= 5) {
+    return sentenceSlashMatch[1].trim();
+  }
+
+  return trimmed;
+}
+
+/**
  * Limpia el texto de una pregunta o enunciado de selección:
  * - Elimina tokens espurios de completación como '[ ? ]', '[?]', etc.
- * - Si es una pregunta directa, elimina marcadores de hueco como '{{blank}}', '[blank]' o '___'.
+ * - Si es una pregunta directa o ancla, elimina marcadores de hueco como '{{blank}}', '[blank]' o '___'.
  * - Si referenceText está presente y fue duplicado dentro del prompt, lo remueve para evitar redundancia.
  */
 export function cleanSelectionPrompt(rawPrompt: string, referenceText?: string): string {
@@ -999,7 +1054,12 @@ export function cleanSelectionPrompt(rawPrompt: string, referenceText?: string):
       .replace(/_{2,}/g, '');
   }
 
-  // 4. Normalizar espacios en blanco y puntuación
+  // 4. Neutralización de marcadores de hueco en nodos raíz / anclas:
+  // Si el prompt termina con un marcador de hueco (e.g. "work in {{blank}}" o "work in: {{blank}}"),
+  // o si es una base ancla, podar el marcador residual para mantener el string verbatim limpio
+  cleaned = cleaned.replace(/\s*(?:\{\{\s*blank\s*\}\}|\[\s*blank\s*\]|\[\s*\?\s*\]|_{2,})\s*$/gi, '').trim();
+
+  // 5. Normalizar espacios en blanco y puntuación
   cleaned = cleaned.replace(/[ \t]{2,}/g, ' ').trim();
   cleaned = cleaned.replace(/\s+\?$/, '?');
 
@@ -2328,6 +2388,31 @@ export function validateAndParseSlides(
       rawSlide.subtitle = undefined;
     }
 
+    // Invariante de Aislamiento de la Consigna (Instruction Isolation Principle)
+    if (rawSlide.subtitle) {
+      const cleanSub = isolateCanonicalInstruction(rawSlide.subtitle);
+      rawSlide.subtitle = cleanSub || undefined;
+    }
+
+    if (rawSlide.interaction && typeof rawSlide.interaction === 'object') {
+      const currentInst = (rawSlide.interaction as any).instruction;
+      if (currentInst) {
+        const cleanInst = isolateCanonicalInstruction(currentInst);
+        if (cleanInst) {
+          (rawSlide.interaction as any).instruction = cleanInst;
+        } else if (rawSlide.subtitle) {
+          (rawSlide.interaction as any).instruction = rawSlide.subtitle;
+        } else if ((rawSlide.interaction as any).type === 'selection') {
+          const isNeg = isNegativeDiscriminationInstruction(
+            `${rawSlide.title || ''} ${rawSlide.subtitle || ''} ${currentInst}`
+          );
+          (rawSlide.interaction as any).instruction = isNeg
+            ? 'Cross out the incorrect option:'
+            : 'Choose the correct option:';
+        }
+      }
+    }
+
     if (rawSlide.interaction && typeof rawSlide.interaction === 'object') {
       const inst = (rawSlide.interaction as any).instruction || '';
       const ansKeyMatch = inst.match(/(?:\s+|\n)(?:answers?|answer\s*key|key|solucionario)[:\s]+(?:\d+[\.\)\s:-].*)$/i);
@@ -2711,8 +2796,15 @@ export function validateAndParseSlides(
           `${rawSlide.title || ''} ${rawSlide.subtitle || ''} ${rawSlide.interaction.instruction || ''}`
         );
 
-        for (const q of rawSlide.interaction.questions) {
+        for (let qIdx = 0; qIdx < rawSlide.interaction.questions.length; qIdx++) {
+          const q = rawSlide.interaction.questions[qIdx];
           if (q && typeof q === 'object') {
+            if (!q.id) {
+              q.id = `q-${qIdx + 1}`;
+            }
+            if (!q.mode) {
+              q.mode = 'single_choice';
+            }
             const statement = q.prompt || q.question || '';
             const cleanedStatement = cleanSelectionPrompt(statement, refText);
             q.prompt = cleanedStatement;

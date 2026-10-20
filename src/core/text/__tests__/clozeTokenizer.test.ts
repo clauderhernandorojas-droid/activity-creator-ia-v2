@@ -20,6 +20,8 @@ describe('Cloze Tokenizer - Contrato de Renderizado Inline y Delimitadores', () 
       expect(hasBlankToken('She ........ here.')).toBe(true);
       expect(hasBlankToken('She (blank) here.')).toBe(true);
       expect(hasBlankToken('She (___) here.')).toBe(true);
+      expect(hasBlankToken('She [?] here.')).toBe(true);
+      expect(hasBlankToken('She [ ? ] here.')).toBe(true);
     });
 
     it('no confunde pistas verbales legítimas entre paréntesis con delimitadores de hueco', () => {

@@ -7,13 +7,13 @@
  * - Parenthesized blank markers: (blank), (___), (...)
  */
 export const BLANK_DELIMITER_REGEX =
-  /\{\{\s*(?:blank|\d+|gap|_)\s*\}\}|\[\s*(?:blank|\d+|gap|_+|\.{2,}|—+)\s*\]|\((?:blank|_+|\.{3,})\)|(?:_{2,}|—{2,}|\.{3,})/i;
+  /\{\{\s*(?:blank|\d+|gap|_)\s*\}\}|\[\s*(?:blank|\?|&\w+;\s*\?\s*&\w+;|\d+|gap|_+|\.{2,}|—+)\s*\]|\((?:blank|_+|\.{3,})\)|(?:_{2,}|—{2,}|\.{3,})/i;
 
 /**
  * Global version to clean all occurrences from text.
  */
 export const BLANK_DELIMITER_GLOBAL_REGEX =
-  /\{\{\s*(?:blank|\d+|gap|_)\s*\}\}|\[\s*(?:blank|\d+|gap|_+|\.{2,}|—+)\s*\]|\((?:blank|_+|\.{3,})\)|(?:_{2,}|—{2,}|\.{3,})/gi;
+  /\{\{\s*(?:blank|\d+|gap|_)\s*\}\}|\[\s*(?:blank|\?|&\w+;\s*\?\s*&\w+;|\d+|gap|_+|\.{2,}|—+)\s*\]|\((?:blank|_+|\.{3,})\)|(?:_{2,}|—{2,}|\.{3,})/gi;
 
 /**
  * Checks if a string contains any internal blank delimiter tokens.
