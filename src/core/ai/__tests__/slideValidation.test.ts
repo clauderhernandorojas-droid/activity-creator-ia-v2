@@ -3197,6 +3197,164 @@ describe('slideValidation - Direct Schema & Architectural Invariant Tests', () =
       }
     });
   });
+
+  // =========================================================================
+  // CASO W: Desacoplamiento de Tokens en WordBank y Grounding Estricto de Multimedia
+  // =========================================================================
+  describe('Caso W: Desacoplamiento de Tokens en WordBank y Grounding Estricto de Multimedia', () => {
+    it('a) desacopla limpiamente el término a insertar del complemento visible en el prompt ("{{blank}} ...") ante colocaciones y evita reactivos vacíos de contexto', () => {
+      const rawWithCollocation = JSON.stringify({
+        slides: [
+          {
+            id: 'slide-ex-collocation-1',
+            title: '1b Vocabulary: Phrasal Verbs',
+            layout: 'single_column',
+            referenceContent: null,
+            interaction: {
+              id: 'int-colloc-1',
+              type: 'input_fields',
+              instruction: 'Complete the sentences using words from the box.',
+              wordBank: ['tidy', 'look', 'take', 'turn', 'wake'],
+              listItems: [
+                // Caso 1: Prompt originalmente desnudo solo con ordinal "1." y clave compuesta "tidy up"
+                { id: 'i-1', prompt: '1.', expectedAnswer: 'tidy up' },
+                // Caso 2: Prompt con complemento "after" sin blank y clave compuesta "look after"
+                { id: 'i-2', prompt: '2. after', expectedAnswer: 'look after' },
+                // Caso 3: Prompt con ordinal y blank pero sin complemento visible "3. {{blank}}" y clave "take out"
+                { id: 'i-3', prompt: '3. {{blank}}', expectedAnswer: 'take out' }
+              ]
+            }
+          }
+        ]
+      });
+
+      const slides = validateAndParseSlides(rawWithCollocation);
+      expect(slides).toHaveLength(1);
+      const slide = slides[0];
+
+      expect(slide.interaction?.type).toBe('input_fields');
+      if (slide.interaction?.type === 'input_fields') {
+        const items = slide.interaction.listItems;
+        expect(items).toHaveLength(3);
+
+        // Ítem 1: "tidy up" -> Token "tidy", Complemento "up" en prompt visible
+        expect(items[0].expectedAnswer).toBe('tidy');
+        expect(items[0].prompt).toBe('1. {{blank}} up');
+
+        // Ítem 2: "look after" -> Token "look", Complemento "after" en prompt visible
+        expect(items[1].expectedAnswer).toBe('look');
+        expect(items[1].prompt).toBe('2. {{blank}} after');
+
+        // Ítem 3: "take out" -> Token "take", Complemento "out" en prompt visible
+        expect(items[2].expectedAnswer).toBe('take');
+        expect(items[2].prompt).toBe('3. {{blank}} out');
+      }
+    });
+
+    it('a2) desacopla correctamente cuando el token en el wordBank es la segunda parte de la colocación (sufijo/partícula)', () => {
+      const rawWithSuffixBank = JSON.stringify({
+        slides: [
+          {
+            id: 'slide-suffix-bank',
+            title: 'Collocations with Prepositions',
+            layout: 'single_column',
+            interaction: {
+              id: 'int-suff',
+              type: 'input_fields',
+              instruction: 'Complete the phrases with prepositions from the box.',
+              wordBank: ['up', 'after', 'out', 'off'],
+              listItems: [
+                { id: 'it-1', prompt: '1. tidy', expectedAnswer: 'tidy up' },
+                { id: 'it-2', prompt: '2.', expectedAnswer: 'look after' }
+              ]
+            }
+          }
+        ]
+      });
+
+      const slides = validateAndParseSlides(rawWithSuffixBank);
+      expect(slides).toHaveLength(1);
+      const slide = slides[0];
+
+      if (slide.interaction?.type === 'input_fields') {
+        const items = slide.interaction.listItems;
+        expect(items[0].expectedAnswer).toBe('up');
+        expect(items[0].prompt).toBe('1. tidy {{blank}}');
+
+        expect(items[1].expectedAnswer).toBe('after');
+        expect(items[1].prompt).toBe('2. look {{blank}}');
+      }
+    });
+
+    it('b) la presencia de identificadores documentales alfanuméricos sin directiva explícita de escucha no genera verificationAudioUrl ni añade reproductores', () => {
+      const rawWithDocumentaryReference = JSON.stringify({
+        slides: [
+          {
+            id: 'slide-doc-ref',
+            title: 'Vocabulary: Phrasal Verbs [VR1.2]',
+            subtitle: 'Review the list in VR1.2 on page 145',
+            layout: 'split_50_50',
+            // Bloque multimedia espurio o sugerido por error a partir de VR1.2
+            referenceContent: {
+              id: 'ref-fake-audio',
+              type: 'media',
+              title: 'VR1.2',
+              mediaType: 'audio'
+            },
+            interaction: {
+              id: 'int-doc',
+              type: 'input_fields',
+              instruction: 'Complete the sentences with the correct words.',
+              verificationAudioUrl: '/audio/VR1_2.mp3', // Sintético / espurio sin directiva de escucha
+              audioLabel: 'VR1.2',
+              listItems: [
+                { id: 'it-1', prompt: '1. She will {{blank}} after her brother.', expectedAnswer: 'look' }
+              ]
+            }
+          }
+        ]
+      });
+
+      const slides = validateAndParseSlides(rawWithDocumentaryReference);
+      expect(slides).toHaveLength(1);
+      const slide = slides[0];
+
+      // Invariante de Evidencia Física: Al no haber palabras de escucha ("Listen", "Track", etc.),
+      // el audio sintético es erradicado por completo.
+      expect(slide.interaction?.verificationAudioUrl).toBeUndefined();
+      expect(slide.interaction?.audioLabel).toBeUndefined();
+      expect(slide.referenceContent).toBeNull();
+      expect(slide.layout).toBe('single_column');
+    });
+
+    it('b2) un audio de verificación legítimo acompañado de directiva explícita de escucha conserva verificationAudioUrl', () => {
+      const rawWithRealAudio = JSON.stringify({
+        slides: [
+          {
+            id: 'slide-real-audio',
+            title: 'Grammar Practice',
+            layout: 'single_column',
+            interaction: {
+              id: 'int-real-audio',
+              type: 'input_fields',
+              instruction: 'Complete the sentences. Then listen and check your answers. [CD1 Track 12]',
+              listItems: [
+                { id: 'it-1', prompt: '1. I {{blank}} a teacher.', expectedAnswer: 'am' }
+              ]
+            }
+          }
+        ]
+      });
+
+      const slides = validateAndParseSlides(rawWithRealAudio);
+      expect(slides).toHaveLength(1);
+      const slide = slides[0];
+
+      expect(slide.interaction?.verificationAudioUrl).toBeDefined();
+      expect(slide.interaction?.verificationAudioUrl).toContain('Track_12.mp3');
+      expect(slide.interaction?.audioLabel).toMatch(/Track\s*12/i);
+    });
+  });
 });
 
 

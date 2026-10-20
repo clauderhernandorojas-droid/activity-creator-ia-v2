@@ -1317,6 +1317,8 @@ export function applyAnswerKeysToSlide(
         item.prompt = cleanInputBlankMarkers(item.prompt);
       }
     });
+
+    decoupleWordBankTokensAndPreserveContext(slide);
   }
 
   // Apply to selection questions
@@ -1479,6 +1481,202 @@ export function isDuplicateWordBankReference(ref: any, wordBank: string[]): bool
 }
 
 /**
+ * Detecta si existe evidencia auditiva física unívoca en el recorte o metadatos
+ * (verbos de escucha explícitos, directivas de grabación, mención de tracks/CDs o glifos auditivos).
+ *
+ * AISLAMIENTO EPISTÉMICO DE METADATOS DE ÍNDICE:
+ * Códigos alfanuméricos aislados como 'VR1.2', 'V1.1', 'G2.1', 'p. 145' representan apéndices
+ * documentales (Vocabulary Reference, Grammar Reference) y JAMÁS constituyen evidencia auditiva
+ * salvo que estén expresamente acompañados por directivas verbales de escucha (e.g. "Listen to VR1.2").
+ */
+export function hasExplicitAudioEvidence(text: string, title?: string, subtitle?: string): boolean {
+  const combined = `${title || ''} ${subtitle || ''} ${text || ''}`.trim();
+  if (!combined) return false;
+
+  const audioKeywordsRegex =
+    /\b(?:listen(?:ing)?|hear|recording|track|audio|cd\s*\d*|headphones?|speaker|altavoz|auriculares)\b/i;
+  return audioKeywordsRegex.test(combined);
+}
+
+/**
+ * Extrae la etiqueta y URL canónica de un recurso de audio cuando y solo cuando
+ * existe evidencia auditiva física explícita.
+ */
+export function extractAudioTrackInfo(text: string): { audioLabel: string; audioUrl: string } | null {
+  if (!hasExplicitAudioEvidence(text)) {
+    return null;
+  }
+
+  // 1. Si contiene un código específico como V1.2 o R1.8 acompañado de evidencia auditiva
+  const vrMatch = text.match(/\b([VR]\d+\.\d+)\b/i);
+  if (vrMatch) {
+    const rawLabel = vrMatch[1].trim();
+    const slug = rawLabel.replace(/[^a-zA-Z0-9.-]+/g, '_');
+    return {
+      audioLabel: rawLabel,
+      audioUrl: `/audio/${slug}.mp3`,
+    };
+  }
+
+  // 2. Patrones explícitos: CD Track X, Track X, Audio X, Recording X
+  const trackPattern =
+    /\b(?:(?:CD\s*\d+\s*)?Track\s*(\d+(?:\.\d+)?)|(?:Audio\s*([A-Za-z0-9.]+))|(?:Recording\s*(\d+(?:\.\d+)?)))\b/i;
+  const match = text.match(trackPattern);
+  if (match) {
+    const label = match[0].trim();
+    const slug = label.replace(/[^a-zA-Z0-9.-]+/g, '_');
+    return {
+      audioLabel: label,
+      audioUrl: `/audio/${slug}.mp3`,
+    };
+  }
+
+  // 2. Patrón de consigna: "Listen and check [X]" o "Listen to [X]"
+  const listenCheckMatch = text.match(
+    /listen\s+(?:and|&|to)\s+check(?:\s+your\s+answers)?(?:\s*\[?([A-Za-z0-9.\s]+)\]?)?/i
+  );
+  if (listenCheckMatch) {
+    const rawCode = (listenCheckMatch[1] || '').trim();
+    if (rawCode && rawCode.split(/\s+/).length <= 2) {
+      const slug = rawCode.replace(/[^a-zA-Z0-9.-]+/g, '_');
+      return {
+        audioLabel: rawCode,
+        audioUrl: `/audio/${slug}.mp3`,
+      };
+    }
+    return {
+      audioLabel: 'Audio',
+      audioUrl: '/audio/verification.mp3',
+    };
+  }
+
+  const listenToMatch = text.match(/listen\s+to\s+([A-Za-z0-9.]+)/i);
+  if (listenToMatch && listenToMatch[1]) {
+    const rawCode = listenToMatch[1].trim();
+    const slug = rawCode.replace(/[^a-zA-Z0-9.-]+/g, '_');
+    return {
+      audioLabel: rawCode,
+      audioUrl: `/audio/${slug}.mp3`,
+    };
+  }
+
+  return {
+    audioLabel: 'Audio',
+    audioUrl: '/audio/Audio.mp3',
+  };
+}
+
+/**
+ * Desacoplamiento universal de tokens en WordBank y preservación contextual en 'input_fields'.
+ *
+ * Principio de Preservación Contextual:
+ * 1. Prohibición de Reactivos Vacíos de Contexto:
+ *    Queda estrictamente prohibido que un reactivo de 'input_fields' tenga como 'prompt' únicamente
+ *    el ordinal o índice numérico (e.g. "2.", "3.") dejando al estudiante sin estímulo visible.
+ * 2. Regla Universal de Desacoplamiento (Token vs. Contexto Receptor):
+ *    Si la clave oficial ('expectedAnswer' o Answer Key) corresponde a una colocación o sintagma
+ *    compuesto ("A + B") y el subelemento "A" (o "B") está presente en 'interaction.wordBank':
+ *    a) El elemento provisto por el banco se asigna como 'expectedAnswer' (el valor a ingresar/arrastrar).
+ *    b) El elemento contextual complementario debe permanecer visible dentro del 'prompt',
+ *       delimitando con precisión la posición del hueco: "{{blank}} [complemento]" o "[prefijo] {{blank}}".
+ */
+export function decoupleWordBankTokensAndPreserveContext(
+  slide: any,
+  _effectiveContext?: any
+): void {
+  if (!slide || !slide.interaction || slide.interaction.type !== 'input_fields') return;
+  if (!Array.isArray(slide.interaction.listItems) || slide.interaction.listItems.length === 0) return;
+
+  const wordBank: string[] = Array.isArray(slide.interaction.wordBank)
+    ? slide.interaction.wordBank.map((w: any) => String(w).trim()).filter(Boolean)
+    : [];
+
+  const sortedBank = [...wordBank].sort((a, b) => b.length - a.length);
+
+  slide.interaction.listItems.forEach((item: any, idx: number) => {
+    if (!item || typeof item !== 'object') return;
+
+    let currentPrompt = cleanInputBlankMarkers(item.prompt || '');
+    let expected = (item.expectedAnswer || '').trim();
+
+    // Extraer ordinal numérico o alfabético si existe (ej. "2.", "3)", "b.", "(1)")
+    const ordinalMatch = currentPrompt.match(/^(\s*(?:\(?\d+[.)]?|[a-z][.)])\s*)/i);
+    const ordinal = ordinalMatch ? ordinalMatch[1].trim() + ' ' : `${idx + 1}. `;
+    const promptWithoutOrdinal = ordinalMatch
+      ? currentPrompt.slice(ordinalMatch[0].length).trim()
+      : currentPrompt.trim();
+
+    if (sortedBank.length > 0 && expected) {
+      for (const token of sortedBank) {
+        const tLower = token.toLowerCase();
+        const expLower = expected.toLowerCase();
+
+        // Caso A: El token del banco coincide con el inicio de la colocación (ej. token="look", expected="look after")
+        if (expLower.startsWith(tLower + ' ') || expLower.startsWith(tLower + '-')) {
+          const complement = expected.slice(token.length + 1).trim();
+
+          item.expectedAnswer = token;
+          item.acceptedAnswers = [token];
+
+          const promptHasComplement = promptWithoutOrdinal.toLowerCase().includes(complement.toLowerCase());
+          if (promptHasComplement) {
+            if (!promptWithoutOrdinal.includes('{{blank}}')) {
+              item.prompt = `${ordinal}{{blank}} ${promptWithoutOrdinal}`.replace(/\s+/g, ' ').trim();
+            } else {
+              item.prompt = currentPrompt;
+            }
+          } else {
+            item.prompt = `${ordinal}{{blank}} ${complement}`.trim();
+          }
+
+          break;
+        }
+
+        // Caso B: El token del banco coincide con el final de la colocación (ej. token="after", expected="look after" o "tidy up", token="up")
+        if (expLower.endsWith(' ' + tLower) || expLower.endsWith('-' + tLower)) {
+          const prefix = expected.slice(0, expected.length - token.length - 1).trim();
+
+          item.expectedAnswer = token;
+          item.acceptedAnswers = [token];
+
+          const promptHasPrefix = promptWithoutOrdinal.toLowerCase().includes(prefix.toLowerCase());
+          if (promptHasPrefix) {
+            if (!promptWithoutOrdinal.includes('{{blank}}')) {
+              item.prompt = `${ordinal}${promptWithoutOrdinal} {{blank}}`.replace(/\s+/g, ' ').trim();
+            } else {
+              item.prompt = currentPrompt;
+            }
+          } else {
+            item.prompt = `${ordinal}${prefix} {{blank}}`.trim();
+          }
+
+          break;
+        }
+
+        // Caso C: El expectedAnswer coincide exactamente con el token
+        if (expLower === tLower) {
+          if (!promptWithoutOrdinal || promptWithoutOrdinal === '{{blank}}') {
+            item.prompt = `${ordinal}{{blank}}`.trim();
+          } else if (!promptWithoutOrdinal.includes('{{blank}}')) {
+            item.prompt = `${ordinal}{{blank}} ${promptWithoutOrdinal}`.trim();
+          } else {
+            item.prompt = currentPrompt;
+          }
+          break;
+        }
+      }
+    }
+
+    // Prohibición estricta de reactivos vacíos de contexto:
+    // Si el prompt quedó únicamente como el ordinal aislado ("2.", "2", etc.)
+    const isBareOrdinal = /^\s*(?:\(?\d+[.)]?|[a-z][.)])?\s*$/i.test(item.prompt || '');
+    if (isBareOrdinal) {
+      item.prompt = `${ordinal}{{blank}}`.trim();
+    }
+  });
+}
+
+/**
  * Detects whether reference content is solely spurious metadata
  * (an exercise instruction, task directive, or single model/example sentence)
  * rather than an autonomous continuous reading or consultation text.
@@ -1495,6 +1693,10 @@ export function isSpuriousReferenceMetadata(
   // pertenece a los metadatos de la interacción (verificationAudioUrl), nunca a referenceContent
   if (ref.type === 'media' || ref.type === 'audio' || ref.type === 'listening') {
     if (interaction && (ref.mediaType === 'audio' || !ref.mediaType || ref.type === 'audio' || ref.type === 'listening')) {
+      return true;
+    }
+    const refText = `${ref.title || ''} ${ref.body || ''} ${ref.content || ''} ${subtitle || ''} ${title || ''}`;
+    if (!hasExplicitAudioEvidence(refText)) {
       return true;
     }
     return false;
@@ -2091,6 +2293,8 @@ export function validateAndParseSlides(
       }
     }
 
+    const effectiveContext = (idx > 0 && validatedSlides[idx - 1]) ? validatedSlides[idx - 1] : (previousSlideContext || null);
+
     // Grounding epistémico: Inyectar soluciones del Solucionario / Answer Key oficial
     if (Object.keys(harvestedAnswerKeys).length > 0 && rawSlide.interaction) {
       applyAnswerKeysToSlide(rawSlide, harvestedAnswerKeys);
@@ -2100,8 +2304,6 @@ export function validateAndParseSlides(
       if (!rawSlide.interaction.id) {
         rawSlide.interaction.id = `int-${Date.now()}-${idx}`;
       }
-
-    const effectiveContext = (idx > 0 && validatedSlides[idx - 1]) ? validatedSlides[idx - 1] : (previousSlideContext || null);
 
     // A. Prohibición Ontológica: Tareas orales / speaking en parejas (Desacoplada de 'writing')
     const slideTextToScan = `${rawSlide.title || ''} ${rawSlide.subtitle || ''} ${(rawSlide.interaction as any)?.instruction || ''} ${(rawSlide.interaction as any)?.prompt || ''} ${(rawSlide.referenceContent as any)?.content || ''} ${(rawSlide.referenceContent as any)?.instruction || ''}`.toLowerCase();
@@ -2674,38 +2876,63 @@ export function validateAndParseSlides(
     }
 
     // =========================================================================
-    // TRATAMIENTO UNÍVOCO DEL AUDIO (Verificación vs. Listening autónomo)
+    // TRATAMIENTO UNÍVOCO DEL AUDIO Y PRINCIPIO EPISTÉMICO DE EVIDENCIA FÍSICA
     // =========================================================================
+    const slideTextForAudio = `${rawSlide.title || ''} ${rawSlide.subtitle || ''} ${(rawSlide.interaction as any)?.instruction || ''} ${(rawSlide.referenceContent as any)?.title || ''} ${(rawSlide.referenceContent as any)?.body || ''} ${(rawSlide.referenceContent as any)?.content || ''} ${(rawSlide.interaction as any)?.audioLabel || ''}`.trim();
+    const hasAudioEvidence = hasExplicitAudioEvidence(slideTextForAudio);
+
     const refIsAudio = rawSlide.referenceContent &&
       (rawSlide.referenceContent.type === 'media' || (rawSlide.referenceContent as any).type === 'audio' || (rawSlide.referenceContent as any).type === 'listening') &&
       ((rawSlide.referenceContent as any).mediaType === 'audio' || (rawSlide.referenceContent as any).mediaType === 'listening' || !(rawSlide.referenceContent as any).mediaType);
 
     if (refIsAudio) {
-      const audioTitle = rawSlide.referenceContent.title || '';
-      const audioUrl = rawSlide.referenceContent.url && rawSlide.referenceContent.url !== 'placeholder:audio-track'
-        ? rawSlide.referenceContent.url
-        : undefined;
-
-      const trackMatch = `${audioTitle} ${rawSlide.title || ''} ${rawSlide.subtitle || ''} ${(rawSlide.interaction as any)?.instruction || ''}`.match(
-        /\b(?:(?:CD\s*\d+\s*)?Track\s*(\d+(?:\.\d+)?)|([VR]\d+\.\d+)|(?:Audio\s*(\d+(?:\.\d+)?)))\b/i
-      );
-      const audioLabel = trackMatch ? trackMatch[0].trim() : (audioTitle || 'Audio');
-      const finalAudioUrl = audioUrl || `/audio/${audioLabel.replace(/[^a-zA-Z0-9.-]+/g, '_')}.mp3`;
-
-      if (rawSlide.interaction) {
-        // Mapear exclusivamente a los metadatos de la interacción
-        if (!rawSlide.interaction.verificationAudioUrl) {
-          rawSlide.interaction.verificationAudioUrl = finalAudioUrl;
-        }
-        if (!rawSlide.interaction.audioLabel) {
-          rawSlide.interaction.audioLabel = audioLabel;
-        }
-        // Descartar referenceContent para que no active split_50_50
+      if (!hasAudioEvidence) {
+        // Metadato documental aislado o bloque multimedia sintético sin evidencia física de escucha: PURGAR
         rawSlide.referenceContent = null;
         rawSlide.layout = 'single_column';
+        if (rawSlide.interaction) {
+          delete rawSlide.interaction.verificationAudioUrl;
+          delete rawSlide.interaction.audioLabel;
+        }
       } else {
-        // Diapositiva puramente de escucha (sin interacción activa): layout single_column
-        rawSlide.layout = 'single_column';
+        const audioTitle = rawSlide.referenceContent.title || '';
+        const audioUrl = rawSlide.referenceContent.url && rawSlide.referenceContent.url !== 'placeholder:audio-track'
+          ? rawSlide.referenceContent.url
+          : undefined;
+
+        const trackInfo = extractAudioTrackInfo(slideTextForAudio);
+        const audioLabel = trackInfo?.audioLabel || (audioTitle !== 'placeholder:audio-track' ? audioTitle : 'Audio');
+        const finalAudioUrl = audioUrl || trackInfo?.audioUrl || `/audio/${audioLabel.replace(/[^a-zA-Z0-9.-]+/g, '_')}.mp3`;
+
+        if (rawSlide.interaction) {
+          // Mapear exclusivamente a los metadatos de la interacción
+          if (!rawSlide.interaction.verificationAudioUrl) {
+            rawSlide.interaction.verificationAudioUrl = finalAudioUrl;
+          }
+          if (!rawSlide.interaction.audioLabel) {
+            rawSlide.interaction.audioLabel = audioLabel;
+          }
+          // Descartar referenceContent para que no active split_50_50
+          rawSlide.referenceContent = null;
+          rawSlide.layout = 'single_column';
+        } else {
+          // Diapositiva puramente de escucha (sin interacción activa): layout single_column
+          rawSlide.layout = 'single_column';
+        }
+      }
+    } else if (rawSlide.interaction) {
+      if (!hasAudioEvidence && rawSlide.interaction.verificationAudioUrl) {
+        // Audio sintético generado sin evidencia física auditiva: erradicar
+        delete rawSlide.interaction.verificationAudioUrl;
+        delete rawSlide.interaction.audioLabel;
+      } else if (hasAudioEvidence && !rawSlide.interaction.verificationAudioUrl) {
+        const trackInfo = extractAudioTrackInfo(slideTextForAudio);
+        if (trackInfo) {
+          rawSlide.interaction.verificationAudioUrl = trackInfo.audioUrl;
+          if (!rawSlide.interaction.audioLabel) {
+            rawSlide.interaction.audioLabel = trackInfo.audioLabel;
+          }
+        }
       }
     }
 
@@ -2726,6 +2953,7 @@ export function validateAndParseSlides(
           } else {
             rawSlide.interaction.wordBank = Array.from(new Set([...rawSlide.interaction.wordBank, ...extractedTerms]));
           }
+          decoupleWordBankTokensAndPreserveContext(rawSlide, effectiveContext);
         }
       } else if (isAnsKey) {
         const keys = parseAllAnswerKeys(spuriousText);
@@ -2844,7 +3072,6 @@ export function validateAndParseSlides(
     // Observabilidad y Diagnóstico de Contexto Faltante / Resolución de Referencias
     const textToScan = `${rawSlide.title || ''} ${rawSlide.subtitle || ''} ${(rawSlide.interaction as any)?.instruction || ''} ${(rawSlide.referenceContent as any)?.instruction || ''} ${(rawSlide.referenceContent as any)?.content || ''}`.trim();
     const crossRef = detectCrossActivityReference(textToScan);
-    const effectiveContext = (idx > 0 && validatedSlides[idx - 1]) ? validatedSlides[idx - 1] : (previousSlideContext || null);
 
     if (crossRef) {
       if (effectiveContext) {
@@ -2926,6 +3153,9 @@ export function validateAndParseSlides(
     if (rawSlide.interaction && typeof rawSlide.interaction === 'object') {
       if (!rawSlide.interaction.instruction) {
         rawSlide.interaction.instruction = (rawSlide as any).instruction || rawSlide.subtitle || rawSlide.title || 'Complete the exercise.';
+      }
+      if (rawSlide.interaction.type === 'input_fields') {
+        decoupleWordBankTokensAndPreserveContext(rawSlide, effectiveContext);
       }
     }
 
@@ -3164,8 +3394,10 @@ CANONICAL ARCHETYPES:
    - CRITERIO DE CALIFICACIÓN ONTOLÓGICA POSITIVA PARA 'referenceContent':
      * Un bloque de texto califica como 'referenceContent' ÚNICAMENTE si constituye material de lectura continuo autónomo (artículo, historia, diálogo estructurado con >= 2 hablantes identificados, transcripción o tabla formal).
      * Si el texto es una consigna, directiva huérfana o un modelo de pregunta aislado (e.g. "Use the phrases in 2a...", "Work in pairs..."), DEBE ser absorbido en el encabezado de la interacción ('instruction' / 'prompt') o descartado, dejando 'referenceContent: null' y layout: 'single_column'.
-   - TRATAMIENTO UNÍVOCO DEL AUDIO (Verificación vs. Listening autónomo):
-     * Cualquier audio asociado a un ejercicio de práctica o autoverificación (identificado por badges tipo V1.2, R1.8, CD Track X o consignas tipo "Listen and check", "Listen and repeat"): DEBE mapearse exclusivamente como metadato del ejercicio ('interaction.verificationAudioUrl' y 'interaction.audioLabel').
+   - TRATAMIENTO UNÍVOCO DEL AUDIO Y PRINCIPIO EPISTÉMICO DE EVIDENCIA FÍSICA (ZERO SYNTHETIC AUDIO):
+     * EVIDENCIA FÍSICA UNÍVOCA: Un recurso de audio (pista de comprobación o ejercicio de escucha) solo existe SI Y SOLO SI en los píxeles del recorte figura evidencia auditiva explícita (directivas verbales de escucha como "Listen", "Hear", "Recording", "CD Track", "Audio" o glifos inequívocos de auriculares/altavoz).
+     * AISLAMIENTO DE METADATOS DE ÍNDICE: Códigos alfanuméricos aislados (referencias a apéndices de vocabulario como 'VR1.2', 'V1.1', tablas gramaticales 'G2.1', o páginas 'p. 145') constituyen EXCLUSIVAMENTE metadatos de referencia documental, JAMÁS pistas multimedia. Queda estrictamente prohibido deducir reproductores de audio a partir de etiquetas de apéndice o sintetizar frases ficticias no presentes en la imagen. En ausencia de evidencia auditiva física explícita, 'verificationAudioUrl' DEBE permanecer 'undefined'.
+     * Si existe evidencia física de audio asociada a un ejercicio de práctica o autoverificación: DEBE mapearse exclusivamente como metadato del ejercicio ('interaction.verificationAudioUrl' y 'interaction.audioLabel').
      * Bajo NINGUNA circunstancia un audio de ejercicio interactivo debe registrarse como 'referenceContent' ni activar 'split_50_50'. En tales casos, 'referenceContent' DEBE ser estrictamente null y el layout 'single_column'.
      * 'referenceContent' de tipo 'media' (audio) se reserva ÚNICAMENTE para audios de comprensión/escucha pasiva autónoma sin reactivos interactivos (interaction: null, isGraded: false).
    - STRICT FIDELITY: Strictly transcribe literal text. NEVER generate synthetic summaries or pedagogical explanations.
@@ -3179,10 +3411,16 @@ CANONICAL ARCHETYPES:
        - ZERO DUPLICATION / SELF-SUFFICIENT: This direct vocabulary task is completely self-contained; referenceContent MUST be strictly null and layout MUST be "single_column".
      * MATCHING VIA INPUT FIELDS: If an exercise asking to match options/headings to sections or sentences is modeled using input_fields, it MANDATORILY MUST include the "wordBank" containing the exact printed list of options/headings to match.
      * NEVER EMIT ORPHAN BLANKS: Never emit empty fill-in inputs without providing the printed bank of candidate options/headings in "wordBank" or as matching tokens.
-     * WORD BANK INTEGRITY & CLEAN COMPLETION:
+     * PRINCIPIO DE PRESERVACIÓN CONTEXTUAL Y DESACOPLAMIENTO DE TOKENS ('input_fields' + 'wordBank'):
+       - PROHIBICIÓN DE REACTIVOS VACÍOS DE CONTEXTO:
+         * Queda estrictamente prohibido que un reactivo de 'input_fields' tenga como 'prompt' únicamente el ordinal o índice numérico (e.g. "2.", "3.") dejando al estudiante sin estímulo visible sobre el que interactuar.
+       - REGLA UNIVERSAL DE DESACOPLAMIENTO (TOKEN VS. CONTEXTO RECEPTOR):
+         * Si la clave oficial ('expectedAnswer' o Answer Key) corresponde a una colocación o sintagma compuesto (e.g. "A + B") y el subelemento "A" (o "B") está presente en 'interaction.wordBank':
+           a) El elemento provisto por el banco se asigna como 'expectedAnswer' (el valor a ingresar/arrastrar en el espacio).
+           b) El elemento contextual complementario debe permanecer visible dentro del 'prompt', delimitando con precisión la posición del hueco mediante la sintaxis canónica: e.g. "{{blank}} [complemento]" o "[prefijo] {{blank}}".
+         * Si la consigna exige escribir la construcción completa pero la base textual receptora proviene de un recorte previo o estímulo visible, el 'prompt' debe presentar el estímulo de referencia antes del campo de entrada para que el alumno cuente con el andamiaje semántico necesario para responder.
        - Printed word boxes or candidate vocabulary lists belong strictly in "interaction.wordBank".
-       - Complete items using collocations and complement structures certified by the official Answer Key / Ground Truth.
-       - Blanks must be clean without orphan or broken gap markers (never inject '[blank]', '[?]', etc.). Keep stimuli naturally readable.
+       - Blanks must be clean without orphan or broken gap markers (never inject '[blank]', '[?]', etc.). Keep stimuli naturally readable with canonical '{{blank}}'.
      * TABULAR QUESTIONNAIRES & FILLABLE TABLES: When the clipping presents a printed table where one or more columns or cells are blank for the student to write answers, names, or values (e.g. peer surveys, interviews, questionnaire tables with columns like "Question", "Your answer", "Partner's answer"):
        - MUST be classified as interaction.type: "input_fields" with layoutMode: "table". NEVER classify it as "writing" with a passive reference table!
        - COLUMN INTEGRITY: All columns that form part of the printed table grid in the image MUST be included inside tableHeaders and tableRows of the interaction. It is STRICTLY PROHIBITED to dismantle, split, or detach any columns of the table (such as note columns, "partner's notes", or "follow-up questions" columns) to send them as a separate referenceContent block!
@@ -4487,35 +4725,19 @@ function sanitizeExtractedPayload(payload: ExtractedStructuredPayload): Extracte
     finalItems = finalItems.slice(0, 8);
   }
 
-  // Detection and sanitization of verification audio ("Listen and check", "R1.2", "CD1 Track X")
+  // Detection and sanitization of verification audio ("Listen and check", "CD1 Track X")
   const combinedSearchText = `${title} ${instruction} ${followUpPrompt || ''} ${referenceContent || ''} ${finalItems.map((i) => i.prompt).join(' ')}`;
 
-  if (!audioLabel) {
-    const trackPattern = /\b(?:(?:CD\s*\d+\s*)?Track\s*(\d+(?:\.\d+)?)|(R\d+\.\d+)|(?:Audio\s*(\d+(?:\.\d+)?)))\b/i;
-    const trackMatch = combinedSearchText.match(trackPattern);
-    if (trackMatch) {
-      audioLabel = trackMatch[0].trim();
-    } else {
-      const listenCheckMatch = combinedSearchText.match(/listen\s+(?:and|&|to)\s+check(?:\s+your\s+answers)?(?:\s*\[?([A-Z0-9.\s]+)\]?)?/i);
-      if (listenCheckMatch) {
-        if (listenCheckMatch[1]?.trim()) {
-          audioLabel = listenCheckMatch[1].trim();
-        } else {
-          const decimalMatch = combinedSearchText.match(/\b([1-9]\.\d{1,2})\b/);
-          if (decimalMatch) {
-            audioLabel = decimalMatch[1].trim();
-          } else {
-            audioLabel = 'Audio';
-          }
-        }
-      }
+  if (hasExplicitAudioEvidence(combinedSearchText)) {
+    const audioInfo = extractAudioTrackInfo(combinedSearchText);
+    if (audioInfo) {
+      if (!audioLabel) audioLabel = audioInfo.audioLabel;
+      if (!verificationAudioUrl) verificationAudioUrl = audioInfo.audioUrl;
     }
-  }
-
-  const hasListenReference = /listen\s+(?:and|&|to)\s+check/i.test(combinedSearchText) || Boolean(audioLabel);
-  if (hasListenReference && !verificationAudioUrl) {
-    const slug = audioLabel ? audioLabel.replace(/[^a-zA-Z0-9.-]+/g, '_') : 'verification';
-    verificationAudioUrl = `/audio/${slug}.mp3`;
+  } else {
+    // Zero Synthetic Audio: En ausencia de evidencia física auditiva explícita, verificationAudioUrl permanece undefined
+    audioLabel = undefined;
+    verificationAudioUrl = undefined;
   }
 
   return {
