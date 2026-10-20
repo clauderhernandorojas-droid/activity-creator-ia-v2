@@ -39,6 +39,14 @@ export function useHistoryKeyboard() {
         }
         return;
       }
+
+      // Quick Save: Ctrl + S or Cmd + S
+      if (e.key === 's' || e.key === 'S') {
+        e.preventDefault();
+        const { saveLesson } = useLessonStore.getState();
+        saveLesson();
+        return;
+      }
     };
 
     window.addEventListener('keydown', handleKeyDown);

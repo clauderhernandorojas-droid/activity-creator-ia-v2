@@ -1,18 +1,41 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
-import type { 
-  Lesson, 
-  Slide, 
-  ReferenceBlock, 
-  InteractionBlock, 
-  SlideLayout, 
-  ExtractedBlock 
+import { 
+  type Lesson, 
+  type Slide, 
+  type ReferenceBlock, 
+  type InteractionBlock, 
+  type SlideLayout, 
+  type ExtractedBlock,
+  LessonSchema
 } from '../types/schema';
 import { digitizeBook, createManualBlock, roleToForcedTargetType, type ManualTemplateType } from '../core/ai/digitizeBook';
 import { convertSlideToRole, type PedagogicalRole } from '../core/utils/slideRoleConverter';
 import { compressImageBase64 } from '../core/utils/imageCompressor';
 import { useSessionStore } from './useSessionStore';
 export { validateFillInBlank, type FlexibleValidationResult } from '../core/evaluators/fillBlankValidator';
+
+declare global {
+  interface Window {
+    showOpenFilePicker?: (options?: {
+      types?: Array<{
+        description?: string;
+        accept: Record<string, string[]>;
+      }>;
+      multiple?: boolean;
+      excludeAcceptAllOption?: boolean;
+    }) => Promise<FileSystemFileHandle[]>;
+
+    showSaveFilePicker?: (options?: {
+      suggestedName?: string;
+      types?: Array<{
+        description?: string;
+        accept: Record<string, string[]>;
+      }>;
+      excludeAcceptAllOption?: boolean;
+    }) => Promise<FileSystemFileHandle>;
+  }
+}
 
 export interface HistorySnapshot {
   lesson: Lesson;
@@ -144,9 +167,18 @@ interface LessonState {
   reExtractBlockWithRole: (blockId: string, role: PedagogicalRole) => Promise<void>;
   reExtractSlideWithRole: (slideId: string, role: PedagogicalRole, clipUrl?: string) => Promise<void>;
 
+  // File System Access API & File Portability
+  currentFileHandle: FileSystemFileHandle | null;
+  setCurrentFileHandle: (handle: FileSystemFileHandle | null) => void;
+  saveFeedback: { message: string; timestamp: number } | null;
+  clearSaveFeedback: () => void;
+  saveLesson: () => Promise<boolean>;
+  saveLessonAs: () => Promise<boolean>;
+  openLessonWithPicker: () => Promise<boolean>;
+
   // Actions - Lesson Metadata & File Portability
   setLessonTitle: (title: string) => void;
-  loadLesson: (lesson: Lesson) => void;
+  loadLesson: (lesson: Lesson, fileHandle?: FileSystemFileHandle | null) => void;
   exportLesson: () => void;
 }
 
@@ -185,6 +217,10 @@ export const useLessonStore = create<LessonState>()(
       clearOcrError: () => set({ ocrError: null }),
       pastedImagePreview: null,
       pastedImages: [],
+      currentFileHandle: null,
+      setCurrentFileHandle: (handle) => set({ currentFileHandle: handle }),
+      saveFeedback: null,
+      clearSaveFeedback: () => set({ saveFeedback: null }),
 
       // History State
       past: [],
@@ -327,6 +363,7 @@ export const useLessonStore = create<LessonState>()(
         set((state) => ({
           ...recordHistory(state),
           activeSlideId: '',
+          currentFileHandle: null,
           lesson: {
             ...state.lesson,
             slides: [],
@@ -346,7 +383,7 @@ export const useLessonStore = create<LessonState>()(
         }));
       },
 
-      loadLesson: (importedLesson: Lesson) => {
+      loadLesson: (importedLesson: Lesson, fileHandle?: FileSystemFileHandle | null) => {
         const slides = Array.isArray(importedLesson.slides) && importedLesson.slides.length > 0
           ? importedLesson.slides
           : [defaultInitialSlide];
@@ -363,14 +400,229 @@ export const useLessonStore = create<LessonState>()(
             slides,
           },
           activeSlideId: firstSlideId,
+          currentFileHandle: fileHandle !== undefined ? fileHandle : state.currentFileHandle,
         }));
 
         useSessionStore.getState().setCurrentSlideId(firstSlideId);
       },
 
+      saveLesson: async () => {
+        const { lesson, currentFileHandle } = get();
+        const jsonContent = JSON.stringify(lesson, null, 2);
+
+        // 1. Quick Save: Sobrescritura directa si currentFileHandle existe
+        if (currentFileHandle) {
+          try {
+            const handleAny = currentFileHandle as any;
+            if (typeof handleAny.queryPermission === 'function') {
+              const perm = await handleAny.queryPermission({ mode: 'readwrite' });
+              if (perm !== 'granted') {
+                if (typeof handleAny.requestPermission === 'function') {
+                  const req = await handleAny.requestPermission({ mode: 'readwrite' });
+                  if (req !== 'granted') {
+                    throw new Error('Permiso de escritura denegado');
+                  }
+                }
+              }
+            }
+            const writable = await currentFileHandle.createWritable();
+            await writable.write(jsonContent);
+            await writable.close();
+
+            set({
+              saveFeedback: {
+                message: `Guardado en ${currentFileHandle.name}`,
+                timestamp: Date.now(),
+              },
+            });
+            return true;
+          } catch (err: any) {
+            if (err?.name === 'AbortError') return false;
+            console.warn('[useLessonStore] Error al sobrescribir archivo vinculado, solicitando ubicación:', err);
+          }
+        }
+
+        // 2. Si no hay handle o falló la sobrescritura, invocar showSaveFilePicker
+        if (typeof window !== 'undefined' && typeof window.showSaveFilePicker === 'function') {
+          try {
+            const safeTitle = (lesson.title || 'lesson')
+              .normalize('NFD')
+              .replace(/[\u0300-\u036f]/g, '')
+              .replace(/[^a-zA-Z0-9_-]/g, '_')
+              .replace(/_+/g, '_')
+              .replace(/^_|_$/g, '') || 'lesson';
+
+            const handle = await window.showSaveFilePicker({
+              suggestedName: `${safeTitle}.elt.json`,
+              types: [
+                {
+                  description: 'ELT Lesson JSON',
+                  accept: {
+                    'application/json': ['.json', '.elt.json'],
+                  },
+                },
+              ],
+            });
+
+            const writable = await handle.createWritable();
+            await writable.write(jsonContent);
+            await writable.close();
+
+            set({
+              currentFileHandle: handle,
+              saveFeedback: {
+                message: `Guardado en ${handle.name}`,
+                timestamp: Date.now(),
+              },
+            });
+            return true;
+          } catch (err: any) {
+            if (err?.name === 'AbortError') return false;
+            console.warn('[useLessonStore] showSaveFilePicker cancelado o fallido:', err);
+            return false;
+          }
+        }
+
+        // 3. Fallback para navegadores sin File System Access API
+        exportLessonToFile(lesson);
+        set({
+          saveFeedback: {
+            message: 'Copia exportada a Descargas',
+            timestamp: Date.now(),
+          },
+        });
+        return true;
+      },
+
+      saveLessonAs: async () => {
+        const { lesson } = get();
+        const jsonContent = JSON.stringify(lesson, null, 2);
+
+        if (typeof window !== 'undefined' && typeof window.showSaveFilePicker === 'function') {
+          try {
+            const safeTitle = (lesson.title || 'lesson')
+              .normalize('NFD')
+              .replace(/[\u0300-\u036f]/g, '')
+              .replace(/[^a-zA-Z0-9_-]/g, '_')
+              .replace(/_+/g, '_')
+              .replace(/^_|_$/g, '') || 'lesson';
+
+            const handle = await window.showSaveFilePicker({
+              suggestedName: `${safeTitle}.elt.json`,
+              types: [
+                {
+                  description: 'ELT Lesson JSON',
+                  accept: {
+                    'application/json': ['.json', '.elt.json'],
+                  },
+                },
+              ],
+            });
+
+            const writable = await handle.createWritable();
+            await writable.write(jsonContent);
+            await writable.close();
+
+            set({
+              currentFileHandle: handle,
+              saveFeedback: {
+                message: `Copia guardada en ${handle.name}`,
+                timestamp: Date.now(),
+              },
+            });
+            return true;
+          } catch (err: any) {
+            if (err?.name === 'AbortError') return false;
+            console.warn('[useLessonStore] Guardar copia cancelado:', err);
+            return false;
+          }
+        }
+
+        // Fallback
+        exportLessonToFile(lesson);
+        set({
+          saveFeedback: {
+            message: 'Copia exportada a Descargas',
+            timestamp: Date.now(),
+          },
+        });
+        return true;
+      },
+
+      openLessonWithPicker: async () => {
+        if (typeof window === 'undefined' || typeof window.showOpenFilePicker !== 'function') {
+          return false;
+        }
+
+        try {
+          const handles = await window.showOpenFilePicker({
+            types: [
+              {
+                description: 'ELT Lesson JSON',
+                accept: {
+                  'application/json': ['.json', '.elt.json'],
+                },
+              },
+            ],
+            multiple: false,
+          });
+
+          const handle = handles?.[0];
+          if (!handle) return false;
+
+          const file = await handle.getFile();
+          const text = await file.text();
+          const parsedJson = JSON.parse(text);
+
+          const candidate = (parsedJson && typeof parsedJson === 'object' && 'lesson' in parsedJson)
+            ? parsedJson.lesson
+            : parsedJson;
+
+          if (!candidate || typeof candidate !== 'object') {
+            throw new Error('El archivo no contiene un formato de lección válido.');
+          }
+
+          const candidateWithDefaults = {
+            id: candidate.id || `lesson-${Date.now()}`,
+            title: candidate.title || handle.name.replace(/\.(elt\.)?json$/i, '') || 'Lección Importada',
+            level: ['A1-A2', 'B1', 'B2', 'C1'].includes(candidate.level) ? candidate.level : 'B1',
+            unit: candidate.unit || 'Unidad 1',
+            slides: Array.isArray(candidate.slides) ? candidate.slides : [],
+          };
+
+          const validation = LessonSchema.safeParse(candidateWithDefaults);
+          if (!validation.success) {
+            const firstIssues = validation.error.issues
+              .slice(0, 3)
+              .map((i) => `${i.path.join('.')}: ${i.message}`)
+              .join('\n');
+            throw new Error(`El archivo no cumple con el esquema de lección:\n${firstIssues}`);
+          }
+
+          get().loadLesson(validation.data, handle);
+          set({
+            saveFeedback: {
+              message: `Abierto: ${handle.name}`,
+              timestamp: Date.now(),
+            },
+          });
+          return true;
+        } catch (err: any) {
+          if (err?.name === 'AbortError') return true;
+          console.error('[useLessonStore] Error abriendo archivo con picker:', err);
+          throw err;
+        }
+      },
+
       exportLesson: () => {
         const { lesson } = get();
         exportLessonToFile(lesson);
+        set({
+          saveFeedback: {
+            message: 'Copia exportada a Descargas',
+            timestamp: Date.now(),
+          },
+        });
       },
 
       createSlideFromBlock: (blockId, role) => {

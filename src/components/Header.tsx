@@ -15,7 +15,9 @@ import {
   Undo2,
   Redo2,
   Save,
-  FolderOpen
+  FolderOpen,
+  Download,
+  Check
 } from 'lucide-react';
 
 export const Header: React.FC = () => {
@@ -23,7 +25,11 @@ export const Header: React.FC = () => {
     lesson, 
     setLessonTitle,
     loadLesson,
-    exportLesson,
+    saveLesson,
+    saveLessonAs,
+    openLessonWithPicker,
+    currentFileHandle,
+    saveFeedback,
     clearLesson, 
     undo, 
     redo, 
@@ -43,8 +49,53 @@ export const Header: React.FC = () => {
 
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [tempTitle, setTempTitle] = useState(lesson.title);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
   const titleInputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (saveFeedback?.message) {
+      setToastMessage(saveFeedback.message);
+      const timer = setTimeout(() => {
+        setToastMessage(null);
+      }, 3500);
+      return () => clearTimeout(timer);
+    }
+  }, [saveFeedback]);
+
+  const handleOpenLesson = async () => {
+    if (typeof window !== 'undefined' && 'showOpenFilePicker' in window) {
+      try {
+        const opened = await openLessonWithPicker();
+        if (opened) return;
+      } catch (err: any) {
+        alert(err.message || 'Error al abrir el archivo.');
+        return;
+      }
+    }
+    fileInputRef.current?.click();
+  };
+
+  const handleQuickSave = async () => {
+    if (isSaving) return;
+    setIsSaving(true);
+    try {
+      await saveLesson();
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleSaveCopy = async () => {
+    if (isSaving) return;
+    setIsSaving(true);
+    try {
+      await saveLessonAs();
+    } finally {
+      setIsSaving(false);
+    }
+  };
 
   const handleStartEditing = () => {
     setTempTitle(lesson.title);
@@ -236,7 +287,7 @@ export const Header: React.FC = () => {
           </button>
         </div>
 
-        {/* File Portability Controls: Open & Export */}
+        {/* File Portability Controls: Open, Quick Save & Export Copy */}
         <div className="flex items-center gap-1 bg-slate-100/90 p-1 rounded-xl border border-slate-200/80">
           <input
             type="file"
@@ -247,7 +298,7 @@ export const Header: React.FC = () => {
           />
 
           <button
-            onClick={() => fileInputRef.current?.click()}
+            onClick={handleOpenLesson}
             className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold text-slate-700 hover:text-indigo-700 hover:bg-white transition shadow-2xs cursor-pointer"
             title="Abrir y cargar lección desde archivo .elt.json"
           >
@@ -256,14 +307,39 @@ export const Header: React.FC = () => {
             <span className="inline xl:hidden">Abrir</span>
           </button>
 
+          {/* Quick Save: Sobrescritura directa o nuevo guardado */}
           <button
-            onClick={exportLesson}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold text-indigo-700 hover:text-indigo-800 hover:bg-white bg-indigo-50/50 transition shadow-2xs cursor-pointer"
-            title="Guardar y exportar lección en formato portable .elt.json"
+            onClick={handleQuickSave}
+            disabled={isSaving}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold text-indigo-700 hover:text-indigo-800 hover:bg-white bg-indigo-50/70 transition shadow-2xs cursor-pointer disabled:opacity-50"
+            title={
+              currentFileHandle
+                ? `Guardar cambios directamente en "${currentFileHandle.name}" (Ctrl + S)`
+                : 'Guardar lección en archivo (Ctrl + S)'
+            }
           >
             <Save className="w-3.5 h-3.5 text-indigo-600" />
-            <span className="hidden xl:inline">Guardar / Exportar</span>
-            <span className="inline xl:hidden">Exportar</span>
+            <span className="font-semibold">Guardar</span>
+            {currentFileHandle ? (
+              <span className="hidden lg:inline-flex items-center max-w-[120px] truncate text-[10px] text-indigo-900/60 font-medium">
+                ({currentFileHandle.name})
+              </span>
+            ) : (
+              <span className="hidden 2xl:inline text-[10px] text-slate-400 font-normal">
+                (Ctrl+S)
+              </span>
+            )}
+          </button>
+
+          {/* Guardar una copia / Exportar deliberadamente */}
+          <button
+            onClick={handleSaveCopy}
+            disabled={isSaving}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold text-slate-600 hover:text-slate-900 hover:bg-white transition shadow-2xs cursor-pointer disabled:opacity-50"
+            title="Guardar una copia o exportar archivo .elt.json independiente"
+          >
+            <Download className="w-3.5 h-3.5 text-slate-400" />
+            <span className="hidden xl:inline">Guardar Copia</span>
           </button>
         </div>
 
@@ -356,6 +432,14 @@ export const Header: React.FC = () => {
           <Share2 className="w-4 h-4" />
         </button>
       </div>
+
+      {/* Visual Toast Feedback for Quick Save / File Operations */}
+      {toastMessage && (
+        <div className="fixed bottom-5 right-5 z-50 flex items-center gap-2.5 bg-slate-900/95 backdrop-blur text-white text-xs font-semibold px-4 py-2.5 rounded-xl shadow-2xl border border-slate-700/80 animate-bounce duration-300">
+          <Check className="w-4 h-4 text-emerald-400 shrink-0" />
+          <span>{toastMessage}</span>
+        </div>
+      )}
     </header>
   );
 };
