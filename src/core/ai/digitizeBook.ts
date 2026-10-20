@@ -1174,7 +1174,7 @@ export function parseAllAnswerKeys(text: string): Record<string, Record<string, 
 
     let workLine = line.replace(/^(?:answers?|answer\s*key|key|solucionario|claves?|teacher'?s?\s*notes?)\s*[:\.-]?\s*/i, '');
 
-    const secWithKeyword = workLine.match(/^(?:exercise|act\.?|activity|part)\s*([0-9]+[a-z]?|[a-f])\s*[\)\.:\-]\s*(.*)$/i);
+    const secWithKeyword = workLine.match(/^(?:exercise|act\.?|activity|part)\s*([0-9]+[a-z]?|[a-f])(?:\s*[\)\.:\-]\s*|\s+|$)(.*)$/i);
     const secAlphaNum = workLine.match(/^([0-9]+[a-z])\s*[\)\.:\-]\s*(.*)$/i);
     const secWithInternalNumbers = workLine.match(/^([0-9]+)\s*[\)\.:\-]\s*(\d+[\.\)\:\s-].*)$/i);
 
@@ -1182,31 +1182,34 @@ export function parseAllAnswerKeys(text: string): Record<string, Record<string, 
 
     if (secMatch) {
       currentSection = secMatch[1].toLowerCase();
-      workLine = secMatch[2];
+      workLine = (secMatch[2] || '').trim();
+      workLine = workLine.replace(/^(?:answers?|answer\s*key|key|solucionario|claves?|teacher'?s?\s*notes?)\s*[:\.-]?\s*/i, '').trim();
     }
+
+    if (!workLine) continue;
 
     if (!sections[currentSection]) sections[currentSection] = {};
 
-    // 1. Numbered items: '1 tidy up 2 look after' or '1. b, 2. c' or '1: was'
-    const numRegex = /(?:^|[\s,;|\n]+)(\d+)[\.\)\:\s-]\s*([^\d\n,;|]+?)(?=(?:[\s,;|\n]+\d+[\.\)\:\s-]|$))/gi;
+    // 1. Numbered items: '1 tidy up 2 look after' or '1. b, 2. c' or '1: was' or full sentences
+    const numRegex = /(?:^|[\s,;|\n]+)(\d+)[\.\)\:\s-]\s*(.+?)(?=(?:[\s,;|\n]+\d+[\.\)\:\s-]|$))/gi;
     let match: RegExpExecArray | null;
     let foundNumbered = false;
     while ((match = numRegex.exec(workLine)) !== null) {
       foundNumbered = true;
       const num = match[1];
-      const val = match[2].trim().replace(/^[:\.-]\s*/, '').trim();
-      if (val) {
+      const val = match[2].trim().replace(/^[:\.-]\s*/, '').replace(/[,;]+$/, '').trim();
+      if (val && !/^(?:answers?|key|solucionario)$/i.test(val)) {
         sections[currentSection][num] = val;
       }
     }
 
     // 2. Lettered items: 'a) lived b) saw' if no numbered items
     if (!foundNumbered) {
-      const letterRegex = /(?:^|[\s,;|\n]+)([a-f])[\.\)\:\s-]\s*([^a-f\d\n,;|]+?)(?=(?:[\s,;|\n]+[a-f][\.\)\:\s-]|$))/gi;
+      const letterRegex = /(?:^|[\s,;|\n]+)([a-f])[\.\)\:\s-]\s*(.+?)(?=(?:[\s,;|\n]+[a-f][\.\)\:\s-]|$))/gi;
       let lMatch: RegExpExecArray | null;
       while ((lMatch = letterRegex.exec(workLine)) !== null) {
         const letter = lMatch[1].toLowerCase();
-        const val = lMatch[2].trim().replace(/^[:\.-]\s*/, '').trim();
+        const val = lMatch[2].trim().replace(/^[:\.-]\s*/, '').replace(/[,;]+$/, '').trim();
         if (val) {
           sections[currentSection][letter] = val;
         }
@@ -1314,7 +1317,11 @@ export function applyAnswerKeysToSlide(
       }
 
       if (item.prompt) {
-        item.prompt = cleanInputBlankMarkers(item.prompt);
+        if (isSentenceScrambleReactive(item.prompt, fullHeader)) {
+          item.prompt = item.prompt.replace(/_{2,}|\[\s*(?:blank|\?)\s*\]|\{\{\s*blank\s*\}\}/gi, '').trim();
+        } else {
+          item.prompt = cleanInputBlankMarkers(item.prompt);
+        }
       }
     });
 
@@ -1591,10 +1598,12 @@ export function decoupleWordBankTokensAndPreserveContext(
     ? slide.interaction.wordBank.map((w: any) => String(w).trim()).filter(Boolean)
     : [];
 
+  const fullHeader = `${slide.title || ''} ${slide.subtitle || ''} ${slide.interaction.instruction || ''}`;
   const sortedBank = [...wordBank].sort((a, b) => b.length - a.length);
 
   slide.interaction.listItems.forEach((item: any, idx: number) => {
     if (!item || typeof item !== 'object') return;
+    if (isSentenceScrambleReactive(item.prompt || '', fullHeader)) return;
 
     let currentPrompt = cleanInputBlankMarkers(item.prompt || '');
     let expected = (item.expectedAnswer || '').trim();
@@ -1866,14 +1875,80 @@ export function foldSpuriousMetadata(text: string, slide: any): void {
 }
 
 /**
+ * Detects whether an instruction represents sentence ordering, question formation, or unscrambling
+ * (e.g. 'make questions', 'put the words in order', 'unscramble', 'write sentences').
+ */
+export function isSentenceOrderingDirective(text?: string): boolean {
+  if (!text) return false;
+  return /\b(?:make|form|write|create)\s+(?:the\s+)?(?:questions?|sentences?)\b|\bput\s+(?:the\s+)?(?:words|prompts)\s+(?:in|into)\s+(?:the\s+)?(?:correct\s+)?order\b|\border\s+(?:the\s+)?(?:words|prompts)\b|\bunscramble\b|\breorder\b|\brearrange\b|\bordenar\s+(?:las\s+)?palabras\b|\bescribir?\s+(?:oraciones|preguntas)\b|\bhaz\s+preguntas?\b/i.test(text);
+}
+
+/**
+ * Detects whether a reactive item with delimiters represents a sentence reconstruction / unscramble task
+ * rather than a multiple-choice selection disjunction.
+ *
+ * Concurrent criteria:
+ * - High density of fragments (5 or more tokens: e.g. "been / in / the / you / last / clubbing / month / Have ?")
+ * - Presence of terminal/isolated punctuation marks ('?', '.') within the sequence
+ * - Directive oriented to sentence assembly/ordering ('make questions', 'put words in order', etc.) with >= 3 fragments.
+ */
+export function isSentenceScrambleReactive(
+  rawText: string,
+  contextDirective?: string
+): boolean {
+  if (!rawText || typeof rawText !== 'string') return false;
+
+  const clean = rawText
+    .replace(/\[\s*\?\s*\]|\[\s*blank\s*\]|\{\{\s*blank\s*\}\}|_{2,}/gi, '')
+    .trim()
+    .replace(/^(?:\(?\d+[.)]?\s*)/, '')
+    .trim();
+
+  if (!clean.includes('/')) return false;
+
+  const rawParts = clean.split(/\s*\/\s*/).map((p) => p.trim()).filter(Boolean);
+  if (rawParts.length < 2) return false;
+
+  const isOrderingDir = isSentenceOrderingDirective(contextDirective);
+
+  // Check for isolated terminal punctuation tokens (e.g. '?', '.', '!') or tokens ending in terminal punctuation
+  const hasIsolatedOrTerminalPunctuation = rawParts.some(
+    (p) => p === '?' || p === '.' || p === '!' || /\s+[?.!]$/.test(p) || (p.length > 1 && /[?.!]$/.test(p) && !/^(?:etc|e\.g|i\.e)\./i.test(p))
+  );
+
+  // 1. High density of fragments (>= 5 tokens) is unmistakably syntactic fragmentation (sentence scrambling)
+  if (rawParts.length >= 5) {
+    return true;
+  }
+
+  // 2. Assembly/ordering directive with >= 3 tokens
+  if (isOrderingDir && rawParts.length >= 3) {
+    return true;
+  }
+
+  // 3. Presence of terminal question or punctuation mark with >= 3 tokens
+  if (hasIsolatedOrTerminalPunctuation && rawParts.length >= 3) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
  * Decomposes a reactive item with slash-delimited options into a base prompt and discrete option list.
  * e.g. "work in a school/an office/a receptionist" -> { prompt: "work in", options: ["a school", "an office", "a receptionist"] }
  * e.g. "1. work in: a school / an office / a receptionist" -> { prompt: "work in", options: ["a school", "an office", "a receptionist"] }
  */
 export function decomposeSlashDelimitedReactive(
-  rawText: string
+  rawText: string,
+  contextDirective?: string
 ): { prompt: string; options: string[] } | null {
   if (!rawText || typeof rawText !== 'string') return null;
+
+  // Rule 1: Exclude sentence scramble / ordering items
+  if (isSentenceScrambleReactive(rawText, contextDirective)) {
+    return null;
+  }
 
   // Clean orphan gap markers: [ ? ], [blank], {{blank}}, _____
   let clean = rawText
@@ -1889,6 +1964,16 @@ export function decomposeSlashDelimitedReactive(
   // Split by slashes
   const rawParts = clean.split(/\s*\/\s*/).map((p) => p.trim()).filter(Boolean);
   if (rawParts.length < 2) return null;
+
+  // Selection archetype criterion: low fragment density (2 to 4 options max).
+  // 5 or more tokens is syntactic fragmentation, not alternative choices.
+  if (rawParts.length > 4) return null;
+
+  // Selection archetype criterion: absence of terminal punctuation ('?', '.') as isolated token.
+  const hasIsolatedPunctuation = rawParts.some(
+    (p) => p === '?' || p === '.' || p === '!' || /\s+[?.!]$/.test(p)
+  );
+  if (hasIsolatedPunctuation) return null;
 
   // Check if there is an explicit separator before the first slash: e.g. "work in: a school" or "work in - a school"
   const firstPart = rawParts[0];
@@ -2527,16 +2612,21 @@ export function validateAndParseSlides(
 
       // Descomposición canónica y normalización de reactivos con alternativas delimitadas ('/') en input_fields
       if (rawSlide.interaction && rawSlide.interaction.type === 'input_fields' && Array.isArray(rawSlide.interaction.listItems)) {
-        const isNegativeDiscrim = isNegativeDiscriminationInstruction(
-          `${rawSlide.title || ''} ${rawSlide.subtitle || ''} ${rawSlide.interaction.instruction || ''}`
-        );
-        const hasSlashDelimited = rawSlide.interaction.listItems.length > 0 &&
-          rawSlide.interaction.listItems.every((it: any) => Boolean(decomposeSlashDelimitedReactive(it.prompt || it.text || '')));
+        const fullHeader = `${rawSlide.title || ''} ${rawSlide.subtitle || ''} ${rawSlide.interaction.instruction || ''}`;
+        const isNegativeDiscrim = isNegativeDiscriminationInstruction(fullHeader);
+        const isOrderingDirective = isSentenceOrderingDirective(fullHeader);
 
-        if (hasSlashDelimited || (isNegativeDiscrim && rawSlide.interaction.listItems.some((it: any) => Boolean(decomposeSlashDelimitedReactive(it.prompt || it.text || ''))))) {
+        const hasScrambleItems = rawSlide.interaction.listItems.some((it: any) =>
+          isSentenceScrambleReactive(it.prompt || it.text || '', fullHeader)
+        );
+
+        const hasSlashDelimited = !isOrderingDirective && !hasScrambleItems && rawSlide.interaction.listItems.length > 0 &&
+          rawSlide.interaction.listItems.every((it: any) => Boolean(decomposeSlashDelimitedReactive(it.prompt || it.text || '', fullHeader)));
+
+        if (!isOrderingDirective && !hasScrambleItems && (hasSlashDelimited || (isNegativeDiscrim && rawSlide.interaction.listItems.some((it: any) => Boolean(decomposeSlashDelimitedReactive(it.prompt || it.text || '', fullHeader)))))) {
           const questions = rawSlide.interaction.listItems.map((it: any, qIdx: number) => {
             const rawPrompt = it.prompt || it.text || '';
-            const decomposed = decomposeSlashDelimitedReactive(rawPrompt);
+            const decomposed = decomposeSlashDelimitedReactive(rawPrompt, fullHeader);
             const prompt = decomposed ? decomposed.prompt : rawPrompt;
             const optionTexts = decomposed ? decomposed.options : (Array.isArray(it.options) ? it.options : []);
             const rawExpected = (it.expectedAnswer || '').trim().toLowerCase();
@@ -2573,6 +2663,38 @@ export function validateAndParseSlides(
             type: 'selection',
             instruction: rawSlide.interaction.instruction || rawSlide.subtitle || 'Choose the correct option:',
             questions,
+          };
+        }
+      }
+
+      // Conversión de arquetipo si una interacción emitida erróneamente como 'selection' corresponde a reconstrucción de oraciones ('input_fields')
+      if (rawSlide.interaction && rawSlide.interaction.type === 'selection' && Array.isArray(rawSlide.interaction.questions)) {
+        const fullHeader = `${rawSlide.title || ''} ${rawSlide.subtitle || ''} ${rawSlide.interaction.instruction || ''}`;
+        const isOrderingDirective = isSentenceOrderingDirective(fullHeader);
+        const hasScrambleQuestions = rawSlide.interaction.questions.some((q: any) => {
+          const text = q.prompt || q.question || '';
+          return isSentenceScrambleReactive(text, fullHeader);
+        });
+
+        if (isOrderingDirective || hasScrambleQuestions) {
+          const listItems = rawSlide.interaction.questions.map((q: any, qIdx: number) => {
+            const rawPrompt = q.prompt || q.question || '';
+            const expectedAnswer = q.expectedAnswer || '';
+            return {
+              id: q.id || `item-${qIdx + 1}`,
+              prompt: rawPrompt,
+              expectedAnswer,
+              acceptedAnswers: expectedAnswer ? [expectedAnswer] : [],
+              isExample: Boolean(q.isExample),
+            };
+          });
+
+          rawSlide.interaction = {
+            id: rawSlide.interaction.id || `int-${Date.now()}-${idx}`,
+            type: 'input_fields',
+            layoutMode: 'list',
+            instruction: rawSlide.interaction.instruction || rawSlide.subtitle || 'Make questions using the prompts:',
+            listItems,
           };
         }
       }
@@ -2705,10 +2827,15 @@ export function validateAndParseSlides(
         }
 
         if (Array.isArray(rawSlide.interaction.listItems)) {
+          const fullHeader = `${rawSlide.title || ''} ${rawSlide.subtitle || ''} ${rawSlide.interaction.instruction || ''}`;
           for (const item of rawSlide.interaction.listItems) {
             if (item && typeof item === 'object') {
               if (item.prompt) {
-                item.prompt = cleanInputBlankMarkers(item.prompt);
+                if (isSentenceScrambleReactive(item.prompt, fullHeader)) {
+                  item.prompt = item.prompt.replace(/_{2,}|\[\s*(?:blank|\?)\s*\]|\{\{\s*blank\s*\}\}/gi, '').trim();
+                } else {
+                  item.prompt = cleanInputBlankMarkers(item.prompt);
+                }
               }
               if (item.expectedAnswer) {
                 item.expectedAnswer = cleanTokenString(item.expectedAnswer);
@@ -3441,11 +3568,31 @@ CANONICAL ARCHETYPES:
          * If an option already appears marked, circled, or highlighted as an initial pedagogical model (solved example), it MUST be marked with isExample: true (and isCorrect: true). If the question item itself is the example, mark isExample: true on the question item as well.
        - INVARIANT FOR LAYOUT SEGMENTATION:
          If the entirety of the passage or exercise decomposes into the interactive items of the activity, referenceContent MUST be strictly null and layout MUST be "single_column".
-     * DESCOMPOSICIÓN CANÓNICA DE REACTIVOS CON ALTERNATIVAS DELIMITADAS ('/'):
-       - Cuando un reactivo presente una base léxica seguida de opciones delimitadas por barras o separadores (ejemplo: "work in a school/an office/a receptionist"):
-         * El segmento base común constituye el 'prompt' de la pregunta (ejemplo: "work in").
-         * Cada elemento delimitado se mapea directamente como un ítem individual dentro de 'options' (["a school", "an office", "a receptionist"]).
-         * Queda estrictamente prohibido transformar estas estructuras en oraciones con huecos ("[ ? ]", "{{blank}}") o incluir opciones dentro del prompt de la pregunta.
+     * DESAMBIGUACIÓN ONTOLÓGICA DE DELIMITADORES SLASH ('/'): DISYUNCIÓN (SELECTION) vs. FRAGMENTACIÓN SINTÁCTICA (INPUT_FIELDS / ORDERING):
+       - El símbolo '/' (o comas/guiones entre tokens) tiene dos funciones ontológicas incompatibles que deben discriminarse mediante análisis contextual multidimensional:
+
+       A. Arquetipo SELECTION (Disyunción / Opciones Alternativas):
+          - Criterios concurrentes:
+            * Consigna directiva orientada a discriminación, exclusión o elección (e.g. 'which... does not go', 'cross out', 'choose', 'circle').
+            * Baja densidad de fragmentos (habitualmente 2 a 4 por reactivo).
+            * Los fragmentos son sintagmas homogéneos paralelos que compiten entre sí dependientes de una palabra o verbo ancla (e.g. "work in a school / an office / a receptionist").
+            * Ausencia de signos de puntuación oracional terminal ('?', '.') como token aislado.
+          - Mapeo:
+            * El segmento base común constituye el 'prompt' de la pregunta (e.g. "work in").
+            * Cada elemento delimitado se mapea directamente como un ítem individual dentro de 'options' (["a school", "an office", "a receptionist"]).
+            * Queda estrictamente prohibido transformar estas estructuras en oraciones con huecos ("[ ? ]", "{{blank}}") o incluir opciones dentro del prompt de la pregunta.
+
+       B. Arquetipo INPUT_FIELDS / ORDERING (Fragmentación / Reconstrucción de Oraciones):
+          - Criterios concurrentes:
+            * Consigna directiva orientada a construcción o ensamblaje oracional (e.g. 'make questions', 'put the words in order', 'unscramble', 'write sentences').
+            * Alta densidad de fragmentos (5 o más tokens heterogéneos: auxiliares, pronombres, sustantivos, preposiciones).
+            * Presencia de signos de puntuación aislados o terminales (e.g. '?', '.') dentro de la secuencia (e.g. "been / in / the / you / last / clubbing / month / Have ?").
+            * Presencia de línea física de escritura (continua o punteada) para producir la oración entera.
+          - Comportamiento de Mapeo:
+            * Se modela obligatoriamente como interaction.type: 'input_fields' con layoutMode: 'list'.
+            * 'prompt': La secuencia desordenada literal verbatim (e.g. "been / in / the / you / last / clubbing / month / Have ?").
+            * 'expectedAnswer': La oración completa ordenada, extraída directamente del Solucionario/Answer Key provisto (e.g. "Have you been clubbing in the last month?").
+            * Queda estrictamente PROHIBIDO desglosar la secuencia en múltiples casillas, degradarla a radio buttons de selección o inyectar placeholders {{blank}} que rompan los tokens.
      * ENUNCIADOS DE DISCRIMINACIÓN NEGATIVA ("Cross out" / "Odd one out"):
        - En tareas donde la instrucción solicite identificar o descartar el elemento incorrecto/sobrante (ejemplo: "Cross out the incorrect word", "Which one doesn't fit?", "Cross out the word/phrase that does not go with"):
          * La opción que debe marcarse como 'isCorrect: true' es aquella que NO encaja con la base léxica (el elemento intruso o distractor a tachar).

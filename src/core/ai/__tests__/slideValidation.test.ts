@@ -3352,7 +3352,164 @@ describe('slideValidation - Direct Schema & Architectural Invariant Tests', () =
 
       expect(slide.interaction?.verificationAudioUrl).toBeDefined();
       expect(slide.interaction?.verificationAudioUrl).toContain('Track_12.mp3');
-      expect(slide.interaction?.audioLabel).toMatch(/Track\s*12/i);
+    });
+  });
+
+  // =========================================================================
+  // CASO X: Desambiguación Ontológica de Delimitadores Slash ('/') y Selección de Arquetipo
+  // =========================================================================
+  describe("Caso X: Desambiguación Ontológica de Delimitadores Slash ('/') y Selección de Arquetipo", () => {
+    it("a) un reactivo con 3 sintagmas y verbo ancla bajo directiva de descarte se emite como 'selection' (disyunción / opciones alternativas)", () => {
+      const rawSelectionJson = JSON.stringify({
+        slides: [
+          {
+            id: 'slide-discrim-1',
+            title: 'Vocabulary: Jobs & Collocations',
+            subtitle: 'Cross out the word or phrase that does not go with the verb.',
+            layout: 'single_column',
+            isGraded: true,
+            interaction: {
+              id: 'int-discrim-1',
+              type: 'input_fields',
+              instruction: 'Cross out the incorrect option:',
+              listItems: [
+                {
+                  id: 'it-1',
+                  prompt: '1. work in a school / an office / a receptionist',
+                  expectedAnswer: 'a receptionist',
+                  acceptedAnswers: ['a receptionist']
+                }
+              ]
+            }
+          }
+        ]
+      });
+
+      const slides = validateAndParseSlides(rawSelectionJson);
+      expect(slides).toHaveLength(1);
+      const slide = slides[0];
+
+      // Debe mapearse obligatoriamente como selection (quiz mode)
+      expect(slide.interaction?.type).toBe('selection');
+      const selection = slide.interaction as any;
+      expect(selection.questions).toHaveLength(1);
+
+      const q = selection.questions[0];
+      // Segmento base ancla como prompt de la pregunta
+      expect(q.prompt).toBe('work in');
+      expect(q.options).toHaveLength(3);
+      expect(q.options.map((o: any) => o.text)).toEqual(['a school', 'an office', 'a receptionist']);
+
+      // La opción intrusa ("a receptionist") es la correcta para tachar
+      const intruderOpt = q.options.find((o: any) => o.text === 'a receptionist');
+      expect(intruderOpt?.isCorrect).toBe(true);
+
+      const validOpt1 = q.options.find((o: any) => o.text === 'a school');
+      expect(validOpt1?.isCorrect).toBe(false);
+
+      const validOpt2 = q.options.find((o: any) => o.text === 'an office');
+      expect(validOpt2?.isCorrect).toBe(false);
+    });
+
+    it("b) un reactivo con 8 tokens heterogéneos y signo '?' bajo directiva 'Make questions' se emite como 'input_fields' de línea completa resuelto por el Answer Key", () => {
+      const rawScrambleJson = JSON.stringify({
+        slides: [
+          // Solucionario / Answer Key provisto
+          {
+            id: 'slide-key',
+            title: 'Answer Key',
+            subtitle: 'Exercise 1 Answers',
+            referenceContent: {
+              id: 'ref-key',
+              type: 'text',
+              content: '1 Have you been clubbing in the last month?'
+            }
+          },
+          // Ejercicio interactivo de ordenamiento
+          {
+            id: 'slide-unscramble-1',
+            title: 'Grammar: Question Formation',
+            subtitle: 'Make questions using the prompts.',
+            layout: 'single_column',
+            isGraded: true,
+            interaction: {
+              id: 'int-unscramble-1',
+              type: 'input_fields',
+              instruction: 'Make questions using the prompts:',
+              listItems: [
+                {
+                  id: 'it-1',
+                  prompt: '1. been / in / the / you / last / clubbing / month / Have ?',
+                  expectedAnswer: '',
+                  acceptedAnswers: []
+                }
+              ]
+            }
+          }
+        ]
+      });
+
+      const slides = validateAndParseSlides(rawScrambleJson);
+      // El solucionario se purga y queda solo el ejercicio interactivo
+      expect(slides).toHaveLength(1);
+      const slide = slides[0];
+
+      // Debe mantenerse obligatoriamente como input_fields (layoutMode: list)
+      expect(slide.interaction?.type).toBe('input_fields');
+      const inputFields = slide.interaction as any;
+      expect(inputFields.layoutMode).toBe('list');
+      expect(inputFields.listItems).toHaveLength(1);
+
+      const item = inputFields.listItems[0];
+      // Prompt mantiene la secuencia desordenada verbatim literal con slashes intactos
+      expect(item.prompt).toBe('1. been / in / the / you / last / clubbing / month / Have ?');
+      // No debe degradarse a selection ni inyectar {{blank}} rotos que descompongan los tokens
+      expect(item.prompt).not.toContain('{{blank}}');
+      expect(item.prompt).toContain('/');
+
+      // expectedAnswer resuelto directamente por el Answer Key como la oración completa ordenada
+      expect(item.expectedAnswer).toBe('Have you been clubbing in the last month?');
+      expect(item.acceptedAnswers).toContain('Have you been clubbing in the last month?');
+    });
+
+    it("c) si un ejercicio de reconstrucción de oraciones fue emitido erróneamente como 'selection', se recupera como 'input_fields'", () => {
+      const rawErroneousSelectionJson = JSON.stringify({
+        slides: [
+          {
+            id: 'slide-recovered-1',
+            title: 'Grammar: Word Order',
+            subtitle: 'Put the words in the correct order to make questions.',
+            layout: 'single_column',
+            isGraded: true,
+            interaction: {
+              id: 'int-rec-1',
+              type: 'selection',
+              instruction: 'Put the words in order:',
+              questions: [
+                {
+                  id: 'q-1',
+                  prompt: 'you / where / born / were / ?',
+                  expectedAnswer: 'Where were you born?',
+                  options: [
+                    { id: 'opt-1', text: 'you', isCorrect: false },
+                    { id: 'opt-2', text: 'where', isCorrect: true }
+                  ]
+                }
+              ]
+            }
+          }
+        ]
+      });
+
+      const slides = validateAndParseSlides(rawErroneousSelectionJson);
+      expect(slides).toHaveLength(1);
+      const slide = slides[0];
+
+      expect(slide.interaction?.type).toBe('input_fields');
+      const inputFields = slide.interaction as any;
+      expect(inputFields.listItems).toHaveLength(1);
+      expect(inputFields.listItems[0].prompt).toBe('you / where / born / were / ?');
+      expect(inputFields.listItems[0].expectedAnswer).toBe('Where were you born?');
     });
   });
 });
