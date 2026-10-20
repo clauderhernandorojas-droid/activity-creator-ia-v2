@@ -2982,6 +2982,221 @@ describe('slideValidation - Direct Schema & Architectural Invariant Tests', () =
       }
     });
   });
+
+  // =========================================================================
+  // CASO V: Soporte Epistémico para Solucionarios / Answer Keys y Normalización de WordBank
+  // =========================================================================
+  describe('Caso V: Soporte Epistémico para Solucionarios / Answer Keys y Normalización de WordBank', () => {
+    it('debe resolver expectedAnswer guiado por un recorte/slide de Solucionario sin generar diapositiva extra ni contaminar referenceContent', () => {
+      const rawWithAnswerKey = JSON.stringify({
+        slides: [
+          {
+            id: 'slide-ex-1b',
+            title: '1b Vocabulary: Phrasal Verbs',
+            subtitle: 'Complete the sentences',
+            layout: 'single_column',
+            instruction: 'Complete the sentences with the correct phrasal verb.',
+            referenceContent: null,
+            interaction: {
+              id: 'int-1b',
+              type: 'input_fields',
+              listItems: [
+                { id: 'item-1', prompt: '1. Please {{blank}} your room before dinner.', expectedAnswer: '' },
+                { id: 'item-2', prompt: '2. She has to {{blank}} her younger brother.', expectedAnswer: '' },
+                { id: 'item-3', prompt: '3. Don\'t forget to {{blank}} the trash.', expectedAnswer: '' }
+              ]
+            }
+          },
+          // Diapositiva espuria proveniente del recorte del solucionario / Teacher\'s Notes
+          {
+            id: 'slide-answer-key',
+            title: 'Answer Key / Solucionario',
+            subtitle: 'Unit 4 Exercise Answers',
+            layout: 'single_column',
+            referenceContent: {
+              type: 'text',
+              title: 'Answers',
+              body: '1b) 1 tidy up 2 look after 3 take out\n2a) 1 was 2 were'
+            },
+            interaction: null
+          }
+        ]
+      });
+
+      const slides = validateAndParseSlides(rawWithAnswerKey);
+
+      // 1. Invariante Epistémica: El solucionario NUNCA se convierte en slide independiente
+      expect(slides).toHaveLength(1);
+      const slide = slides[0];
+      expect(slide.id).toBe('slide-ex-1b');
+
+      // 2. Invariante de Confidencialidad y Layout: referenceContent queda null y layout single_column
+      expect(slide.referenceContent).toBeNull();
+      expect(slide.layout).toBe('single_column');
+
+      // 3. Invariante de Ground Truth: expectedAnswer se resuelve exactamente desde la clave
+      expect(slide.interaction?.type).toBe('input_fields');
+      if (slide.interaction?.type === 'input_fields') {
+        expect(slide.interaction.listItems[0].expectedAnswer).toBe('tidy up');
+        expect(slide.interaction.listItems[1].expectedAnswer).toBe('look after');
+        expect(slide.interaction.listItems[2].expectedAnswer).toBe('take out');
+      }
+    });
+
+    it('debe purgar el solucionario si vino inyectado dentro de referenceContent y resolver las respuestas limpiando variables rotas', () => {
+      const rawWithContaminatedReference = JSON.stringify({
+        slides: [
+          {
+            id: 'slide-ex-contaminated',
+            title: 'Vocabulary Practice',
+            layout: 'split_50_50',
+            // Solucionario filtrado indebidamente en referenceContent
+            referenceContent: {
+              type: 'text',
+              title: 'Teacher\'s Notes & Answer Key',
+              body: '1 tidy up 2 look after 3 take out'
+            },
+            interaction: {
+              id: 'int-contam',
+              type: 'input_fields',
+              listItems: [
+                { id: 'item-1', prompt: '1. Please [blank] your room.', expectedAnswer: '' },
+                { id: 'item-2', prompt: '2. She will [?] her brother.', expectedAnswer: '' },
+                { id: 'item-3', prompt: '3. You must [blank] the trash.', expectedAnswer: '' }
+              ]
+            }
+          }
+        ]
+      });
+
+      const slides = validateAndParseSlides(rawWithContaminatedReference);
+      expect(slides).toHaveLength(1);
+      const slide = slides[0];
+
+      // Purgado absoluto del solucionario como referenceContent
+      expect(slide.referenceContent).toBeNull();
+      expect(slide.layout).toBe('single_column');
+
+      // Normalización de marcadores rotos [blank] y [?] a {{blank}}
+      if (slide.interaction?.type === 'input_fields') {
+        expect(slide.interaction.listItems[0].prompt).toBe('1. Please {{blank}} your room.');
+        expect(slide.interaction.listItems[1].prompt).toBe('2. She will {{blank}} her brother.');
+        expect(slide.interaction.listItems[2].prompt).toBe('3. You must {{blank}} the trash.');
+
+        // Respuestas resueltas fielmente por la clave extraída
+        expect(slide.interaction.listItems[0].expectedAnswer).toBe('tidy up');
+        expect(slide.interaction.listItems[1].expectedAnswer).toBe('look after');
+        expect(slide.interaction.listItems[2].expectedAnswer).toBe('take out');
+      }
+    });
+
+    it('debe catalogar una caja de palabras como interaction.wordBank en single_column sin activar split_50_50', () => {
+      const rawWithWordBox = JSON.stringify({
+        slides: [
+          {
+            id: 'slide-wordbox-ex',
+            title: 'Fill in the blanks',
+            layout: 'split_50_50',
+            // Caja de palabras erróneamente colocada como lectura / referenceContent
+            referenceContent: {
+              type: 'text',
+              title: 'Word Bank',
+              body: 'tidy up, look after, take out, turn off, wake up'
+            },
+            interaction: {
+              id: 'int-wb',
+              type: 'input_fields',
+              instruction: 'Complete the sentences using words from the box.',
+              listItems: [
+                { id: 'item-1', prompt: '1. Please {{blank}} your room.', expectedAnswer: 'tidy up' },
+                { id: 'item-2', prompt: '2. Don\'t forget to {{blank}} the lights.', expectedAnswer: 'turn off' }
+              ]
+            }
+          }
+        ]
+      });
+
+      const slides = validateAndParseSlides(rawWithWordBox);
+      expect(slides).toHaveLength(1);
+      const slide = slides[0];
+
+      // Invariante Estructural de Layout y WordBank
+      expect(slide.referenceContent).toBeNull();
+      expect(slide.layout).toBe('single_column');
+      expect(slide.interaction?.type).toBe('input_fields');
+
+      if (slide.interaction?.type === 'input_fields') {
+        expect(slide.interaction.wordBank).toBeDefined();
+        expect(slide.interaction.wordBank).toEqual(
+          expect.arrayContaining(['tidy up', 'look after', 'take out', 'turn off', 'wake up'])
+        );
+      }
+    });
+
+    it('debe resolver isCorrect en selection.questions basándose en la clave del solucionario', () => {
+      const rawWithSelectionKey = JSON.stringify({
+        slides: [
+          {
+            id: 'slide-quiz-1',
+            title: 'Multiple Choice Quiz',
+            layout: 'single_column',
+            interaction: {
+              id: 'int-mc',
+              type: 'selection',
+              questions: [
+                {
+                  id: 'q-1',
+                  prompt: '1. What should you do with your messy room?',
+                  mode: 'single_choice',
+                  options: [
+                    { id: 'opt-1a', text: 'turn off', isCorrect: false },
+                    { id: 'opt-1b', text: 'tidy up', isCorrect: false }
+                  ]
+                },
+                {
+                  id: 'q-2',
+                  prompt: '2. Who will take care of the puppy?',
+                  mode: 'single_choice',
+                  options: [
+                    { id: 'opt-2a', text: 'wake up', isCorrect: false },
+                    { id: 'opt-2b', text: 'look after', isCorrect: false }
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            id: 'slide-ak-quiz',
+            title: 'Answers',
+            interaction: {
+              id: 'int-ak',
+              type: 'input_fields',
+              instruction: '1 b) tidy up 2 b) look after',
+              listItems: []
+            }
+          }
+        ]
+      });
+
+      const slides = validateAndParseSlides(rawWithSelectionKey);
+      expect(slides).toHaveLength(1);
+      const slide = slides[0];
+
+      expect(slide.interaction?.type).toBe('selection');
+      if (slide.interaction?.type === 'selection') {
+        const q1 = slide.interaction.questions[0];
+        const q2 = slide.interaction.questions[1];
+
+        // Opción 'b' (tidy up) debe quedar como correcta según la clave oficial
+        expect(q1.options.find(o => o.id === 'opt-1b')?.isCorrect).toBe(true);
+        expect(q1.options.find(o => o.id === 'opt-1a')?.isCorrect).toBe(false);
+
+        // Opción 'b' (look after) debe quedar como correcta
+        expect(q2.options.find(o => o.id === 'opt-2b')?.isCorrect).toBe(true);
+        expect(q2.options.find(o => o.id === 'opt-2a')?.isCorrect).toBe(false);
+      }
+    });
+  });
 });
 
 

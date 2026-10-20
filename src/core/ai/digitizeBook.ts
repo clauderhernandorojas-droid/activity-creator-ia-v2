@@ -1029,6 +1029,456 @@ export function normalizeNonInteractiveInstruction(instruction?: string): string
 }
 
 /**
+ * Cleans input field prompts from orphan or broken gap markers like [blank] or [?],
+ * replacing them with canonical {{blank}} markers.
+ */
+export function cleanInputBlankMarkers(prompt: string): string {
+  if (!prompt || typeof prompt !== 'string') return '';
+  return prompt
+    .replace(/\[\s*(?:blank|\?)\s*\]/gi, '{{blank}}')
+    .replace(/_{3,}/g, '{{blank}}');
+}
+
+/**
+ * Strips bracketed gap tokens from expected answer strings.
+ */
+export function cleanTokenString(text: string): string {
+  if (!text || typeof text !== 'string') return '';
+  return text.replace(/\[\s*(?:blank|\?)\s*\]|\{\{\s*blank\s*\}\}|_{2,}/gi, '').trim();
+}
+
+/**
+ * Detects whether a text or reference block corresponds to an Answer Key / Solucionario / Teacher's Notes
+ * rather than an autonomous reading text for students.
+ */
+export function isAnswerKeyContent(
+  text?: string,
+  title?: string,
+  subtitle?: string
+): boolean {
+  if (!text && !title && !subtitle) return false;
+
+  const headerText = `${title || ''} ${subtitle || ''}`.trim();
+  const isDirectivePhrase = /\b(?:answer\s+(?:the|each|these|your|all)|check\s+(?:your\s+)?answers?|write\s+(?:your\s+)?answers?|ask\s+and\s+answer|questions?\s+and\s+answers?|short\s+answers?)\b/i.test(headerText);
+
+  const hasKeyHeader = !isDirectivePhrase && (
+    /\b(?:answer\s*keys?|teacher'?s?\s*(?:notes?|book|guide)|marking\s*scheme|correction\s*key|solucionario|claves?(?:\s+de\s+respuestas?)?)\b/i.test(headerText) ||
+    /^(?:answers?|key|claves|respuestas)\b/i.test((title || '').trim())
+  );
+
+  const cleanText = (text || '').trim();
+  const textHasKeyHeader = /^(?:answers?|answer\s*key|key|solucionario|claves?(?:\s+de\s+respuestas?)?|teacher'?s?\s*(?:notes?|book|guide))\b/i.test(cleanText);
+
+  // If text is multi-paragraph reading text or has dialogue speakers, it is NOT an answer key!
+  if (cleanText.includes('\n\n') && cleanText.split(/\s+/).length > 25) {
+    const paragraphs = cleanText.split(/\n\s*\n/).filter(Boolean);
+    if (paragraphs.length >= 2 && !textHasKeyHeader) {
+      return false;
+    }
+  }
+
+  const lines = cleanText.split(/[\n,;]+/).map((l) => l.trim()).filter(Boolean);
+  const keyPairRegex = /^(?:(?:exercise|act\.?|activity)?\s*[0-9]+[a-z]?[\)\.:\-]\s*)?(?:[0-9]+|[a-z])\s*[\)\.:\-]\s*([a-zA-Z0-9'’\s\-]{1,40})$/i;
+  const matchingPairs = lines.filter((l) => keyPairRegex.test(l));
+
+  const inlineMatches = cleanText.match(/(?:^|[\s,;|\n])\d+[\.\)\:\s-]\s*[a-zA-Z0-9'’\-]+(?:\s+[a-zA-Z0-9'’\-]+){0,4}(?=(?:[\s,;|\n]\d+[\.\)\:\s-]|$))/g);
+  const inlineCount = inlineMatches ? inlineMatches.length : 0;
+
+  if (hasKeyHeader && (matchingPairs.length >= 1 || inlineCount >= 1 || lines.length <= 15)) {
+    return true;
+  }
+  if (textHasKeyHeader && (matchingPairs.length >= 1 || inlineCount >= 1 || cleanText.length <= 250)) {
+    return true;
+  }
+  if (matchingPairs.length >= 2 && matchingPairs.length >= lines.length * 0.6) {
+    return true;
+  }
+  if (inlineCount >= 3 && cleanText.split(/\s+/).length < inlineCount * 6) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Detects whether an entire slide is an Answer Key / Teacher's Notes slide that should not be
+ * emitted as an independent student slide.
+ */
+export function isAnswerKeySlide(slide: any): boolean {
+  if (!slide || typeof slide !== 'object') return false;
+
+  const title = (slide.title || '').trim();
+  const subtitle = (slide.subtitle || '').trim();
+  const headerText = `${title} ${subtitle}`.toLowerCase();
+
+  // If slide has real student exercise interaction, it is an exercise slide, NOT an answer key slide
+  if (slide.interaction) {
+    if (slide.interaction.type === 'selection' && Array.isArray(slide.interaction.questions) && slide.interaction.questions.length > 0) {
+      return false;
+    }
+    if (slide.interaction.options && Array.isArray(slide.interaction.options) && slide.interaction.options.length > 0) {
+      return false;
+    }
+    if (slide.interaction.type === 'buckets_matching' && Array.isArray(slide.interaction.buckets) && slide.interaction.buckets.length > 0) {
+      return false;
+    }
+    if (slide.interaction.type === 'sequence' && Array.isArray(slide.interaction.items) && slide.interaction.items.length > 0) {
+      return false;
+    }
+    if (slide.interaction.type === 'input_fields' && Array.isArray(slide.interaction.listItems) && slide.interaction.listItems.length > 0) {
+      const hasRealPrompts = slide.interaction.listItems.some((it: any) => {
+        const p = (it.prompt || '').trim();
+        return p.length > 25 || p.includes('{{blank}}') || p.includes('___') || p.includes('(');
+      });
+      if (hasRealPrompts) return false;
+    }
+  }
+
+  const isDirectivePhrase = /\b(?:answer\s+(?:the|each|these|your|all)|check\s+(?:your\s+)?answers?|write\s+(?:your\s+)?answers?|ask\s+and\s+answer|questions?\s+and\s+answers?|short\s+answers?)\b/i.test(headerText);
+
+  const hasKeyHeader = !isDirectivePhrase && (
+    /\b(?:answer\s*keys?|teacher'?s?\s*(?:notes?|book|guide)|marking\s*scheme|correction\s*key|solucionario|claves?(?:\s+de\s+respuestas?)?)\b/i.test(headerText) ||
+    /^(?:answers?|key|claves|respuestas)\b/i.test(title.trim())
+  );
+
+  const refText = (slide.referenceContent?.content || slide.referenceContent?.body || '').trim();
+  const ctxText = (slide.contextBody || '').trim();
+  const instText = (slide.interaction?.instruction || '').trim();
+
+  if (hasKeyHeader) return true;
+
+  if (!slide.interaction || (slide.interaction.type === 'writing' && !slide.interaction.guidelines)) {
+    if (refText && isAnswerKeyContent(refText, title, subtitle)) return true;
+    if (ctxText && isAnswerKeyContent(ctxText, title, subtitle)) return true;
+    if (instText && isAnswerKeyContent(instText, title, subtitle)) return true;
+  }
+
+  return false;
+}
+
+/**
+ * Universally parses all format-agnostic answer keys from textual material into a structured map:
+ * { [sectionId: string]: { [itemIndex: string]: answerText } }
+ */
+export function parseAllAnswerKeys(text: string): Record<string, Record<string, string>> {
+  if (!text || typeof text !== 'string') return {};
+  const sections: Record<string, Record<string, string>> = {};
+  let currentSection = 'default';
+
+  const lines = text.split('\n').map((l) => l.trim()).filter(Boolean);
+
+  for (const line of lines) {
+    if (/^(?:answer\s*keys?|answers?|solucionario|claves?(?:\s+de\s+respuestas?)?|teacher'?s?\s*(?:notes?|book|guide)|marking\s*scheme)\s*[:\.-]?\s*$/i.test(line)) {
+      continue;
+    }
+
+    let workLine = line.replace(/^(?:answers?|answer\s*key|key|solucionario|claves?|teacher'?s?\s*notes?)\s*[:\.-]?\s*/i, '');
+
+    const secWithKeyword = workLine.match(/^(?:exercise|act\.?|activity|part)\s*([0-9]+[a-z]?|[a-f])\s*[\)\.:\-]\s*(.*)$/i);
+    const secAlphaNum = workLine.match(/^([0-9]+[a-z])\s*[\)\.:\-]\s*(.*)$/i);
+    const secWithInternalNumbers = workLine.match(/^([0-9]+)\s*[\)\.:\-]\s*(\d+[\.\)\:\s-].*)$/i);
+
+    const secMatch = secWithKeyword || secAlphaNum || secWithInternalNumbers;
+
+    if (secMatch) {
+      currentSection = secMatch[1].toLowerCase();
+      workLine = secMatch[2];
+    }
+
+    if (!sections[currentSection]) sections[currentSection] = {};
+
+    // 1. Numbered items: '1 tidy up 2 look after' or '1. b, 2. c' or '1: was'
+    const numRegex = /(?:^|[\s,;|\n]+)(\d+)[\.\)\:\s-]\s*([^\d\n,;|]+?)(?=(?:[\s,;|\n]+\d+[\.\)\:\s-]|$))/gi;
+    let match: RegExpExecArray | null;
+    let foundNumbered = false;
+    while ((match = numRegex.exec(workLine)) !== null) {
+      foundNumbered = true;
+      const num = match[1];
+      const val = match[2].trim().replace(/^[:\.-]\s*/, '').trim();
+      if (val) {
+        sections[currentSection][num] = val;
+      }
+    }
+
+    // 2. Lettered items: 'a) lived b) saw' if no numbered items
+    if (!foundNumbered) {
+      const letterRegex = /(?:^|[\s,;|\n]+)([a-f])[\.\)\:\s-]\s*([^a-f\d\n,;|]+?)(?=(?:[\s,;|\n]+[a-f][\.\)\:\s-]|$))/gi;
+      let lMatch: RegExpExecArray | null;
+      while ((lMatch = letterRegex.exec(workLine)) !== null) {
+        const letter = lMatch[1].toLowerCase();
+        const val = lMatch[2].trim().replace(/^[:\.-]\s*/, '').trim();
+        if (val) {
+          sections[currentSection][letter] = val;
+        }
+      }
+    }
+  }
+
+  return sections;
+}
+
+/**
+ * Extracts all answer keys from all fields of a slide.
+ */
+export function parseAllAnswerKeysFromSlide(slide: any): Record<string, Record<string, string>> {
+  const texts: string[] = [];
+  if (slide.referenceContent?.content) texts.push(slide.referenceContent.content);
+  if (slide.referenceContent?.body) texts.push(slide.referenceContent.body);
+  if (slide.contextBody) texts.push(slide.contextBody);
+  if (slide.subtitle) texts.push(slide.subtitle);
+  if (slide.title) texts.push(slide.title);
+  if (slide.interaction?.instruction) texts.push(slide.interaction.instruction);
+
+  if (slide.interaction && Array.isArray(slide.interaction.listItems)) {
+    slide.interaction.listItems.forEach((it: any) => {
+      if (it.expectedAnswer) {
+        texts.push(`${it.prompt || it.id}: ${it.expectedAnswer}`);
+      } else if (it.prompt) {
+        texts.push(it.prompt);
+      }
+    });
+  }
+
+  if (slide.referenceContent && (slide.referenceContent.type === 'reference_table' || slide.referenceContent.type === 'table_reference')) {
+    if (Array.isArray(slide.referenceContent.rows)) {
+      slide.referenceContent.rows.forEach((row: any[]) => {
+        if (Array.isArray(row) && row.length >= 2) {
+          const k = String(typeof row[0] === 'string' ? row[0] : row[0]?.text || '').trim();
+          const v = String(typeof row[1] === 'string' ? row[1] : row[1]?.text || '').trim();
+          if (k && v) texts.push(`${k}: ${v}`);
+        }
+      });
+    }
+  }
+
+  return parseAllAnswerKeys(texts.join('\n'));
+}
+
+/**
+ * Aligns and injects answer key resolutions as Supreme Ground Truth into interactive items of a slide.
+ */
+export function applyAnswerKeysToSlide(
+  slide: any,
+  allKeys: Record<string, Record<string, string>>
+): void {
+  if (!slide || !slide.interaction) return;
+
+  const title = (slide.title || '').trim().toLowerCase();
+  const subtitle = (slide.subtitle || '').trim().toLowerCase();
+  const instruction = (slide.interaction.instruction || '').trim().toLowerCase();
+  const fullHeader = `${title} ${subtitle} ${instruction}`;
+
+  let targetSection: Record<string, string> | null = null;
+
+  for (const key of Object.keys(allKeys)) {
+    if (key === 'default') continue;
+    const keyRegex = new RegExp(`(?:\\b|exercise\\s*|act\\.?\\s*|part\\s*)${key}\\b`, 'i');
+    if (keyRegex.test(fullHeader)) {
+      targetSection = allKeys[key];
+      break;
+    }
+  }
+
+  if (!targetSection) {
+    const nonDefaultKeys = Object.keys(allKeys).filter((k) => k !== 'default');
+    if (nonDefaultKeys.length === 1) {
+      targetSection = allKeys[nonDefaultKeys[0]];
+    } else if (allKeys['default']) {
+      targetSection = allKeys['default'];
+    } else if (nonDefaultKeys.length > 0) {
+      targetSection = allKeys[nonDefaultKeys[0]];
+    }
+  }
+
+  if (!targetSection) return;
+
+  // Apply to input_fields listItems
+  if (slide.interaction.type === 'input_fields' && Array.isArray(slide.interaction.listItems)) {
+    slide.interaction.listItems.forEach((item: any, idx: number) => {
+      let numKey: string | null = null;
+      if (item.prompt) {
+        const match = item.prompt.match(/^(?:\(?(\d+)[.)]|\bitem\s*(\d+))/i);
+        if (match) numKey = match[1] || match[2];
+      }
+      if (!numKey || !targetSection[numKey]) {
+        const seq1 = String(idx + 1);
+        const seq2 = String(idx + 2);
+        if (targetSection[seq1]) numKey = seq1;
+        else if (targetSection[seq2]) numKey = seq2;
+      }
+
+      if (numKey && targetSection[numKey]) {
+        const official = targetSection[numKey].trim();
+        item.expectedAnswer = official;
+        item.acceptedAnswers = [official];
+      }
+
+      if (item.prompt) {
+        item.prompt = cleanInputBlankMarkers(item.prompt);
+      }
+    });
+  }
+
+  // Apply to selection questions
+  if (slide.interaction.type === 'selection' && Array.isArray(slide.interaction.questions)) {
+    slide.interaction.questions.forEach((q: any, idx: number) => {
+      let numKey: string | null = null;
+      const qText = q.prompt || q.question || '';
+      const match = qText.match(/^(?:\(?(\d+)[.)]|\bitem\s*(\d+))/i);
+      if (match) numKey = match[1] || match[2];
+
+      if (!numKey || !targetSection[numKey]) {
+        const seq1 = String(idx + 1);
+        if (targetSection[seq1]) numKey = seq1;
+      }
+
+      if (numKey && targetSection[numKey]) {
+        const official = targetSection[numKey].trim().toLowerCase();
+        if (Array.isArray(q.options) && q.options.length > 0) {
+          const letterMatch = official.match(/^([a-d])$/i);
+          if (letterMatch) {
+            const letterIdx = letterMatch[1].toLowerCase().charCodeAt(0) - 97;
+            q.options.forEach((opt: any, oIdx: number) => {
+              opt.isCorrect = oIdx === letterIdx;
+            });
+          } else {
+            let matchedAny = false;
+            q.options.forEach((opt: any) => {
+              const optText = (opt.text || '').trim().toLowerCase();
+              if (optText === official || official.includes(optText) || optText.includes(official)) {
+                opt.isCorrect = true;
+                matchedAny = true;
+              } else {
+                opt.isCorrect = false;
+              }
+            });
+            if (!matchedAny && q.options.length > 0) {
+              q.options[0].isCorrect = true;
+            }
+          }
+        }
+      }
+    });
+  }
+}
+
+/**
+ * Detects whether reference content is solely a word bank / word box intended for insertion into blanks.
+ */
+export function isWordBankContent(ref: any, interaction?: any): boolean {
+  if (!ref || typeof ref !== 'object') return false;
+
+  // Never classify multi-paragraph reading passages or dialogues as word banks
+  if (ref.category === 'reading' || ref.category === 'dialogue') {
+    return false;
+  }
+
+  const title = (ref.title || '').trim().toLowerCase();
+  const subtitle = (ref.subtitle || '').trim().toLowerCase();
+  const category = (ref.category || '').trim().toLowerCase();
+  const instruction = (ref.instruction || '').trim().toLowerCase();
+  const headerText = `${title} ${subtitle} ${category} ${instruction}`;
+
+  const hasWordBankHeader = /\b(?:word\s*bank|words?\s+(?:in|from)\s+the\s+box|box|vocabulary\s+box|words?\s+list|banco\s+de\s+palabras|caja\s+de\s+palabras)\b/i.test(headerText);
+
+  if (ref.type === 'text') {
+    const content = (ref.content || ref.body || '').trim();
+    if (!content) return false;
+
+    // Multi-paragraph texts are reading articles, never word banks
+    if (content.includes('\n\n')) {
+      return false;
+    }
+
+    if (hasWordBankHeader) return true;
+
+    if (/^(?:word\s*bank|words?\s+(?:in|from)\s+the\s+box|box|vocabulary\s+box|banco\s+de\s+palabras)\b/i.test(content)) {
+      return true;
+    }
+
+    if (interaction && (interaction.type === 'input_fields' || interaction.type === 'buckets_matching')) {
+      if (Array.isArray(interaction.wordBank) && interaction.wordBank.length > 0) {
+        const matchingBank = interaction.wordBank.filter((w: string) => content.toLowerCase().includes(w.toLowerCase()));
+        if (matchingBank.length >= Math.min(2, interaction.wordBank.length)) {
+          return true;
+        }
+      }
+
+      const inst = `${interaction.instruction || ''} ${subtitle}`.toLowerCase();
+      const mentionsBox = /\b(?:from|in)\s+the\s+box\b|\bword\s*bank\b/i.test(inst);
+
+      if (mentionsBox) {
+        const delimiters = /[\n,;|/•\-]+/;
+        const parts = content.split(delimiters).map((p: string) => p.trim()).filter(Boolean);
+        const isShortTerms = parts.length >= 2 && parts.every((p: string) => p.split(/\s+/).length <= 4 && p.length < 30);
+        if (isShortTerms && content.split(/\s+/).length < 30) {
+          return true;
+        }
+      }
+    }
+  }
+
+  if (ref.type === 'reference_table' || ref.type === 'table_reference') {
+    if (hasWordBankHeader) return true;
+    if (Array.isArray(ref.columns) && ref.columns.length === 1) {
+      const colHeader = (ref.columns[0]?.header || '').toLowerCase();
+      if (/\b(?:word\s*bank|words?|vocabulary|box)\b/i.test(colHeader)) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Extracts individual candidate terms from a word bank reference block or string.
+ */
+export function extractWordBankTerms(refOrText: any): string[] {
+  if (!refOrText) return [];
+  const terms: string[] = [];
+  if (typeof refOrText === 'string') {
+    const clean = refOrText.replace(/^(?:word\s*bank|words?\s+(?:in|from)\s+the\s+box|box|vocabulary\s+box|banco\s+de\s+palabras)\s*[:\.-]?\s*/i, '');
+    const parts = clean.split(/[\n,;|/•\-]+/).map((p) => p.trim()).filter((p) => p.length > 0 && p.length < 50);
+    terms.push(...parts);
+  } else if (refOrText.type === 'text') {
+    const raw = refOrText.content || refOrText.body || '';
+    const clean = raw.replace(/^(?:word\s*bank|words?\s+(?:in|from)\s+the\s+box|box|vocabulary\s+box|banco\s+de\s+palabras)\s*[:\.-]?\s*/i, '');
+    const parts = clean.split(/[\n,;|/•\-]+/).map((p: string) => p.trim()).filter((p: string) => p.length > 0 && p.length < 50);
+    terms.push(...parts);
+  } else if (refOrText.type === 'reference_table' && Array.isArray(refOrText.columns)) {
+    refOrText.columns.forEach((col: any) => {
+      if (Array.isArray(col.items)) {
+        col.items.forEach((it: any) => {
+          if (typeof it === 'string' && it.trim()) terms.push(it.trim());
+        });
+      }
+    });
+  } else if (refOrText.type === 'table_reference' && Array.isArray(refOrText.rows)) {
+    refOrText.rows.forEach((row: any) => {
+      if (Array.isArray(row)) {
+        row.forEach((cell: any) => {
+          const val = typeof cell === 'string' ? cell : cell?.text || '';
+          if (val.trim()) terms.push(val.trim());
+        });
+      }
+    });
+  }
+  return Array.from(new Set(terms.filter(Boolean)));
+}
+
+/**
+ * Detects whether reference content solely duplicates the terms of the interaction's wordBank.
+ */
+export function isDuplicateWordBankReference(ref: any, wordBank: string[]): boolean {
+  if (!ref || !Array.isArray(wordBank) || wordBank.length === 0) return false;
+  const refText = (ref.content || ref.body || '').trim().toLowerCase();
+  if (!refText) return false;
+  const matching = wordBank.filter((w) => refText.includes(w.toLowerCase()));
+  return matching.length >= Math.min(2, wordBank.length) && refText.split(/\s+/).length < 40;
+}
+
+/**
  * Detects whether reference content is solely spurious metadata
  * (an exercise instruction, task directive, or single model/example sentence)
  * rather than an autonomous continuous reading or consultation text.
@@ -1057,6 +1507,16 @@ export function isSpuriousReferenceMetadata(
 
   const content = (ref.body || ref.content || '').trim();
   if (!content) return true;
+
+  // Detección ontológica de solucionarios o claves de respuestas filtradas en referenceContent
+  if (isAnswerKeyContent(content, ref.title, ref.subtitle)) {
+    return true;
+  }
+
+  // Detección ontológica de cajas o bancos de palabras en referenceContent
+  if (isWordBankContent(ref, interaction)) {
+    return true;
+  }
 
   // 1. Meta-comentarios pedagógicos sintéticos ("Practice expressing...", "Students practice...")
   if (isSyntheticPedagogicalText(content)) {
@@ -1149,6 +1609,16 @@ export function foldSpuriousMetadata(text: string, slide: any): void {
 
   // Si es texto sintético inventado o meta-comentario pedagógico, descartarlo
   if (isSyntheticPedagogicalText(trimmed)) {
+    return;
+  }
+
+  // Si es un solucionario o clave de respuesta, jamás doblarlo en la instrucción o subtítulo
+  if (isAnswerKeyContent(trimmed, slide.title, slide.subtitle)) {
+    return;
+  }
+
+  // Si es una caja o lista de palabras, no doblarlo como consigna
+  if (isWordBankContent({ type: 'text', content: trimmed }, slide.interaction)) {
     return;
   }
 
@@ -1483,10 +1953,34 @@ export function validateAndParseSlides(
     throw new SchemaValidationError('El modelo devolvió un arreglo vacío de diapositivas', [], parsedJson);
   }
 
+  // Grounding Epistémico: Pre-escaneo para cosechar solucionarios y claves de respuestas (Ground Truth)
+  const harvestedAnswerKeys: Record<string, Record<string, string>> = {};
+  const exerciseSlides: any[] = [];
+
+  for (const rawSlide of rawSlides) {
+    if (rawSlide && typeof rawSlide === 'object' && isAnswerKeySlide(rawSlide)) {
+      const keys = parseAllAnswerKeysFromSlide(rawSlide);
+      for (const [secKey, secMap] of Object.entries(keys)) {
+        harvestedAnswerKeys[secKey] = { ...(harvestedAnswerKeys[secKey] || {}), ...secMap };
+      }
+      // Los solucionarios NUNCA se emiten como diapositivas independientes
+    } else {
+      exerciseSlides.push(rawSlide);
+    }
+  }
+
+  if (exerciseSlides.length === 0 && rawSlides.length > 0) {
+    throw new SchemaValidationError(
+      'El modelo devolvió exclusivamente un solucionario o clave de respuestas sin diapositivas de ejercicio interactivo.',
+      [],
+      parsedJson
+    );
+  }
+
   const validatedSlides: Slide[] = [];
 
-  for (let idx = 0; idx < rawSlides.length; idx++) {
-    const rawSlide = rawSlides[idx];
+  for (let idx = 0; idx < exerciseSlides.length; idx++) {
+    const rawSlide = exerciseSlides[idx];
     if (!rawSlide || typeof rawSlide !== 'object') {
       throw new SchemaValidationError(`La diapositiva en el índice ${idx} no es un objeto válido`, [], rawSlide);
     }
@@ -1518,6 +2012,88 @@ export function validateAndParseSlides(
       } else {
         rawSlide.contextBody = undefined;
       }
+    }
+
+    // Detección y purga de Solucionario / Answer Key residual en referenceContent o contextBody
+    if (rawSlide.referenceContent) {
+      const refText = (rawSlide.referenceContent.content || rawSlide.referenceContent.body || '').trim();
+      if (isAnswerKeyContent(refText, rawSlide.referenceContent.title, rawSlide.referenceContent.subtitle)) {
+        const keys = parseAllAnswerKeys(refText);
+        for (const [secKey, secMap] of Object.entries(keys)) {
+          harvestedAnswerKeys[secKey] = { ...(harvestedAnswerKeys[secKey] || {}), ...secMap };
+        }
+        rawSlide.referenceContent = null;
+        if (rawSlide.contextBody && (rawSlide.contextBody === refText || isAnswerKeyContent(rawSlide.contextBody))) {
+          rawSlide.contextBody = undefined;
+        }
+      }
+    }
+
+    if (rawSlide.contextBody && isAnswerKeyContent(rawSlide.contextBody, rawSlide.title, rawSlide.subtitle)) {
+      const keys = parseAllAnswerKeys(rawSlide.contextBody);
+      for (const [secKey, secMap] of Object.entries(keys)) {
+        harvestedAnswerKeys[secKey] = { ...(harvestedAnswerKeys[secKey] || {}), ...secMap };
+      }
+      rawSlide.contextBody = undefined;
+    }
+
+    if (rawSlide.subtitle && isAnswerKeyContent(rawSlide.subtitle)) {
+      rawSlide.subtitle = undefined;
+    }
+
+    if (rawSlide.interaction && typeof rawSlide.interaction === 'object') {
+      const inst = (rawSlide.interaction as any).instruction || '';
+      const ansKeyMatch = inst.match(/(?:\s+|\n)(?:answers?|answer\s*key|key|solucionario)[:\s]+(?:\d+[\.\)\s:-].*)$/i);
+      if (ansKeyMatch) {
+        const keyText = inst.slice(ansKeyMatch.index);
+        const keys = parseAllAnswerKeys(keyText);
+        for (const [secKey, secMap] of Object.entries(keys)) {
+          harvestedAnswerKeys[secKey] = { ...(harvestedAnswerKeys[secKey] || {}), ...secMap };
+        }
+        (rawSlide.interaction as any).instruction = inst.slice(0, ansKeyMatch.index).trim();
+      }
+    }
+
+    // Detección y asignación estructural de cajas o bancos de palabras (Word Bank)
+    if (rawSlide.referenceContent && isWordBankContent(rawSlide.referenceContent, rawSlide.interaction)) {
+      const extractedTerms = extractWordBankTerms(rawSlide.referenceContent);
+      if (rawSlide.interaction && typeof rawSlide.interaction === 'object') {
+        const it = rawSlide.interaction as any;
+        if (!Array.isArray(it.wordBank) || it.wordBank.length === 0) {
+          it.wordBank = extractedTerms;
+        } else {
+          it.wordBank = Array.from(new Set([...it.wordBank, ...extractedTerms]));
+        }
+      }
+      rawSlide.referenceContent = null;
+      if (rawSlide.contextBody) {
+        rawSlide.contextBody = undefined;
+      }
+    }
+
+    if (rawSlide.contextBody && rawSlide.interaction && isWordBankContent({ type: 'text', content: rawSlide.contextBody }, rawSlide.interaction)) {
+      const extractedTerms = extractWordBankTerms(rawSlide.contextBody);
+      const it = rawSlide.interaction as any;
+      if (!Array.isArray(it.wordBank) || it.wordBank.length === 0) {
+        it.wordBank = extractedTerms;
+      } else {
+        it.wordBank = Array.from(new Set([...it.wordBank, ...extractedTerms]));
+      }
+      rawSlide.contextBody = undefined;
+    }
+
+    if (rawSlide.referenceContent && rawSlide.interaction && Array.isArray((rawSlide.interaction as any).wordBank)) {
+      if (isDuplicateWordBankReference(rawSlide.referenceContent, (rawSlide.interaction as any).wordBank)) {
+        rawSlide.referenceContent = null;
+        if (rawSlide.contextBody) {
+          rawSlide.contextBody = undefined;
+        }
+      }
+    }
+
+    // Grounding epistémico: Inyectar soluciones del Solucionario / Answer Key oficial
+    if (Object.keys(harvestedAnswerKeys).length > 0 && rawSlide.interaction) {
+      applyAnswerKeysToSlide(rawSlide, harvestedAnswerKeys);
     }
 
     if (rawSlide.interaction && typeof rawSlide.interaction === 'object') {
@@ -1929,8 +2505,19 @@ export function validateAndParseSlides(
         if (Array.isArray(rawSlide.interaction.listItems)) {
           for (const item of rawSlide.interaction.listItems) {
             if (item && typeof item === 'object') {
-              if (item.expectedAnswer && (!Array.isArray(item.acceptedAnswers) || item.acceptedAnswers.length === 0)) {
-                item.acceptedAnswers = [item.expectedAnswer];
+              if (item.prompt) {
+                item.prompt = cleanInputBlankMarkers(item.prompt);
+              }
+              if (item.expectedAnswer) {
+                item.expectedAnswer = cleanTokenString(item.expectedAnswer);
+                if (!Array.isArray(item.acceptedAnswers) || item.acceptedAnswers.length === 0) {
+                  item.acceptedAnswers = [item.expectedAnswer];
+                } else {
+                  item.acceptedAnswers = item.acceptedAnswers.map(cleanTokenString).filter(Boolean);
+                  if (!item.acceptedAnswers.includes(item.expectedAnswer)) {
+                    item.acceptedAnswers.unshift(item.expectedAnswer);
+                  }
+                }
               }
             }
           }
@@ -2128,7 +2715,27 @@ export function validateAndParseSlides(
     // NUNCA separarse como si fueran un bloque de lectura independiente ('referenceContent').
     if (rawSlide.referenceContent && isSpuriousReferenceMetadata(rawSlide.referenceContent, rawSlide.interaction, rawSlide.subtitle, rawSlide.title)) {
       const spuriousText = (rawSlide.referenceContent.body || rawSlide.referenceContent.content || '').trim();
-      foldSpuriousMetadata(spuriousText, rawSlide);
+      const isAnsKey = isAnswerKeyContent(spuriousText, rawSlide.referenceContent.title, rawSlide.referenceContent.subtitle);
+      const isWb = isWordBankContent(rawSlide.referenceContent, rawSlide.interaction);
+
+      if (isWb) {
+        const extractedTerms = extractWordBankTerms(rawSlide.referenceContent);
+        if (rawSlide.interaction) {
+          if (!Array.isArray(rawSlide.interaction.wordBank) || rawSlide.interaction.wordBank.length === 0) {
+            rawSlide.interaction.wordBank = extractedTerms;
+          } else {
+            rawSlide.interaction.wordBank = Array.from(new Set([...rawSlide.interaction.wordBank, ...extractedTerms]));
+          }
+        }
+      } else if (isAnsKey) {
+        const keys = parseAllAnswerKeys(spuriousText);
+        for (const [secKey, secMap] of Object.entries(keys)) {
+          harvestedAnswerKeys[secKey] = { ...(harvestedAnswerKeys[secKey] || {}), ...secMap };
+        }
+      } else {
+        foldSpuriousMetadata(spuriousText, rawSlide);
+      }
+
       rawSlide.referenceContent = null;
       if (rawSlide.contextBody && (rawSlide.contextBody === spuriousText || spuriousText.includes(rawSlide.contextBody))) {
         rawSlide.contextBody = undefined;
@@ -2157,7 +2764,21 @@ export function validateAndParseSlides(
     }
 
     if (!rawSlide.referenceContent && rawSlide.contextBody && rawSlide.interaction) {
-      if (isSpuriousReferenceMetadata({ type: 'text', content: rawSlide.contextBody }, rawSlide.interaction, rawSlide.subtitle, rawSlide.title)) {
+      if (isAnswerKeyContent(rawSlide.contextBody, rawSlide.title, rawSlide.subtitle)) {
+        const keys = parseAllAnswerKeys(rawSlide.contextBody);
+        for (const [secKey, secMap] of Object.entries(keys)) {
+          harvestedAnswerKeys[secKey] = { ...(harvestedAnswerKeys[secKey] || {}), ...secMap };
+        }
+        rawSlide.contextBody = undefined;
+      } else if (isWordBankContent({ type: 'text', content: rawSlide.contextBody }, rawSlide.interaction)) {
+        const extractedTerms = extractWordBankTerms(rawSlide.contextBody);
+        if (!Array.isArray(rawSlide.interaction.wordBank) || rawSlide.interaction.wordBank.length === 0) {
+          rawSlide.interaction.wordBank = extractedTerms;
+        } else {
+          rawSlide.interaction.wordBank = Array.from(new Set([...rawSlide.interaction.wordBank, ...extractedTerms]));
+        }
+        rawSlide.contextBody = undefined;
+      } else if (isSpuriousReferenceMetadata({ type: 'text', content: rawSlide.contextBody }, rawSlide.interaction, rawSlide.subtitle, rawSlide.title)) {
         foldSpuriousMetadata(rawSlide.contextBody, rawSlide);
         rawSlide.contextBody = undefined;
       } else {
@@ -2300,6 +2921,12 @@ export function validateAndParseSlides(
       console.warn(
         `[digitizeBook] Actividad con referencia cruzada sin diapositiva previa suministrada reportada por el modelo en "${rawSlide.title || (rawSlide.interaction as any)?.instruction || ''}"`
       );
+    }
+
+    if (rawSlide.interaction && typeof rawSlide.interaction === 'object') {
+      if (!rawSlide.interaction.instruction) {
+        rawSlide.interaction.instruction = (rawSlide as any).instruction || rawSlide.subtitle || rawSlide.title || 'Complete the exercise.';
+      }
     }
 
     const parseResult = SlideSchema.safeParse(rawSlide);
@@ -2485,9 +3112,25 @@ MULTI-SLIDE SEGMENTATION & CROSS-REFERENCING DIRECTIVES:
      * INTEGRIDAD DEL CONTENIDO DE SOPORTE: El texto de lectura o soporte DEBE mantenerse íntegro en el contenedor de referencia ('contextBody' / 'referenceContent'). Queda estrictamente prohibido recortar, resumir o mutilar el material de lectura de apoyo.
      * MUESTRA FOCALIZADA Y REPRESENTATIVA: El panel interactivo (preguntas, reactivos, selecciones o huecos) DEBE ser una muestra focalizada y representativa del objetivo pedagógico (máximo 4 a 8 reactivos clave), nunca un despiece exhaustivo línea por línea del texto de apoyo.
      * PROHIBICIÓN DE BATERÍAS MASIVAS: Queda estrictamente prohibido generar baterías masivas de reactivos que desborden visualmente la diapositiva o saturen el layout interactivo en dos columnas densas. Priorizar la síntesis pedagógica sobre la exhaustividad mecánica.
+4. PRINCIPIO EPISTÉMICO DEL SOLUCIONARIO / ANSWER KEY (GROUND TRUTH SUPREMO):
+   - Cuando entre los recortes de entrada (imágenes procesadas o contexto) se incluya un Solucionario, Clave de Respuestas (Answer Key) o Teacher's Notes:
+     * FUENTE SUPREMA DE VERDAD (GROUND TRUTH): Dicho material actúa como la FUENTE SUPREMA DE VERDAD (Ground Truth) para resolver 'expectedAnswer', 'isCorrect', 'tokens' o emparejamientos en los reactivos interactivos.
+     * ALINEACIÓN UNÍVOCA DE CLAVES: Si detectas un recorte o sección con formato de Solucionario / Answer Key (e.g. listas tipo "1a) 2...", "1b) 2 tidy up...", "Answers: 1 B, 2 A..."):
+       a) Alinear unívocamente cada clave del solucionario con el reactivo correspondiente del ejercicio.
+       b) Asignar 'expectedAnswer' y 'isCorrect' basándose de forma estricta y literal en la clave oficial, anulando cualquier conjetura probabilística o deducción libre del LLM.
+       c) En ejercicios de completado con banco de palabras ('input_fields' con 'wordBank'), asegurar que los estímulos se completen usando las colocaciones y complementos certificados por la clave, manteniendo limpios los espacios en blanco sin inyectar variables rotas ('[blank]' o '[?]').
+     * CERO DIAPOSITIVAS DE SOLUCIONARIO: Bajo ninguna circunstancia el Solucionario debe transformarse en una diapositiva independiente en el arreglo "slides". Queda estrictamente prohibido emitir diapositivas cuyo contenido sea la clave o solucionario. Su función es puramente resolutiva/epistémica en tiempo de extracción.
+     * CERO FILTRACIÓN EN CONTENIDO VISIBLE: El Solucionario NUNCA debe filtrarse como 'referenceContent', 'contextBody' o texto de lectura visible para el estudiante.
 
 CANONICAL ARCHETYPES:
 1. "referenceContent" (Passive consultation material) & STRICT DOCUMENTARY FIDELITY:
+   - ASIGNACIÓN ESTRUCTURAL DE CAJAS DE PALABRAS (WORDBANK vs REFERENCECONTENT):
+     * Si el recorte del ejercicio contiene una caja o lista de palabras a insertar ('wordBank', "words in the box", "vocabulary box"):
+       - Los términos se asignan EXCLUSIVAMENTE a 'interaction.wordBank'.
+       - 'referenceContent' DEBE ser estrictamente null y el layout DEBE ser 'single_column' (salvo que exista un texto de lectura continuo o tabla legítima independiente del banco).
+       - Queda estrictamente prohibido aislar una caja de palabras como 'referenceContent' (ni como texto ni como tabla) ni activar 'split_50_50' por causa del banco de palabras.
+   - PROHIBICIÓN ABSOLUTA DE SOLUCIONARIOS EN 'referenceContent':
+     * Bajo ninguna circunstancia un solucionario, clave de respuestas o notas del docente deben situarse en 'referenceContent'. Su función es puramente resolutiva/epistémica a nivel de extracción.
    - PRINCIPIO DE ASIGNACIÓN ÚNICA Y EXCLUSIÓN MUTUA DE CONTENIDO:
      * Ningún fragmento del recorte debe duplicarse entre 'referenceContent' e 'interaction'.
      * Si la totalidad del recorte corresponde a los reactivos del ejercicio (instrucción + enunciados interactivos), 'referenceContent' DEBE ser estrictamente null.
@@ -2536,6 +3179,10 @@ CANONICAL ARCHETYPES:
        - ZERO DUPLICATION / SELF-SUFFICIENT: This direct vocabulary task is completely self-contained; referenceContent MUST be strictly null and layout MUST be "single_column".
      * MATCHING VIA INPUT FIELDS: If an exercise asking to match options/headings to sections or sentences is modeled using input_fields, it MANDATORILY MUST include the "wordBank" containing the exact printed list of options/headings to match.
      * NEVER EMIT ORPHAN BLANKS: Never emit empty fill-in inputs without providing the printed bank of candidate options/headings in "wordBank" or as matching tokens.
+     * WORD BANK INTEGRITY & CLEAN COMPLETION:
+       - Printed word boxes or candidate vocabulary lists belong strictly in "interaction.wordBank".
+       - Complete items using collocations and complement structures certified by the official Answer Key / Ground Truth.
+       - Blanks must be clean without orphan or broken gap markers (never inject '[blank]', '[?]', etc.). Keep stimuli naturally readable.
      * TABULAR QUESTIONNAIRES & FILLABLE TABLES: When the clipping presents a printed table where one or more columns or cells are blank for the student to write answers, names, or values (e.g. peer surveys, interviews, questionnaire tables with columns like "Question", "Your answer", "Partner's answer"):
        - MUST be classified as interaction.type: "input_fields" with layoutMode: "table". NEVER classify it as "writing" with a passive reference table!
        - COLUMN INTEGRITY: All columns that form part of the printed table grid in the image MUST be included inside tableHeaders and tableRows of the interaction. It is STRICTLY PROHIBITED to dismantle, split, or detach any columns of the table (such as note columns, "partner's notes", or "follow-up questions" columns) to send them as a separate referenceContent block!
