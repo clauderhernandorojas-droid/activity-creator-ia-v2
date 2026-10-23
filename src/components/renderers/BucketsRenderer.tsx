@@ -433,7 +433,10 @@ export const BucketsRenderer: React.FC<Props> = ({
                         return (
                           <div
                             key={tok.id}
-                            className={`p-2 px-2.5 rounded-xl border text-xs font-medium flex items-center justify-between ${tokenStyle}`}
+                            draggable={false}
+                            className={`p-2 px-2.5 rounded-xl border text-xs font-medium flex items-center justify-between ${tokenStyle} ${
+                              tok.isExample ? 'cursor-default select-none pointer-events-none' : ''
+                            }`}
                           >
                             <div className="flex items-center gap-1.5 truncate">
                               <span className="truncate">{tok.text}</span>

@@ -4426,6 +4426,118 @@ describe('slideValidation - Direct Schema & Architectural Invariant Tests', () =
         // Token 8 (N) accesses prevTwoPartItems[7] (N-1) strictly, avoiding fallback of raw '8'
         expect(bucketsSlide.interaction.tokens[1].text).toBe('watch a film.');
       });
+
+      it('11. Directiva de Arquitectura Formal: Escalas de equivalencia precedentes y sucesivas en isolateCanonicalInstruction', () => {
+        // Escala antecede a la cláusula imperativa: podar prefijo completo y retener desde el verbo rector
+        const rawPrecedingScale =
+          '1 = I love it. 2 = I like it. 3 = I hate it. Match the sentences in 1a) to the categories A–C.';
+        expect(isolateCanonicalInstruction(rawPrecedingScale)).toBe(
+          'Match the sentences in 1a) to the categories A–C.'
+        );
+
+        // Escala con metadatos entre paréntesis antecediendo a la cláusula
+        const rawParenthesizedScale =
+          '(Scale: 1 = I love it. 2 = I like it.) Match the sentences in 1a) to the categories A–C.';
+        expect(isolateCanonicalInstruction(rawParenthesizedScale)).toBe(
+          'Match the sentences in 1a) to the categories A–C.'
+        );
+
+        // Escala sucede a la cláusula con colon: truncar en el límite de la primera oración imperativa
+        const rawSucceedingScaleWithColon =
+          'Match the sentences in 1a) to the categories A–C: 1 = I love it. 2 = I like it. 3 = I don\'t like it.';
+        expect(isolateCanonicalInstruction(rawSucceedingScaleWithColon)).toBe(
+          'Match the sentences in 1a) to the categories A–C.'
+        );
+      });
+
+      it('12. Directiva de Arquitectura Formal: Resolución por Ordinal Absoluto y Banco de N - 1 Fichas con Muestra Preasignada', () => {
+        const previousSlideContext: any = {
+          id: 'slide-prev-exercise-1a',
+          title: 'Exercise 1a',
+          subtitle: 'Match the sentence halves',
+          interaction: {
+            type: 'input_fields',
+            listItems: [
+              { id: '1', prompt: '1. I always enjoy', expectedAnswer: 'swimming in the ocean.' },
+              { id: '2', prompt: '2. She rarely drinks', expectedAnswer: 'coffee after dinner.' },
+              { id: '3', prompt: '3. We prefer reading', expectedAnswer: 'historical fiction books.' },
+              { id: '4', prompt: '4. He never watches', expectedAnswer: 'horror movies at night.' },
+              { id: '5', prompt: '5. They often play', expectedAnswer: 'badminton at the park.' },
+              { id: '6', prompt: '6. You should try', expectedAnswer: 'cooking Indian curry.' },
+              { id: '7', prompt: '7. I can\'t stand', expectedAnswer: 'waiting in long lines.' },
+            ],
+          },
+        };
+
+        // En Exercise 1b: N = 7 oraciones referenciadas.
+        // Contenedor A tiene la muestra preasignada k_e = 1 (A HOBBIES: 1)
+        // Tokens suministrados como identificadores numéricos en crudo (1..7)
+        const currentBucketsSlide: any = {
+          id: 'slide-exercise-1b',
+          title: 'Exercise 1b',
+          subtitle: 'Use the sentences in 1a). Put them into categories A–C: A HOBBIES: 1 B HABITS C FOOD',
+          interaction: {
+            type: 'buckets_matching',
+            instruction: 'Use the sentences in 1a). Put them into categories.',
+            buckets: [
+              { id: 'A', label: 'HOBBIES' },
+              { id: 'B', label: 'HABITS' },
+              { id: 'C', label: 'FOOD' },
+            ],
+            tokens: [
+              { id: 'tok-1', text: '1', correctBucketId: 'A' },
+              { id: 'tok-2', text: '2', correctBucketId: 'B' },
+              { id: 'tok-3', text: '3', correctBucketId: 'A' },
+              { id: 'tok-4', text: '4', correctBucketId: 'B' },
+              { id: 'tok-5', text: '5', correctBucketId: 'A' },
+              { id: 'tok-6', text: '6', correctBucketId: 'C' },
+              { id: 'tok-7', text: '7', correctBucketId: 'B' },
+            ],
+          },
+        };
+
+        normalizeBucketsMatchingInteraction(currentBucketsSlide, undefined, previousSlideContext);
+
+        const it = currentBucketsSlide.interaction;
+
+        // 1. Muestra preasignada k_e = 1 inyectada determinísticamente en bucket A con isExample: true
+        expect(it.buckets[0].items).toHaveLength(1);
+        expect(it.buckets[0].items[0]).toEqual({
+          id: 'tok-1',
+          text: 'I always enjoy swimming in the ocean.',
+          isExample: true,
+          correctBucketId: 'A',
+        });
+
+        // 2. Banco interactivo arrastrable consta de exactamente N - 1 = 6 fichas (excluyendo el ejemplo k=1)
+        expect(it.tokens).toHaveLength(6);
+        expect(it.sourceItems).toHaveLength(6);
+
+        // 3. Cada ficha corresponde estrictamente al índice ordinal absoluto k_i sin desalineamiento posicional relativo
+        // y ninguna ficha contiene valores numéricos en crudo
+        expect(it.tokens[0].text).toBe('She rarely drinks coffee after dinner.'); // k = 2 -> previousTwoPartItems[1]
+        expect(it.tokens[0].correctBucketId).toBe('B');
+
+        expect(it.tokens[1].text).toBe('We prefer reading historical fiction books.'); // k = 3 -> previousTwoPartItems[2]
+        expect(it.tokens[1].correctBucketId).toBe('A');
+
+        expect(it.tokens[2].text).toBe('He never watches horror movies at night.'); // k = 4 -> previousTwoPartItems[3]
+        expect(it.tokens[2].correctBucketId).toBe('B');
+
+        expect(it.tokens[3].text).toBe('They often play badminton at the park.'); // k = 5 -> previousTwoPartItems[4]
+        expect(it.tokens[3].correctBucketId).toBe('A');
+
+        expect(it.tokens[4].text).toBe('You should try cooking Indian curry.'); // k = 6 -> previousTwoPartItems[5]
+        expect(it.tokens[4].correctBucketId).toBe('C');
+
+        // El reactivo N = 7 accede estrictamente a previousTwoPartItems[6] sin caer en fallback '7'
+        expect(it.tokens[5].text).toBe('I can\'t stand waiting in long lines.'); // k = 7 -> previousTwoPartItems[6]
+        expect(it.tokens[5].correctBucketId).toBe('B');
+
+        // 4. Verificación de targetSlots y targets sincronizados con los buckets
+        expect(it.targetSlots[0].items).toHaveLength(1);
+        expect(it.targetSlots[0].items[0].isExample).toBe(true);
+      });
     });
   });
 });

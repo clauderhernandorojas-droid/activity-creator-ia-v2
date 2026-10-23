@@ -1269,21 +1269,47 @@ export function isolateCanonicalInstruction(text?: string): string {
   const restoreRanges = (s: string) =>
     s.replace(/__RANGE_MARKER_(\d+)__/g, (_, idx) => preservedRanges[Number(idx)] || '');
 
-  // Purgar escalas semánticas o leyendas auxiliares que comiencen con secuencias ordinales (e.g. '1. I love it. 2. I like it...')
-  const isScaleOrLegend = (str: string) => {
-    if (/(?:[:;–—\n\.]|\s*\(|\s+)\s*(?:(?:scale|legend|rating|key)[:\s]+)?\(?1\s*=\s*.*?\s*\(?2\s*=\s*/i.test(str)) return true;
-    if (/(?:[:;–—\n\.]|\s*\(|\s+)\s*(?:(?:scale|legend|rating|key)[:\s]+)?\(?1\s*[.):=-]\s*(?:I\s+(?:love|like|hate|don'?t|prefer)|strongly|agree|disagree|neutral)\b.*?\s*\(?2\s*[.):=-]/i.test(str)) return true;
-    if (/\b(?:categories|category|columns?|buckets?|groups?)\b/i.test(str) && /(?:[:;–—\n\.]|\s*\(|\s+)\s*\(?1\s*[.):=-]\s+[A-Za-z].*?\s*\(?2\s*[.):=-]\s+[A-Za-z]/i.test(str)) return true;
-    return false;
-  };
+  // Secuencias o escalas de equivalencia (patrones de tipo ordinal o semántico repetitivo: /(?:\(?\d+\s*[\.\)\:\=\-]\s*[^.!?\n]+[.!?]?\s*){2,}/)
+  const scaleSequenceRegex = /(?:(?:\b(?:scale|legend|rating|key)[:\s]+)?(?:\(?\d+\s*[\.\)\:\=\-]\s*[^.!?\n]+[.!?]?\s*){2,})/i;
+  const scaleMatch = protectedText.match(scaleSequenceRegex);
 
-  if (isScaleOrLegend(protectedText)) {
-    const scaleRegex = /(?:[:;–—\n\.]|\s*\()\s*(?:(?:scale|legend|rating|key)[:\s]+)?(?:\(?1\s*[.):=-]\s+.*?\s*\(?2\s*[.):=-]\s+.*)/i;
-    const scaleMatch = protectedText.match(scaleRegex);
-    if (scaleMatch && typeof scaleMatch.index === 'number') {
-      const prefix = protectedText.slice(0, scaleMatch.index).trim();
-      if (prefix) {
-        let candidateDirective = restoreRanges(prefix).trim().replace(/[:–—\s(]+$/, '').trim();
+  if (scaleMatch && typeof scaleMatch.index === 'number') {
+    const scaleStart = scaleMatch.index;
+    const scaleEnd = scaleStart + scaleMatch[0].length;
+    const textBefore = protectedText.slice(0, scaleStart).trim();
+    const textAfter = protectedText.slice(scaleEnd).trim();
+
+    // Comprobar si la escala antecede a la cláusula imperativa:
+    // (el texto previo es vacío, signos de puntuación, o metadatos de escala como '(Scale:')
+    const isScalePrefix =
+      !textBefore ||
+      /^[\s:;–—\(\)\[\]\.\,]+$/i.test(textBefore) ||
+      /^(?:\(?\s*(?:scale|legend|rating|key)[:\s]*)?$/i.test(textBefore);
+
+    const isScaleOrEquivalence =
+      isScalePrefix ||
+      /(?:=|\b(?:scale|legend|rating|key)\b)/i.test(protectedText) ||
+      /\b(?:love|like|hate|dislike|prefer|agree|disagree|neutral|strongly)\b/i.test(scaleMatch[0]) ||
+      /\b(?:categories|category|columns?|buckets?|groups?)\b/i.test(textBefore);
+
+    if (isScaleOrEquivalence) {
+      if (isScalePrefix) {
+        // Si la escala antecede a la cláusula imperativa, podar el prefijo completo y retener la cláusula a partir del verbo rector
+        const imperativeMatch = textAfter.match(/(?:^|[\s\.\?!])([A-Z][a-z]*(?:ing)?\b(?:\s+[a-zA-Z0-9–—\-\(\)\.,]+){2,}\b.*?(?:[.!?]|$))/);
+        if (imperativeMatch) {
+          let candidateDirective = restoreRanges(imperativeMatch[1].trim()).replace(/[:–—\s(]+$/, '').trim();
+          if (candidateDirective.length >= 5) {
+            if (!candidateDirective.endsWith('.') && !candidateDirective.endsWith('?') && !candidateDirective.endsWith('!')) {
+              candidateDirective += '.';
+            }
+            return candidateDirective;
+          }
+        }
+      } else {
+        // Si la escala sucede a la cláusula, truncar en el límite de la primera oración imperativa
+        const imperativeMatch = textBefore.match(/(?:^|[\s\.\?!])([A-Z][a-z]*(?:ing)?\b(?:\s+[a-zA-Z0-9–—\-\(\)\.,]+){2,}\b.*?(?:[.!?]|$))/);
+        const candidate = imperativeMatch ? imperativeMatch[1] : textBefore;
+        let candidateDirective = restoreRanges(candidate).trim().replace(/[:–—\s(]+$/, '').trim();
         if (candidateDirective.length >= 5) {
           if (!candidateDirective.endsWith('.') && !candidateDirective.endsWith('?') && !candidateDirective.endsWith('!')) {
             candidateDirective += '.';
@@ -2366,88 +2392,7 @@ export function normalizeBucketsMatchingInteraction(
     it.targetSlots = existingTargets;
   }
 
-  // 3. Invariante Universal de Ensamble Sintáctico (Concatenación P + A)
-  const crossRef = detectCrossActivityReference(textToScan);
-  if (previousSlideContext && (crossRef || /\b(?:from|in|use|using)\s+(?:the\s+)?(?:phrases|words|items|sentences|exercise|activity)\b/i.test(textToScan))) {
-    const prevTwoPartItems = extractTwoPartItemsFromSlide(previousSlideContext);
-    if (prevTwoPartItems.length > 0) {
-      if (Array.isArray(it.tokens) && it.tokens.length > 0) {
-        it.tokens.forEach((token: any, tIdx: number) => {
-          let prevItem: { prompt: string; expectedAnswer: string } | null = null;
-          let targetIndex: number | null = null;
-
-          // 1. By explicit numeric index property (targetIndex, sourceIndex, index, itemIndex)
-          if (typeof token.targetIndex === 'number') {
-            targetIndex = token.targetIndex;
-          } else if (typeof token.sourceIndex === 'number') {
-            targetIndex = token.sourceIndex;
-          } else if (typeof token.index === 'number') {
-            targetIndex = token.index;
-          } else if (typeof token.itemIndex === 'number') {
-            targetIndex = token.itemIndex >= 1 ? token.itemIndex : token.itemIndex + 1;
-          }
-
-          // 2. By text index (e.g. "1", "1.", "Phrase 1", "Item 1", "Reactivo 1", "Sentence 1", "1: ")
-          if (targetIndex === null && token.text) {
-            const trimmedText = String(token.text).trim();
-            const textMatch = trimmedText.match(/^(?:(?:phrase|item|reactivo|sentence|oraci[oó]n|frase|no\.?|number)\s*)?(\d+)[.)\-:\s]*$/i) ||
-                              trimmedText.match(/\b(\d+)\b/);
-            if (textMatch) {
-              targetIndex = parseInt(textMatch[1], 10);
-            }
-          }
-
-          // 3. By numeric ID (e.g. "1", "tok-1", "src-1", "reactivo-1")
-          if (targetIndex === null && token.id) {
-            const idMatch = String(token.id).match(/(\d+)/);
-            if (idMatch) {
-              targetIndex = parseInt(idMatch[1], 10);
-            }
-          }
-
-          // 4. Fallback by position index (1-based) if placeholder or array counts match
-          if (targetIndex === null && tIdx < prevTwoPartItems.length) {
-            const isPlaceholder = !token.text || token.text.trim().length <= 4 || /^\d+$/.test(token.text.trim());
-            if (isPlaceholder || it.tokens.length === prevTwoPartItems.length) {
-              targetIndex = tIdx + 1;
-            }
-          }
-
-          // Normalización estricta a base 0: const itemIndex = targetIndex - 1
-          // Garantizar que el reactivo N (último elemento) acceda correctamente a previousItems[N - 1]
-          if (targetIndex !== null) {
-            const itemIndex = targetIndex >= 1 ? targetIndex - 1 : targetIndex;
-            if (itemIndex >= 0 && itemIndex < prevTwoPartItems.length) {
-              prevItem = prevTwoPartItems[itemIndex];
-            }
-          }
-
-          if (prevItem) {
-            token.text = assembleTwoPartToken(prevItem.prompt, prevItem.expectedAnswer);
-          }
-        });
-      } else if ((!Array.isArray(it.tokens) || it.tokens.length === 0) && prevTwoPartItems.length > 0) {
-        it.tokens = prevTwoPartItems.map((prevItem, pIdx) => {
-          return {
-            id: `tok-${pIdx + 1}`,
-            text: assembleTwoPartToken(prevItem.prompt, prevItem.expectedAnswer),
-            correctBucketId: it.buckets?.[0]?.id || 'slot-1',
-          };
-        });
-      }
-
-      if (Array.isArray(it.tokens)) {
-        it.sourceItems = it.tokens.map((t: any) => ({
-          id: t.id,
-          text: t.text,
-          correctTargetId: t.correctBucketId,
-          isExample: t.isExample,
-        }));
-      }
-    }
-  }
-
-  // 4. Normalización Tipográfica y 5. Asignación Estructural de Muestras (Examples)
+  // 4. Normalización Tipográfica de Buckets
   if (Array.isArray(it.buckets) && it.buckets.length > 0) {
     it.buckets = it.buckets.map((b: any, bIdx: number) => {
       const id = b.id || (parsedBuckets[bIdx] ? parsedBuckets[bIdx].id : `slot-${bIdx + 1}`);
@@ -2460,17 +2405,182 @@ export function normalizeBucketsMatchingInteraction(
         items: Array.isArray(b.items) ? b.items : [],
       };
     });
+  }
 
-    const markerMap = new Map<string, string>();
-    for (const d of parsedBuckets) {
-      if (d._exampleMarker) {
-        markerMap.set(d.id, d._exampleMarker);
-      }
+  const markerMap = new Map<string, string>();
+  for (const d of parsedBuckets) {
+    if (d._exampleMarker) {
+      markerMap.set(d.id, d._exampleMarker);
+    }
+  }
+
+  // Helper unificado para extraer ordinal numérico absoluto k (1-based)
+  const extractOrdinalIndex = (item: any): number | null => {
+    if (!item) return null;
+    if (typeof item === 'number') return item;
+    if (typeof item.targetIndex === 'number') return item.targetIndex;
+    if (typeof item.sourceIndex === 'number') return item.sourceIndex;
+    if (typeof item.index === 'number') return item.index;
+    if (typeof item.itemIndex === 'number') return item.itemIndex >= 1 ? item.itemIndex : item.itemIndex + 1;
+    if (typeof item.ordinal === 'number') return item.ordinal;
+
+    const idStr = String(item.id || '').trim();
+    const idMatch = idStr.match(/^tok-(\d+)$/i) || idStr.match(/^(\d+)$/);
+    if (idMatch) return parseInt(idMatch[1], 10);
+
+    const textStr = String(item.text || item.prompt || '').trim();
+    if (textStr) {
+      const textMatch =
+        textStr.match(/^(?:(?:phrase|item|reactivo|sentence|oraci[oó]n|frase|no\.?|number)\s*)?(\d+)[.)\-:\s]*$/i) ||
+        textStr.match(/^(\d+)[.)\-:\s]/) ||
+        textStr.match(/\b(\d+)\b/);
+      if (textMatch) return parseInt(textMatch[1], 10);
     }
 
+    const anyIdDigits = idStr.match(/\d+/);
+    if (anyIdDigits) return parseInt(anyIdDigits[0], 10);
+
+    return null;
+  };
+
+  // Detectar ordinal de ejemplo k_e y contenedor destino
+  let exampleOrdinal: number | null = null;
+  let exampleBucketId: string | null = null;
+
+  for (const bucket of (it.buckets || [])) {
+    const marker = bucket._exampleMarker || markerMap.get(bucket.id);
+    if (marker) {
+      const numMatch = String(marker).match(/\d+/);
+      exampleOrdinal = numMatch ? parseInt(numMatch[0], 10) : 1;
+      exampleBucketId = bucket.id;
+      break;
+    }
+    if (Array.isArray(bucket.items)) {
+      const exItem = bucket.items.find((item: any) => item.isExample);
+      if (exItem) {
+        exampleOrdinal = extractOrdinalIndex(exItem) || 1;
+        exampleBucketId = bucket.id;
+        break;
+      }
+    }
+  }
+
+  if (exampleOrdinal === null && Array.isArray(it.tokens)) {
+    const exToken = it.tokens.find((t: any) => t.isExample);
+    if (exToken) {
+      exampleOrdinal = extractOrdinalIndex(exToken) || 1;
+      exampleBucketId = exToken.correctBucketId || it.buckets?.[0]?.id || 'slot-1';
+    }
+  }
+
+  // 3. Invariante Universal de Ensamble Sintáctico (Concatenación P + A)
+  const crossRef = detectCrossActivityReference(textToScan);
+  if (previousSlideContext && (crossRef || /\b(?:from|in|use|using)\s+(?:the\s+)?(?:phrases|words|items|sentences|exercise|activity)\b/i.test(textToScan))) {
+    const prevTwoPartItems = extractTwoPartItemsFromSlide(previousSlideContext);
+    if (prevTwoPartItems.length > 0) {
+      const N = prevTwoPartItems.length;
+
+      // Inyección y Renderizado de Muestra Preasignada:
+      // Para el ordinal k_e marcado o detectado como ejemplo:
+      if (exampleOrdinal !== null && exampleOrdinal >= 1 && exampleOrdinal <= N) {
+        const k_e = exampleOrdinal;
+        const prevEx = prevTwoPartItems[k_e - 1];
+        const tokenExampleText = assembleTwoPartToken(prevEx.prompt, prevEx.expectedAnswer);
+        const targetBucket = (it.buckets || []).find((b: any) => b.id === exampleBucketId) || it.buckets?.[0];
+        if (targetBucket) {
+          if (!Array.isArray(targetBucket.items)) targetBucket.items = [];
+          const tokenExample = {
+            id: `tok-${k_e}`,
+            text: tokenExampleText,
+            isExample: true,
+            correctBucketId: targetBucket.id,
+          };
+          const exIdx = targetBucket.items.findIndex((item: any) => item.id === tokenExample.id || item.isExample || extractOrdinalIndex(item) === k_e);
+          if (exIdx >= 0) {
+            targetBucket.items[exIdx] = { ...targetBucket.items[exIdx], ...tokenExample };
+          } else {
+            targetBucket.items.push(tokenExample);
+          }
+        }
+      }
+
+      // Mapear TargetId -> lista de ordinales k_i para cada contenedor
+      const ordinalToBucketMap = new Map<number, string>();
+      const ordinalTokenIdMap = new Map<number, string>();
+
+      if (Array.isArray(it.tokens)) {
+        it.tokens.forEach((t: any) => {
+          const k = extractOrdinalIndex(t);
+          if (k !== null && k >= 1 && k <= N) {
+            if (t.correctBucketId) ordinalToBucketMap.set(k, t.correctBucketId);
+            if (t.id) ordinalTokenIdMap.set(k, t.id);
+          }
+        });
+      }
+
+      if (Array.isArray(it.buckets)) {
+        it.buckets.forEach((b: any) => {
+          if (Array.isArray(b.items)) {
+            b.items.forEach((item: any) => {
+              const k = extractOrdinalIndex(item);
+              if (k !== null && k >= 1 && k <= N && !ordinalToBucketMap.has(k)) {
+                ordinalToBucketMap.set(k, b.id);
+              }
+            });
+          }
+        });
+      }
+
+      // La colección interactiva de fichas DEBE generarse iterando exclusivamente sobre el conjunto de índices k no marcados como ejemplo
+      const interactiveOrdinals: number[] = [];
+      if (Array.isArray(it.tokens) && it.tokens.length > 0) {
+        for (let tIdx = 0; tIdx < it.tokens.length; tIdx++) {
+          const t = it.tokens[tIdx];
+          let k = extractOrdinalIndex(t);
+          if (k === null && it.tokens.length === N) {
+            k = tIdx + 1;
+          }
+          if (k !== null && k >= 1 && k <= N) {
+            if (k === exampleOrdinal || t.isExample) {
+              continue; // Excluir la muestra preasignada
+            }
+            if (!interactiveOrdinals.includes(k)) {
+              interactiveOrdinals.push(k);
+            }
+          }
+        }
+      } else {
+        for (let k = 1; k <= N; k++) {
+          if (k !== exampleOrdinal) {
+            interactiveOrdinals.push(k);
+          }
+        }
+      }
+
+      // Para cada ordinal k válido: tokenSource = previousTwoPartItems[k - 1]
+      it.tokens = interactiveOrdinals.map((k) => {
+        const tokenSource = prevTwoPartItems[k - 1];
+        const tokenText = assembleTwoPartToken(tokenSource.prompt, tokenSource.expectedAnswer);
+        const correctBucketId = ordinalToBucketMap.get(k) || it.buckets?.[0]?.id || 'slot-1';
+        const tokenId = ordinalTokenIdMap.get(k) || `tok-${k}`;
+        return {
+          id: tokenId,
+          text: tokenText,
+          correctBucketId,
+        };
+      });
+
+      it.sourceItems = it.tokens.map((t: any) => ({
+        id: t.id,
+        text: t.text,
+        correctTargetId: t.correctBucketId,
+        isExample: false,
+      }));
+    }
+  } else if (Array.isArray(it.buckets) && it.buckets.length > 0) {
+    // Si no proviene de una diapositiva previa de dos partes, aplicar resolución sobre tokens textuales existentes
     const discountedExampleIds = new Set<string>();
 
-    // Also collect any example item IDs already present in bucket items
     for (const bucket of it.buckets) {
       if (Array.isArray(bucket.items)) {
         bucket.items.forEach((item: any) => {
@@ -2482,7 +2592,6 @@ export function normalizeBucketsMatchingInteraction(
     }
 
     if (Array.isArray(it.tokens)) {
-      // Step A: Preserve tokens already explicitly marked with isExample into their target bucket
       for (const t of it.tokens) {
         if (t.isExample && t.correctBucketId) {
           const destBucket = it.buckets.find((b: any) => b.id === t.correctBucketId);
@@ -2500,26 +2609,17 @@ export function normalizeBucketsMatchingInteraction(
         }
       }
 
-      // Step B: Resolve example markers (_exampleMarker) from parsed categories
-      // Asignación Estructural de Muestras (Examples):
-      // - Si un target bucket contiene _exampleMarker con índice ordinal k:
-      // - Mover de forma determinística el k-ésimo elemento sintetizado al arreglo 'items' con { ...item, isExample: true }.
-      // - Excluir dicho elemento de la colección de ítems interactivos arrastrables ('tokens' / 'sourceItems').
       for (const bucket of it.buckets) {
         const marker = bucket._exampleMarker || markerMap.get(bucket.id);
         if (marker) {
           const numMatch = String(marker).match(/\d+/);
           const k = numMatch ? parseInt(numMatch[0], 10) : 1;
 
-          let targetTokenIndex = -1;
-
-          // 1. Concordancia por ID numérico (ej. "tok-1", "src-1", o id="1")
-          targetTokenIndex = it.tokens.findIndex((t: any) => {
+          let targetTokenIndex = it.tokens.findIndex((t: any) => {
             const idNum = String(t.id || '').match(/(\d+)/)?.[1];
             return idNum && parseInt(idNum, 10) === k;
           });
 
-          // 2. Concordancia por prefijo textual ("1. ...", "1 ...", o "1")
           if (targetTokenIndex === -1) {
             targetTokenIndex = it.tokens.findIndex((t: any) => {
               const str = String(t.text || '').trim();
@@ -2527,12 +2627,10 @@ export function normalizeBucketsMatchingInteraction(
             });
           }
 
-          // 3. Posición ordinal estricta k-1 (1-based -> 0-based index)
           if (targetTokenIndex === -1 && k >= 1 && k <= it.tokens.length) {
             targetTokenIndex = k - 1;
           }
 
-          // 4. Fallback si k=1 o es 'example', buscar token con isExample premarcado
           if (targetTokenIndex === -1 && (k === 1 || String(marker).toLowerCase().includes('example'))) {
             targetTokenIndex = it.tokens.findIndex((t: any) => t.isExample);
             if (targetTokenIndex === -1 && it.tokens.length > 0) {
@@ -2558,7 +2656,6 @@ export function normalizeBucketsMatchingInteraction(
         }
       }
 
-      // El banco interactivo debe quedar constituido exclusivamente por los ítems no marcados como ejemplo
       if (discountedExampleIds.size > 0) {
         it.tokens = it.tokens.filter((t: any) => !t.isExample && !discountedExampleIds.has(t.id));
         it.sourceItems = it.tokens.map((t: any) => ({
@@ -2569,10 +2666,10 @@ export function normalizeBucketsMatchingInteraction(
         }));
       }
     }
-
-    it.targetSlots = it.buckets;
-    it.targets = it.buckets;
   }
+
+  it.targetSlots = it.buckets;
+  it.targets = it.buckets;
 }
 
 /**
