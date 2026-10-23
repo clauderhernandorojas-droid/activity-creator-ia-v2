@@ -17,7 +17,10 @@ import {
   Save,
   FolderOpen,
   Download,
-  Check
+  Check,
+  Package,
+  RotateCcw,
+  Sparkles
 } from 'lucide-react';
 
 export const Header: React.FC = () => {
@@ -34,7 +37,11 @@ export const Header: React.FC = () => {
     undo, 
     redo, 
     canUndo, 
-    canRedo 
+    canRedo,
+    exportLessonAsScorm,
+    reprocessActiveSlide,
+    regenerateActiveSlideWithAI,
+    ocrProcessing
   } = useLessonStore();
   const { 
     mode, 
@@ -51,8 +58,13 @@ export const Header: React.FC = () => {
   const [tempTitle, setTempTitle] = useState(lesson.title);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  const [isExportingScorm, setIsExportingScorm] = useState(false);
   const titleInputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const currentSlide = lesson.slides.find((s) => s.id === currentSlideId) || (lesson.slides.length > 0 ? lesson.slides[0] : null);
+  const hasRawExtraction = Boolean(currentSlide?._rawExtraction);
+  const hasSourceImage = Boolean(currentSlide?._sourceImage || currentSlide?.sourceImageSnippetUrl);
 
   useEffect(() => {
     if (saveFeedback?.message) {
@@ -94,6 +106,18 @@ export const Header: React.FC = () => {
       await saveLessonAs();
     } finally {
       setIsSaving(false);
+    }
+  };
+
+  const handleExportScorm = async () => {
+    if (isExportingScorm) return;
+    setIsExportingScorm(true);
+    try {
+      await exportLessonAsScorm();
+    } catch (err: any) {
+      alert('Error al generar el paquete SCORM 1.2: ' + (err?.message || err));
+    } finally {
+      setIsExportingScorm(false);
     }
   };
 
@@ -341,6 +365,18 @@ export const Header: React.FC = () => {
             <Download className="w-3.5 h-3.5 text-slate-400" />
             <span className="hidden xl:inline">Guardar Copia</span>
           </button>
+
+          {/* Exportar Paquete SCORM 1.2 (.zip) para LMS */}
+          <button
+            onClick={handleExportScorm}
+            disabled={isExportingScorm || isSaving}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold text-emerald-700 hover:text-emerald-800 hover:bg-emerald-100/60 bg-emerald-50/80 border border-emerald-200/90 transition shadow-2xs cursor-pointer disabled:opacity-50"
+            title="Exportar lección como paquete SCORM 1.2 (.zip) compatible con Moodle, Blackboard, Canvas, Chamilo"
+          >
+            <Package className="w-3.5 h-3.5 text-emerald-600" />
+            <span className="hidden xl:inline">Exportar SCORM 1.2 (.zip)</span>
+            <span className="inline xl:hidden">SCORM 1.2</span>
+          </button>
         </div>
 
         {/* Vaciar Lección Button (Only in Edit Mode when slides exist) */}
@@ -379,6 +415,64 @@ export const Header: React.FC = () => {
           <Radio className="w-3.5 h-3.5" />
           <span>{liveSyncEnabled ? 'Clase Sincronizada' : 'Pausado'}</span>
         </button>
+
+        {/* Slide Fast Reprocessing & AI Regeneration Controls */}
+        {mode === 'edit' && lesson.slides.length > 0 && currentSlide && (
+          <div className="flex items-center gap-1 bg-slate-100/90 p-1 rounded-xl border border-slate-200/80">
+            {/* Botón Re-procesar */}
+            <button
+              type="button"
+              disabled={!hasRawExtraction || ocrProcessing}
+              onClick={() => reprocessActiveSlide()}
+              className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition ${
+                hasRawExtraction && !ocrProcessing
+                  ? 'text-slate-700 hover:text-indigo-700 hover:bg-white shadow-2xs cursor-pointer'
+                  : 'text-slate-400 cursor-not-allowed opacity-40'
+              }`}
+              title={
+                hasRawExtraction
+                  ? 'Re-procesar determinísticamente (0 tokens): re-aplica normalizaciones de TypeScript sobre el payload crudo en caché'
+                  : 'Esta diapositiva no tiene datos crudos en caché. Vuelve a escanearla una vez para activar el re-procesado instantáneo'
+              }
+            >
+              <RotateCcw className="w-3.5 h-3.5 text-indigo-600" />
+              <span>Re-procesar</span>
+            </button>
+
+            {/* Botón Regenerar con IA */}
+            <button
+              type="button"
+              disabled={!hasSourceImage || ocrProcessing}
+              onClick={async () => {
+                if (hasSourceImage && !ocrProcessing) {
+                  await regenerateActiveSlideWithAI();
+                }
+              }}
+              className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition ${
+                hasSourceImage && !ocrProcessing
+                  ? 'text-indigo-700 bg-indigo-50/70 hover:bg-white hover:text-indigo-800 shadow-2xs cursor-pointer'
+                  : 'text-slate-400 cursor-not-allowed opacity-40'
+              }`}
+              title={
+                hasSourceImage
+                  ? 'Regenerar con IA: re-analiza el recorte original en memoria sin requerir abrir el PDF ni recortar manualmente'
+                  : 'No hay imagen de recorte guardada (_sourceImage) para regenerar con IA'
+              }
+            >
+              {ocrProcessing ? (
+                <>
+                  <RotateCcw className="w-3.5 h-3.5 animate-spin text-indigo-600" />
+                  <span>Regenerando...</span>
+                </>
+              ) : (
+                <>
+                  <Sparkles className="w-3.5 h-3.5 text-indigo-600" />
+                  <span>Regenerar con IA</span>
+                </>
+              )}
+            </button>
+          </div>
+        )}
 
         {/* OCR Modal Trigger Button */}
         <button

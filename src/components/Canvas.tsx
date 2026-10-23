@@ -443,15 +443,15 @@ export const Canvas: React.FC = () => {
                       type="button"
                       disabled={!hasRawExtraction || ocrProcessing}
                       onClick={() => reprocessActiveSlide()}
-                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold transition-all cursor-pointer ${
+                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold transition-all ${
                         hasRawExtraction && !ocrProcessing
-                          ? 'text-slate-700 hover:text-indigo-700 hover:bg-indigo-50 border border-transparent hover:border-indigo-100'
-                          : 'text-slate-400 bg-slate-50 border border-transparent cursor-not-allowed opacity-50'
+                          ? 'text-slate-700 hover:text-indigo-700 hover:bg-indigo-50 border border-transparent hover:border-indigo-100 cursor-pointer'
+                          : 'text-slate-400 bg-slate-50 border border-transparent cursor-not-allowed opacity-40'
                       }`}
                       title={
                         hasRawExtraction
                           ? 'Re-procesar determinísticamente (0 tokens): re-aplica normalizaciones de TypeScript sobre el payload crudo en caché'
-                          : 'No hay datos crudos guardados (_rawExtraction) para re-procesar en esta diapositiva'
+                          : 'Esta diapositiva no tiene datos crudos en caché. Vuelve a escanearla una vez para activar el re-procesado instantáneo'
                       }
                     >
                       <RotateCcw className="w-3.5 h-3.5 text-indigo-600" />
@@ -467,10 +467,10 @@ export const Canvas: React.FC = () => {
                           await regenerateActiveSlideWithAI();
                         }
                       }}
-                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold transition-all cursor-pointer ${
+                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold transition-all ${
                         hasSourceImage && !ocrProcessing
-                          ? 'text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 shadow-2xs'
-                          : 'text-slate-400 bg-slate-50 border border-transparent cursor-not-allowed opacity-50'
+                          ? 'text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 shadow-2xs cursor-pointer'
+                          : 'text-slate-400 bg-slate-50 border border-transparent cursor-not-allowed opacity-40'
                       }`}
                       title={
                         hasSourceImage
