@@ -4203,6 +4203,18 @@ describe('slideValidation - Direct Schema & Architectural Invariant Tests', () =
         expect(assembleTwoPartToken('clean prompt', 'clean answer')).toBe('clean prompt clean answer');
         expect(assembleTwoPartToken('10: go', 'f) home')).toBe('go home');
 
+        // Algorithmic agnostic polarity detection tests
+        // 1. Terminal punctuation on part 1, capital on part 2: detects part 2 is P and part 1 is A
+        expect(assembleTwoPartToken('b. notes.', '1. Take')).toBe('Take notes.');
+        expect(assembleTwoPartToken('1. Take', 'b. notes.')).toBe('Take notes.');
+        // 2. Both parts having punctuation: ensures single final period and strips intermediate punctuation
+        expect(assembleTwoPartToken('1. Take.', 'b. notes.')).toBe('Take notes.');
+        // 3. Mid-dot / punto medio on terminal segment
+        expect(assembleTwoPartToken('at 7:00 ·', 'I usually get up')).toBe('I usually get up at 7:00.');
+        expect(assembleTwoPartToken('I usually get up', 'at 7:00 ·')).toBe('I usually get up at 7:00.');
+        // 4. Question marks
+        expect(assembleTwoPartToken('at 7:00?', 'Do you get up')).toBe('Do you get up at 7:00?');
+
         // Test with synthesis between matching previous slide and buckets slide
         const prevSlide: any = {
           id: 'prev-collocations',
@@ -4282,6 +4294,77 @@ describe('slideValidation - Direct Schema & Architectural Invariant Tests', () =
         expect(rawSlide.interaction.tokens).toHaveLength(2);
         expect(rawSlide.interaction.tokens.map((t: any) => t.id)).toEqual(['tok-1', 'tok-3']);
         expect(rawSlide.interaction.sourceItems.map((s: any) => s.id)).toEqual(['tok-1', 'tok-3']);
+      });
+
+      it('7. extractTwoPartItemsFromSlide normaliza la polaridad para que el prompt siempre preceda a la respuesta', () => {
+        const slideWithInvertedPolarity: any = {
+          id: 'slide-inv',
+          interaction: {
+            type: 'input_fields',
+            listItems: [
+              // Notice: prompt ends with period, expectedAnswer starts with uppercase and no punctuation
+              { id: 'item-1', prompt: 'in the city center.', expectedAnswer: 'She lives' },
+              // Normal item
+              { id: 'item-2', prompt: 'They are studying', expectedAnswer: 'for an exam.' },
+            ],
+          },
+        };
+
+        const extracted = extractTwoPartItemsFromSlide(slideWithInvertedPolarity);
+        expect(extracted).toHaveLength(2);
+        // item-1 was swapped so prompt is the head (P) and expectedAnswer is the tail (A)
+        expect(extracted[0].prompt).toBe('She lives');
+        expect(extracted[0].expectedAnswer).toBe('in the city center.');
+        // item-2 was already in correct polarity
+        expect(extracted[1].prompt).toBe('They are studying');
+        expect(extracted[1].expectedAnswer).toBe('for an exam.');
+      });
+
+      it('8. buildExtractionPrompt instruye la transcripción mandatoria de etiquetas de buckets', () => {
+        const prompt = buildExtractionPrompt(1);
+        expect(prompt).toContain('TRANSCRIPCIÓN MANDATORIA DE ETIQUETAS DE BUCKETS');
+        expect(prompt).toContain("el campo 'label' DEBE transcribir textualmente la descripción de la categoría visible en el recorte");
+        expect(prompt).toContain("quedando estrictamente prohibido emitir únicamente la letra o número ('A', 'B', '1')");
+      });
+
+      it('9. normalizeBucketsMatchingInteraction hidrata targetSlots y targets con { ...item, isExample: true }', () => {
+        const rawSlide: any = {
+          id: 'slide-slots-sync',
+          interaction: {
+            type: 'buckets_matching',
+            instruction: 'Sort items into categories',
+            buckets: [
+              { id: 'slot-1', label: 'Category 1', _exampleMarker: '1' },
+              { id: 'slot-2', label: 'Category 2' },
+            ],
+            targetSlots: [
+              { id: 'slot-1', label: 'Category 1' },
+              { id: 'slot-2', label: 'Category 2' },
+            ],
+            tokens: [
+              { id: 'tok-1', text: '1. First Example', correctBucketId: 'slot-1', customProp: 'preserve-me' },
+              { id: 'tok-2', text: '2. Second Regular', correctBucketId: 'slot-2' },
+            ],
+          },
+        };
+
+        normalizeBucketsMatchingInteraction(rawSlide);
+
+        // Buckets and targetSlots both have the example item with isExample: true and preserved properties
+        expect(rawSlide.interaction.buckets[0].items).toHaveLength(1);
+        expect(rawSlide.interaction.buckets[0].items[0]).toMatchObject({
+          id: 'tok-1',
+          text: '1. First Example',
+          isExample: true,
+          correctBucketId: 'slot-1',
+          customProp: 'preserve-me',
+        });
+        expect(rawSlide.interaction.targetSlots[0].items).toHaveLength(1);
+        expect(rawSlide.interaction.targetSlots[0].items[0].isExample).toBe(true);
+
+        // Tokens only retain non-example items
+        expect(rawSlide.interaction.tokens).toHaveLength(1);
+        expect(rawSlide.interaction.tokens[0].id).toBe('tok-2');
       });
     });
   });

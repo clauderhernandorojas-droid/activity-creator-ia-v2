@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import type { BucketsMatchingBlock, BucketTarget, BucketToken } from '../../types/schema';
 import { useSessionStore, type SessionEvaluation } from '../../store/useSessionStore';
 import { Plus, Trash2, CheckCircle2, XCircle } from 'lucide-react';
@@ -27,8 +27,37 @@ export const BucketsRenderer: React.FC<Props> = ({
   const setVerificationAudioActive = useSessionStore((s) => s.setVerificationAudioActive);
   const hasVerificationAudio = Boolean(block.verificationAudioUrl && block.verificationAudioUrl.trim().length > 0);
 
-  const targetSlots: BucketTarget[] =
-    block.targetSlots && block.targetSlots.length > 0 ? block.targetSlots : block.buckets;
+  const rawSlots: BucketTarget[] =
+    block.targetSlots && block.targetSlots.length > 0 ? block.targetSlots : block.buckets || [];
+
+  const targetSlots: BucketTarget[] = rawSlots.map((slot) => {
+    const bucketMatch = block.buckets?.find((b) => b.id === slot.id);
+    const mergedItems =
+      Array.isArray(slot.items) && slot.items.length > 0
+        ? slot.items
+        : Array.isArray(bucketMatch?.items)
+        ? bucketMatch.items
+        : [];
+    return {
+      ...slot,
+      items: mergedItems,
+    };
+  });
+
+  // Asegurar que al montar el componente, las fichas marcadas con 'isExample: true' dentro de 'bucket.items'
+  // registren su ubicación preasignada en studentAnswers si aún no está presente
+  useEffect(() => {
+    targetSlots.forEach((bucket) => {
+      if (Array.isArray(bucket.items)) {
+        bucket.items.forEach((item: any) => {
+          if (item?.isExample && item?.id && studentAnswers[item.id] !== bucket.id) {
+            onAnswerChange?.(item.id, bucket.id);
+          }
+        });
+      }
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleBucketChange = (bIndex: number, field: keyof BucketTarget, val: any) => {
     if (!onChange) return;
@@ -210,6 +239,23 @@ export const BucketsRenderer: React.FC<Props> = ({
                           <Trash2 className="w-3.5 h-3.5" />
                         </button>
                       </div>
+                      {bucket.items && bucket.items.length > 0 && (
+                        <div className="pt-1.5 border-t border-slate-200/60 flex flex-wrap gap-1">
+                          {bucket.items.map((it: any) => (
+                            <span
+                              key={it.id}
+                              className="text-[10px] bg-slate-200/80 text-slate-700 px-2 py-0.5 rounded-md flex items-center gap-1 font-medium"
+                            >
+                              <span>{it.text}</span>
+                              {it.isExample && (
+                                <span className="text-[9px] font-bold text-slate-500 uppercase tracking-wider">
+                                  ✓ Ejemplo
+                                </span>
+                              )}
+                            </span>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -264,8 +310,11 @@ export const BucketsRenderer: React.FC<Props> = ({
           /* PREVIEW / STUDENT MODE */
           <div className="flex-1 flex flex-col space-y-4">
             {(() => {
-              const unassignedTokens = block.tokens.filter(
-                (tok) => !studentAnswers[tok.id] && !(tok.isExample && tok.correctBucketId)
+              const unassignedTokens = (block.tokens || []).filter(
+                (tok) =>
+                  !studentAnswers[tok.id] &&
+                  !(tok.isExample && tok.correctBucketId) &&
+                  !targetSlots.some((b) => Array.isArray(b.items) && b.items.some((it: any) => it.id === tok.id))
               );
 
               return (
@@ -317,7 +366,13 @@ export const BucketsRenderer: React.FC<Props> = ({
             ) : (
               <div className={`flex-1 grid ${getGridColsClass(targetSlots.length)} gap-3.5 min-h-[180px]`}>
                 {targetSlots.map((bucket) => {
-                  const bucketExampleItems = (Array.isArray(bucket.items) ? bucket.items : []).filter((item: any) => item.isExample);
+                  const bucketExampleItems = (Array.isArray(bucket.items) ? bucket.items : [])
+                    .filter((item: any) => item.isExample !== false)
+                    .map((item: any) => ({
+                      ...item,
+                      isExample: true,
+                      correctBucketId: item.correctBucketId || bucket.id,
+                    }));
                   const assignedTokensFromUser = (block.tokens || []).filter(
                     (tok) => (studentAnswers[tok.id] || (tok.isExample ? tok.correctBucketId : undefined)) === bucket.id
                   );

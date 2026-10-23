@@ -2094,6 +2094,7 @@ export function decoupleWordBankTokensAndPreserveContext(
 
 /**
  * Extracts prompt and expectedAnswer pairs from previous slide context for two-part matching meta-activities.
+ * Ensures the preceding prompt always precedes the response (polaridad determinística P -> A).
  */
 export function extractTwoPartItemsFromSlide(
   slide?: Slide | null
@@ -2102,35 +2103,65 @@ export function extractTwoPartItemsFromSlide(
   const it = slide.interaction as any;
   const items: Array<{ prompt: string; expectedAnswer: string; id?: string }> = [];
 
+  const addNormalizedPair = (id: string | undefined, rawP: string, rawA: string) => {
+    let p = String(rawP || '').trim();
+    let a = String(rawA || '').trim();
+    if (!p && !a) return;
+    if (!p) { p = a; a = ''; }
+
+    // Algorithmic polarity check to ensure prompt always precedes expectedAnswer:
+    const stripPrefix = (s: string) =>
+      s.replace(/^\s*(?:\d+[\.\)\-\:\s]+|[a-zA-Z]\s*[\.\)\-\:]\s*)\s*/, '').trim();
+
+    const cp = stripPrefix(p) || p;
+    const ca = stripPrefix(a) || a;
+
+    const terminalRegex = /[.!?·•…]$/;
+    const isTermP = terminalRegex.test(cp) || terminalRegex.test(p);
+    const isTermA = terminalRegex.test(ca) || terminalRegex.test(a);
+
+    const capitalRegex = /^[A-ZÁÉÍÓÚÀÈÌÒÙÂÊÎÔÛÄËÏÖÜ]/;
+    const isCapP = capitalRegex.test(cp);
+    const isCapA = capitalRegex.test(ca);
+
+    // If p has terminal punctuation but a doesn't, or a starts with capital and p doesn't (or p ends with punctuation):
+    if ((isTermP && !isTermA) || (isCapA && !isCapP && !isTermA)) {
+      // Swapped polarity: a is actually the preceding prompt (P) and p is the terminal answer (A)
+      items.push({ id, prompt: a, expectedAnswer: p });
+    } else {
+      items.push({ id, prompt: p, expectedAnswer: a });
+    }
+  };
+
   if (it.type === 'input_fields' && Array.isArray(it.listItems)) {
     for (const li of it.listItems) {
       const p = (li.prompt || li.text || '').trim();
       const a = (li.expectedAnswer || (Array.isArray(li.acceptedAnswers) ? li.acceptedAnswers[0] : '') || '').trim();
-      if (p && a) {
-        items.push({ id: li.id, prompt: p, expectedAnswer: a });
+      if (p || a) {
+        addNormalizedPair(li.id, p, a);
       }
     }
   } else if (it.type === 'buckets_matching' && Array.isArray(it.tokens)) {
     for (const tok of it.tokens) {
       if (tok.text && tok.correctBucketId) {
         const bucket = it.buckets?.find((b: any) => b.id === tok.correctBucketId);
-        items.push({ id: tok.id, prompt: tok.text, expectedAnswer: bucket?.label || tok.correctBucketId });
+        addNormalizedPair(tok.id, tok.text, bucket?.label || tok.correctBucketId);
       }
     }
   } else if (it.type === 'selection' && Array.isArray(it.questions)) {
     for (const q of it.questions) {
       const p = (q.prompt || q.question || '').trim();
       const a = (q.options?.find((o: any) => o.isCorrect)?.text || '').trim();
-      if (p && a) {
-        items.push({ id: q.id, prompt: p, expectedAnswer: a });
+      if (p || a) {
+        addNormalizedPair(q.id, p, a);
       }
     }
   } else if (Array.isArray((it as any).pairs)) {
     for (const pair of (it as any).pairs) {
       const p = (pair.prompt || pair.left || pair.first || '').trim();
       const a = (pair.expectedAnswer || pair.right || pair.second || pair.answer || '').trim();
-      if (p && a) {
-        items.push({ id: pair.id, prompt: p, expectedAnswer: a });
+      if (p || a) {
+        addNormalizedPair(pair.id, p, a);
       }
     }
   }
@@ -2141,21 +2172,63 @@ export function extractTwoPartItemsFromSlide(
 /**
  * Invariante Universal de Ensamble Sintáctico (Concatenación P + A):
  * Al reconstruir reactivos a partir de una diapositiva previa de tipo matching/two-part:
- * - 'P' es el segmento inicial ('prompt') y 'A' el segmento terminal ('expectedAnswer').
- * - Sanitiza ambos segmentos mediante patrones regulares agnósticos:
- *   cleanP: remueve índices/ordinales numéricos o alfabéticos iniciales
- *   cleanA: remueve índices/ordinales numéricos o alfabéticos iniciales
- * - Orden determinístico estricto: `${cleanP} ${cleanA}`.replace(/\s+/g, ' ')
- * - Prohibida la inversión A + P.
+ * - Detecta de forma algorítmica y agnóstica la polaridad de las partes:
+ *   * Si una parte termina con puntuación terminal ('.', '!', '?') o punto medio ('·', '•', '…'), esa parte es el segmento terminal (A).
+ *   * La parte que inicia con mayúscula y no tiene puntuación de cierre es el segmento inicial (P).
+ * - Garantiza el ensamble estricto: `${cleanP} ${cleanA}` con punto final único al cierre de la oración.
  */
-export function assembleTwoPartToken(prompt: string, expectedAnswer: string): string {
-  const P = String(prompt || '');
-  const A = String(expectedAnswer || '');
-  const cleanP = P.replace(/^\s*(?:[\d]+|[a-zA-Z])[\.\)\-\:\s]+\s*/, '').trim();
-  const cleanA = A.replace(/^\s*(?:[\d]+|[a-zA-Z])[\.\)\-\:\s]+\s*/, '').trim();
-  const pSegment = cleanP || P.trim();
-  const aSegment = cleanA || A.trim();
-  return `${pSegment} ${aSegment}`.replace(/\s+/g, ' ');
+export function assembleTwoPartToken(part1: string, part2: string): string {
+  const raw1 = String(part1 || '').trim();
+  const raw2 = String(part2 || '').trim();
+  if (!raw1 && !raw2) return '';
+  if (!raw1) return raw2;
+  if (!raw2) return raw1;
+
+  // Remueve índices/ordinales numéricos o alfabéticos iniciales (ej. "1.", "b)", "A -", "10:")
+  const stripPrefix = (s: string) =>
+    s.replace(/^\s*(?:\d+[\.\)\-\:\s]+|[a-zA-Z]\s*[\.\)\-\:]\s*)\s*/, '').trim();
+
+  const c1 = stripPrefix(raw1) || raw1;
+  const c2 = stripPrefix(raw2) || raw2;
+
+  const terminalRegex = /[.!?·•…]$/;
+  const isTerm1 = terminalRegex.test(c1) || terminalRegex.test(raw1);
+  const isTerm2 = terminalRegex.test(c2) || terminalRegex.test(raw2);
+
+  const capitalRegex = /^[A-ZÁÉÍÓÚÀÈÌÒÙÂÊÎÔÛÄËÏÖÜ]/;
+  const isCap1 = capitalRegex.test(c1);
+  const isCap2 = capitalRegex.test(c2);
+
+  let P = c1;
+  let A = c2;
+
+  // Detección algorítmica y agnóstica de polaridad:
+  // Si c1 termina en puntuación y c2 no, o si c2 inicia con mayúscula y c1 no (o c1 termina en puntuación)
+  if ((isTerm1 && !isTerm2) || (isCap2 && !isTerm2 && (!isCap1 || isTerm1))) {
+    P = c2;
+    A = c1;
+  }
+
+  // Limpiar puntuación de cierre en P para evitar signos duplicados o puntuación intermedia
+  const cleanP = P.replace(/[.!?·•…\s]+$/, '').trim();
+
+  // Limpiar puntuación terminal de A
+  let cleanA = A.replace(/[.!?·•…\s]+$/, '').trim();
+
+  const hasTerminal = isTerm1 || isTerm2;
+  let terminalMark = '.';
+  if (/[?]$/.test(raw1) || /[?]$/.test(raw2) || /[?]$/.test(c1) || /[?]$/.test(c2)) {
+    terminalMark = '?';
+  } else if (/[!]$/.test(raw1) || /[!]$/.test(raw2) || /[!]$/.test(c1) || /[!]$/.test(c2)) {
+    terminalMark = '!';
+  }
+
+  let assembled = `${cleanP} ${cleanA}`.replace(/\s+/g, ' ').trim();
+  if (hasTerminal) {
+    assembled = `${assembled}${terminalMark}`;
+  }
+
+  return assembled;
 }
 
 /**
@@ -2374,10 +2447,9 @@ export function normalizeBucketsMatchingInteraction(
             if (!destBucket.items) destBucket.items = [];
             if (!destBucket.items.some((item: any) => item.id === t.id)) {
               destBucket.items.push({
-                id: t.id,
-                text: t.text,
-                correctBucketId: destBucket.id,
+                ...t,
                 isExample: true,
+                correctBucketId: destBucket.id,
               });
             }
           }
@@ -2387,7 +2459,7 @@ export function normalizeBucketsMatchingInteraction(
       // Step B: Resolve example markers (_exampleMarker) from parsed categories
       // Asignación Estructural de Muestras (Examples):
       // - Si un target bucket contiene _exampleMarker con índice ordinal k:
-      // - Mover de forma determinística el k-ésimo elemento sintetizado al arreglo 'items' con { isExample: true }.
+      // - Mover de forma determinística el k-ésimo elemento sintetizado al arreglo 'items' con { ...item, isExample: true }.
       // - Excluir dicho elemento de la colección de ítems interactivos arrastrables ('tokens' / 'sourceItems').
       for (const bucket of it.buckets) {
         const marker = bucket._exampleMarker || markerMap.get(bucket.id);
@@ -2433,10 +2505,9 @@ export function normalizeBucketsMatchingInteraction(
             if (!Array.isArray(bucket.items)) bucket.items = [];
             if (!bucket.items.some((item: any) => item.id === targetToken.id)) {
               bucket.items.push({
-                id: targetToken.id,
-                text: targetToken.text,
-                correctBucketId: bucket.id,
+                ...targetToken,
                 isExample: true,
+                correctBucketId: bucket.id,
               });
             }
           }
@@ -2455,12 +2526,8 @@ export function normalizeBucketsMatchingInteraction(
       }
     }
 
-    if (Array.isArray(it.targetSlots)) {
-      it.targetSlots = it.buckets;
-    }
-    if (Array.isArray(it.targets)) {
-      it.targets = it.buckets;
-    }
+    it.targetSlots = it.buckets;
+    it.targets = it.buckets;
   }
 }
 
@@ -4360,6 +4427,7 @@ MULTI-SLIDE SEGMENTATION & CROSS-REFERENCING DIRECTIVES:
    - ZERO-LLM TOKEN SYNTHESIS EN META-ACTIVIDADES DE CLASIFICACIÓN (BUCKETS):
      * Si la consigna actual es una meta-actividad referencial sobre un ejercicio previo de dos partes (e.g. clasificar frases de un matching o completado de mitades de 'PREVIOUS_SLIDE_CONTEXT' en categorías o buckets):
        QUEDA TERMINANTEMENTE PROHIBIDO reescribir o transcribir los textos de las frases en los 'tokens' de 'buckets_matching'. En su lugar, el modelo DEBE emitir únicamente los índices de referencia numérica correspondientes (ej. id: "1", "2", ... o text: "1", "2", ... con 'correctBucketId'). El sistema ensamblará y sintetizará los textos de las fichas programáticamente en TypeScript con identidad textual 100% idéntica a la diapositiva fuente.
+     * TRANSCRIPCIÓN MANDATORIA DE ETIQUETAS DE BUCKETS: Para cada target en 'targets' o 'buckets', el campo 'label' DEBE transcribir textualmente la descripción de la categoría visible en el recorte (ej. 'A · <descripción>', 'B · <descripción>'), quedando estrictamente prohibido emitir únicamente la letra o número ('A', 'B', '1').
    - AISLAMIENTO ESTRICTO DE REACTIVOS (ZERO CROSS-SLIDE CLONING):
      * Los reactivos interactivos (preguntas, reactivos, selecciones, casillas, y audios de verificación) de CADA diapositiva se originan ÚNICA Y EXCLUSIVAMENTE a partir de los elementos impresos y visibles en el recorte actual.
      * Queda estrictamente prohibido arrastrar, clonar, fusionar o reemitir preguntas, opciones interactivas, audios ('verificationAudioUrl') o consignas presentes en 'PREVIOUS_SLIDE_CONTEXT'.
@@ -4531,6 +4599,8 @@ CANONICAL ARCHETYPES:
          * Extract as candidate options exclusively the discrete alternatives delimited by the disjunction (e.g. options: [{ id: "opt-1", text: "agree", isCorrect: true }, { id: "opt-2", text: "disagree", isCorrect: false }], or ['past', 'present']).
          * Infer the correct option ('correctAnswer' / isCorrect: true) analyzing the data, grammar rules, listening transcript, or contextual examples from the lesson clipping.
    - "buckets_matching": For categorization into buckets OR bijective correspondence between TWO differentiated domains (Column A <-> Column B, "Match words with definitions", "Match sentence halves"):
+     * TRANSCRIPCIÓN MANDATORIA DE ETIQUETAS DE BUCKETS (MANDATORY VERBATIM BUCKET LABELS):
+       Para cada target en 'targets' o 'buckets', el campo 'label' DEBE transcribir textualmente la descripción de la categoría visible en el recorte (ej. 'A · <descripción>', 'B · <descripción>'), quedando estrictamente prohibido emitir únicamente la letra o número ('A', 'B', '1').
      * PRESERVE VERBATIM VISUAL IDENTIFIERS: Always preserve literal printed visual identifiers from the textbook (letters "a", "b", "c", numbers "1", "2", "3", or verbatim labels) in tokens and buckets/targetSlots. Do NOT omit them and do NOT invent synthetic names.
      * MATCHING HEADINGS / LABELS TO PARAGRAPHS: When the instruction explicitly directs to match or assign headings, titles, or labels to numbered sections or paragraphs (e.g. "Match headings a-d with paragraphs 1-4", "Match words with definitions"):
        - PREFERRED PRIMITIVE: Model preferably as interaction.type: "buckets_matching", where the paragraphs or section numbers are the targetSlots / buckets (labeled with their literal identifiers, e.g. "Paragraph 1"), and the headings are the tokens / sourceItems to drag or match (preserving their literal letter/text, e.g. "a. Heading title").
