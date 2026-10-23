@@ -58,10 +58,9 @@ export const Canvas: React.FC = () => {
     updateReferenceBlock,
     convertSlideRole,
     updateSlideIsGraded,
-    reExtractSlideWithRole,
+    reprocessActiveSlide,
+    regenerateActiveSlideWithAI,
     ocrProcessing,
-    pastedImages,
-    extractedBlocks,
   } = useLessonStore();
 
   const {
@@ -432,33 +431,68 @@ export const Canvas: React.FC = () => {
                 })}
               </div>
 
-              {/* Explicit AI Re-extraction Button (Only when user explicitly asks, with original clipping) */}
-              {(currentSlide.sourceImageSnippetUrl || pastedImages[0]) && (
-                <button
-                  type="button"
-                  disabled={ocrProcessing}
-                  onClick={async () => {
-                    const clip = currentSlide.sourceImageSnippetUrl || pastedImages[0] || (extractedBlocks[0] as any)?.sourceImageSnippetUrl;
-                    if (clip && !ocrProcessing) {
-                      await reExtractSlideWithRole(currentSlide.id, currentFormat, clip);
-                    }
-                  }}
-                  className="flex items-center gap-1 px-2.5 py-1.5 bg-slate-100 hover:bg-indigo-50 text-slate-600 hover:text-indigo-700 rounded-lg border border-slate-200 text-xs font-semibold transition cursor-pointer disabled:opacity-50"
-                  title="Re-analizar el recorte original con IA específicamente enfocado en el formato activo"
-                >
-                  {ocrProcessing ? (
-                    <>
-                      <RotateCcw className="w-3.5 h-3.5 animate-spin text-indigo-600" />
-                      <span>Re-extrayendo con IA...</span>
-                    </>
-                  ) : (
-                    <>
-                      <Sparkles className="w-3.5 h-3.5 text-indigo-600" />
-                      <span>Re-extraer con IA</span>
-                    </>
-                  )}
-                </button>
-              )}
+              {/* Pipeline Fast Reprocessing & AI Regeneration Controls */}
+              {(() => {
+                const hasRawExtraction = Boolean(currentSlide._rawExtraction);
+                const hasSourceImage = Boolean(currentSlide._sourceImage || currentSlide.sourceImageSnippetUrl);
+
+                return (
+                  <div className="flex items-center gap-1.5 bg-white p-1 rounded-lg border border-slate-200 shadow-2xs">
+                    {/* Botón principal: Re-procesar determinístico (0 tokens) */}
+                    <button
+                      type="button"
+                      disabled={!hasRawExtraction || ocrProcessing}
+                      onClick={() => reprocessActiveSlide()}
+                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold transition-all cursor-pointer ${
+                        hasRawExtraction && !ocrProcessing
+                          ? 'text-slate-700 hover:text-indigo-700 hover:bg-indigo-50 border border-transparent hover:border-indigo-100'
+                          : 'text-slate-400 bg-slate-50 border border-transparent cursor-not-allowed opacity-50'
+                      }`}
+                      title={
+                        hasRawExtraction
+                          ? 'Re-procesar determinísticamente (0 tokens): re-aplica normalizaciones de TypeScript sobre el payload crudo en caché'
+                          : 'No hay datos crudos guardados (_rawExtraction) para re-procesar en esta diapositiva'
+                      }
+                    >
+                      <RotateCcw className="w-3.5 h-3.5 text-indigo-600" />
+                      <span>Re-procesar</span>
+                    </button>
+
+                    {/* Botón secundario: Regenerar con IA */}
+                    <button
+                      type="button"
+                      disabled={!hasSourceImage || ocrProcessing}
+                      onClick={async () => {
+                        if (hasSourceImage && !ocrProcessing) {
+                          await regenerateActiveSlideWithAI();
+                        }
+                      }}
+                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold transition-all cursor-pointer ${
+                        hasSourceImage && !ocrProcessing
+                          ? 'text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 shadow-2xs'
+                          : 'text-slate-400 bg-slate-50 border border-transparent cursor-not-allowed opacity-50'
+                      }`}
+                      title={
+                        hasSourceImage
+                          ? 'Regenerar con IA: re-analiza el recorte original en memoria sin requerir abrir el PDF ni recortar manualmente'
+                          : 'No hay imagen de recorte guardada (_sourceImage) para regenerar con IA'
+                      }
+                    >
+                      {ocrProcessing ? (
+                        <>
+                          <RotateCcw className="w-3.5 h-3.5 animate-spin text-indigo-600" />
+                          <span>Regenerando...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Sparkles className="w-3.5 h-3.5 text-indigo-600" />
+                          <span>Regenerar con IA</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                );
+              })()}
 
               {/* Discrete isGraded Switch */}
               {hasInteraction && (

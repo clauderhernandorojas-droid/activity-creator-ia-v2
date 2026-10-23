@@ -9,10 +9,11 @@ import {
   type ExtractedBlock,
   LessonSchema
 } from '../types/schema';
-import { digitizeBook, createManualBlock, roleToForcedTargetType, type ManualTemplateType } from '../core/ai/digitizeBook';
+import { digitizeBook, validateAndParseSlides, createManualBlock, roleToForcedTargetType, type ManualTemplateType } from '../core/ai/digitizeBook';
 import { convertSlideToRole, type PedagogicalRole } from '../core/utils/slideRoleConverter';
 import { compressImageBase64 } from '../core/utils/imageCompressor';
 import { useSessionStore } from './useSessionStore';
+import { exportScormPackage } from '../core/scorm/exportScormPackage';
 export { validateFillInBlank, type FlexibleValidationResult } from '../core/evaluators/fillBlankValidator';
 
 declare global {
@@ -96,6 +97,26 @@ export function exportLessonToFile(lesson: Lesson): void {
   URL.revokeObjectURL(url);
 }
 
+export async function downloadScormPackage(lesson: Lesson): Promise<void> {
+  const blob = await exportScormPackage(lesson);
+  const safeTitle = (lesson.title || 'Leccion')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-zA-Z0-9_-]/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_|_$/g, '') || 'Leccion';
+
+  const fileName = `${safeTitle}_SCORM1.2.zip`;
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
+
 interface LessonState {
   lesson: Lesson;
   activeSlideId: string;
@@ -166,6 +187,8 @@ interface LessonState {
   ) => void;
   reExtractBlockWithRole: (blockId: string, role: PedagogicalRole) => Promise<void>;
   reExtractSlideWithRole: (slideId: string, role: PedagogicalRole, clipUrl?: string) => Promise<void>;
+  reprocessActiveSlide: () => boolean;
+  regenerateActiveSlideWithAI: () => Promise<boolean>;
 
   // File System Access API & File Portability
   currentFileHandle: FileSystemFileHandle | null;
@@ -180,6 +203,7 @@ interface LessonState {
   setLessonTitle: (title: string) => void;
   loadLesson: (lesson: Lesson, fileHandle?: FileSystemFileHandle | null) => void;
   exportLesson: () => void;
+  exportLessonAsScorm: () => Promise<boolean>;
 }
 
 function recordHistory(state: LessonState): Partial<LessonState> {
@@ -625,6 +649,30 @@ export const useLessonStore = create<LessonState>()(
         });
       },
 
+      exportLessonAsScorm: async () => {
+        const { lesson } = get();
+        try {
+          await downloadScormPackage(lesson);
+          const safeTitle = (lesson.title || 'Leccion')
+            .normalize('NFD')
+            .replace(/[\u0300-\u036f]/g, '')
+            .replace(/[^a-zA-Z0-9_-]/g, '_')
+            .replace(/_+/g, '_')
+            .replace(/^_|_$/g, '') || 'Leccion';
+
+          set({
+            saveFeedback: {
+              message: `Paquete SCORM 1.2 descargado: ${safeTitle}_SCORM1.2.zip`,
+              timestamp: Date.now(),
+            },
+          });
+          return true;
+        } catch (err: any) {
+          console.error('[useLessonStore] Error al exportar paquete SCORM 1.2:', err);
+          return false;
+        }
+      },
+
       createSlideFromBlock: (blockId, role) => {
         try {
           const state = get();
@@ -677,6 +725,9 @@ export const useLessonStore = create<LessonState>()(
             notes: block.notes || '',
             isGraded,
             sourceImageSnippetUrl,
+            _sourceImage: block._sourceImage || sourceImageSnippetUrl || undefined,
+            _rawExtraction: block._rawExtraction,
+            _answerKeyCrop: block._answerKeyCrop,
           };
 
           const isInitialEmptySlide = (lesson: Lesson) => {
@@ -751,6 +802,9 @@ export const useLessonStore = create<LessonState>()(
               notes: block.notes || '',
               isGraded,
               ...(sourceImageSnippetUrl ? { sourceImageSnippetUrl } : {}),
+              _sourceImage: block._sourceImage || sourceImageSnippetUrl || undefined,
+              _rawExtraction: block._rawExtraction,
+              _answerKeyCrop: block._answerKeyCrop,
             };
           });
 
@@ -1389,6 +1443,9 @@ export const useLessonStore = create<LessonState>()(
                       rolePayloadCache: nextRoleCache,
                       isGraded: isTargetReference ? false : (regSlide.isGraded !== undefined ? regSlide.isGraded : sl.isGraded),
                       sourceImageSnippetUrl: clip,
+                      _sourceImage: clip,
+                      _rawExtraction: regSlide._rawExtraction || sl._rawExtraction,
+                      _answerKeyCrop: regSlide._answerKeyCrop || sl._answerKeyCrop,
                     };
                 }),
               },
@@ -1409,6 +1466,140 @@ export const useLessonStore = create<LessonState>()(
             ocrError: err?.message || 'Error en re-extracción dirigida',
           });
           state.convertSlideRole(slideId, role);
+        }
+      },
+
+      reprocessActiveSlide: () => {
+        const state = get();
+        const activeId = state.activeSlideId || useSessionStore.getState().currentSlideId;
+        const slideIndex = state.lesson.slides.findIndex((s) => s.id === activeId);
+        const activeSlide = slideIndex >= 0 ? state.lesson.slides[slideIndex] : null;
+
+        if (!activeSlide || !activeSlide._rawExtraction) {
+          return false;
+        }
+
+        try {
+          const previousSlideContext = slideIndex > 0 ? state.lesson.slides[slideIndex - 1] : null;
+          const reprocessedSlides = validateAndParseSlides(
+            activeSlide._rawExtraction,
+            previousSlideContext,
+            {
+              sourceImage: activeSlide._sourceImage || activeSlide.sourceImageSnippetUrl,
+              answerKeyCrop: activeSlide._answerKeyCrop,
+            }
+          );
+
+          if (!reprocessedSlides || reprocessedSlides.length === 0) {
+            return false;
+          }
+
+          const reprocessed = reprocessedSlides[0];
+          const updatedSlide: Slide = {
+            ...reprocessed,
+            id: activeSlide.id,
+            _sourceImage: activeSlide._sourceImage || reprocessed._sourceImage,
+            _rawExtraction: activeSlide._rawExtraction, // Maintain original raw extraction without mutation
+            _answerKeyCrop: activeSlide._answerKeyCrop || reprocessed._answerKeyCrop,
+            sourceImageSnippetUrl: activeSlide._sourceImage || activeSlide.sourceImageSnippetUrl || reprocessed.sourceImageSnippetUrl,
+          };
+
+          set((s) => ({
+            ...recordHistory(s),
+            lesson: {
+              ...s.lesson,
+              slides: s.lesson.slides.map((sl) => (sl.id === activeId ? updatedSlide : sl)),
+            },
+            saveFeedback: {
+              message: 'Diapositiva re-procesada con la lógica actual',
+              timestamp: Date.now(),
+            },
+          }));
+
+          return true;
+        } catch (err: any) {
+          console.error('[useLessonStore] Error in reprocessActiveSlide:', err);
+          return false;
+        }
+      },
+
+      regenerateActiveSlideWithAI: async () => {
+        const state = get();
+        const activeId = state.activeSlideId || useSessionStore.getState().currentSlideId;
+        const slideIndex = state.lesson.slides.findIndex((s) => s.id === activeId);
+        const activeSlide = slideIndex >= 0 ? state.lesson.slides[slideIndex] : null;
+
+        const sourceImage = activeSlide?._sourceImage || activeSlide?.sourceImageSnippetUrl;
+        if (!activeSlide || !sourceImage) {
+          return false;
+        }
+
+        if (state.activeOcrAbortController) {
+          state.activeOcrAbortController.abort();
+        }
+
+        const controller = new AbortController();
+        set({ ocrProcessing: true, activeOcrAbortController: controller, ocrError: null });
+
+        try {
+          const previousSlideContext = slideIndex > 0 ? state.lesson.slides[slideIndex - 1] : null;
+          const imagesToDigitize = [sourceImage];
+          if (activeSlide._answerKeyCrop) {
+            imagesToDigitize.push(activeSlide._answerKeyCrop);
+          }
+
+          const regeneratedBlocks = await digitizeBook(
+            imagesToDigitize,
+            controller.signal,
+            {
+              previousSlideContext,
+              answerKeyCrop: activeSlide._answerKeyCrop,
+            }
+          );
+
+          if (regeneratedBlocks && regeneratedBlocks.length > 0) {
+            const regSlide = regeneratedBlocks[0];
+            const updatedSlide: Slide = {
+              ...regSlide,
+              id: activeSlide.id,
+              _sourceImage: sourceImage,
+              _answerKeyCrop: activeSlide._answerKeyCrop || regSlide._answerKeyCrop,
+              _rawExtraction: regSlide._rawExtraction || activeSlide._rawExtraction,
+              sourceImageSnippetUrl: sourceImage,
+            };
+
+            set((s) => ({
+              ...recordHistory(s),
+              ocrProcessing: false,
+              activeOcrAbortController: null,
+              ocrError: null,
+              lesson: {
+                ...s.lesson,
+                slides: s.lesson.slides.map((sl) => (sl.id === activeId ? updatedSlide : sl)),
+              },
+              saveFeedback: {
+                message: 'Diapositiva regenerada con IA',
+                timestamp: Date.now(),
+              },
+            }));
+
+            return true;
+          } else {
+            set({ ocrProcessing: false, activeOcrAbortController: null });
+            return false;
+          }
+        } catch (err: any) {
+          if (controller.signal.aborted || err?.name === 'AbortError') {
+            set({ ocrProcessing: false, activeOcrAbortController: null });
+            return false;
+          }
+          console.error('[useLessonStore] Error during regenerateActiveSlideWithAI:', err);
+          set({
+            ocrProcessing: false,
+            activeOcrAbortController: null,
+            ocrError: err?.message || 'Error durante la regeneración con IA',
+          });
+          return false;
         }
       },
     }),

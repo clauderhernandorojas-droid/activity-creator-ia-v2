@@ -2717,15 +2717,20 @@ export function extractInteractionItemsForDeduplication(
  * Throws explicit SchemaValidationError if validation fails.
  */
 export function validateAndParseSlides(
-  rawJsonText: string,
-  previousSlideContext?: Slide | null
+  rawJsonText: string | any,
+  previousSlideContext?: Slide | null,
+  metadataOptions?: { sourceImage?: string; answerKeyCrop?: string }
 ): Slide[] {
-  const cleanJson = rawJsonText.replace(/```(?:json)?/gi, '').replace(/```/g, '').trim();
   let parsedJson: any;
-  try {
-    parsedJson = JSON.parse(cleanJson);
-  } catch (err: any) {
-    throw new SchemaValidationError(`El modelo devolvió un JSON con sintaxis inválida: ${err.message}`, [], rawJsonText);
+  if (typeof rawJsonText === 'string') {
+    const cleanJson = rawJsonText.replace(/```(?:json)?/gi, '').replace(/```/g, '').trim();
+    try {
+      parsedJson = JSON.parse(cleanJson);
+    } catch (err: any) {
+      throw new SchemaValidationError(`El modelo devolvió un JSON con sintaxis inválida: ${err.message}`, [], rawJsonText);
+    }
+  } else {
+    parsedJson = JSON.parse(JSON.stringify(rawJsonText));
   }
 
   const rawSlides: any[] = Array.isArray(parsedJson?.slides)
@@ -2769,6 +2774,11 @@ export function validateAndParseSlides(
     if (!rawSlide || typeof rawSlide !== 'object') {
       throw new SchemaValidationError(`La diapositiva en el índice ${idx} no es un objeto válido`, [], rawSlide);
     }
+
+    // Capture pristine raw extraction snapshot before ANY TypeScript normalizations run
+    const rawExtractionSnapshot = rawSlide._rawExtraction
+      ? JSON.parse(JSON.stringify(rawSlide._rawExtraction))
+      : JSON.parse(JSON.stringify(rawSlide));
 
     if (!rawSlide.id) {
       rawSlide.id = `slide-${Date.now()}-${idx}`;
@@ -3865,6 +3875,21 @@ export function validateAndParseSlides(
 
     delete (rawSlide as any)._rawInstructionText;
 
+    // Attach provenance fields and metadata
+    rawSlide._rawExtraction = rawExtractionSnapshot;
+    if (!rawSlide._sourceImage && metadataOptions?.sourceImage) {
+      rawSlide._sourceImage = metadataOptions.sourceImage;
+    }
+    if (!rawSlide._answerKeyCrop && metadataOptions?.answerKeyCrop) {
+      rawSlide._answerKeyCrop = metadataOptions.answerKeyCrop;
+    }
+    if (!rawSlide.sourceImageSnippetUrl && rawSlide._sourceImage) {
+      rawSlide.sourceImageSnippetUrl = rawSlide._sourceImage;
+    }
+    if (!rawSlide._sourceImage && rawSlide.sourceImageSnippetUrl) {
+      rawSlide._sourceImage = rawSlide.sourceImageSnippetUrl;
+    }
+
     const parseResult = SlideSchema.safeParse(rawSlide);
 
     if (!parseResult.success) {
@@ -3973,10 +3998,13 @@ export function slideToExtractedBlock(
     rawText: rawText || slide.title || '',
     detectedType,
     confidence: 1.0,
-    sourceImageSnippetUrl: primaryImage || undefined,
-    sourceImages: imageList.length > 0 ? imageList : undefined,
+    sourceImageSnippetUrl: primaryImage || slide.sourceImageSnippetUrl || undefined,
+    sourceImages: imageList.length > 0 ? imageList : (primaryImage ? [primaryImage] : undefined),
     contextBody,
     metadata: slide.metadata,
+    _sourceImage: slide._sourceImage || primaryImage || undefined,
+    _rawExtraction: slide._rawExtraction,
+    _answerKeyCrop: slide._answerKeyCrop,
     parsedData: {
       ...slide,
       title: slide.title,
@@ -4252,7 +4280,7 @@ AUTONOMOUS RESOLUTION:
 export async function digitizeBook(
   images: string | string[],
   signal?: AbortSignal,
-  options?: { forcedTargetType?: ForcedTargetArchetype; previousSlideContext?: Slide | null }
+  options?: { forcedTargetType?: ForcedTargetArchetype; previousSlideContext?: Slide | null; answerKeyCrop?: string }
 ): Promise<(ExtractedBlock & Slide)[]> {
   if (signal?.aborted) {
     const err = new Error('Operación cancelada por el usuario');
@@ -4327,7 +4355,10 @@ export async function digitizeBook(
 
           const rawText = response.text?.trim();
           if (rawText) {
-            const validatedSlides = validateAndParseSlides(rawText, options?.previousSlideContext);
+            const validatedSlides = validateAndParseSlides(rawText, options?.previousSlideContext, {
+              sourceImage: primaryImage,
+              answerKeyCrop: options?.answerKeyCrop,
+            });
             return validatedSlides.map((slide) => slideToExtractedBlock(slide, primaryImage, imageList));
           }
         } catch (modelErr: any) {
@@ -4409,7 +4440,10 @@ export async function digitizeBook(
           const data = await response.json();
           const rawContent = data.choices?.[0]?.message?.content;
           if (rawContent) {
-            const validatedSlides = validateAndParseSlides(rawContent, options?.previousSlideContext);
+            const validatedSlides = validateAndParseSlides(rawContent, options?.previousSlideContext, {
+              sourceImage: primaryImage,
+              answerKeyCrop: options?.answerKeyCrop,
+            });
             return validatedSlides.map((slide) => slideToExtractedBlock(slide, primaryImage, imageList));
           }
         } else {
@@ -4431,7 +4465,12 @@ export async function digitizeBook(
   }
 
   // Fallback to manual template if all Vision APIs are unavailable
-  return cloneSampleBlocks(primaryImage, imageList) as any;
+  const fallbackBlocks = cloneSampleBlocks(primaryImage, imageList) as any[];
+  return fallbackBlocks.map((b) => ({
+    ...b,
+    _sourceImage: primaryImage || undefined,
+    _answerKeyCrop: options?.answerKeyCrop,
+  }));
 }
 
 /**
