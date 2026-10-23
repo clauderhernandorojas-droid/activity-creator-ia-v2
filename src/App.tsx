@@ -1,15 +1,21 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { Header } from './components/Header';
 import { SlideNavigator } from './components/SlideNavigator';
 import { Canvas } from './components/Canvas';
 import { OcrPanel } from './components/OcrPanel';
 import { ReferenceDrawer } from './components/scaffolding/ReferenceDrawer';
 import { useSessionStore } from './store/useSessionStore';
+import { useLessonStore } from './store/useLessonStore';
 import { useHistoryKeyboard } from './core/hooks/useHistoryKeyboard';
 
 export const App: React.FC = () => {
   useHistoryKeyboard();
   const { mode } = useSessionStore();
+
+  useEffect(() => {
+    // Auto-hidratación al inicializar la aplicación con el borrador local activo si existe
+    useLessonStore.getState().restoreActiveDraft();
+  }, []);
 
   return (
     <div className="min-h-screen bg-slate-100 text-slate-900 flex flex-col font-sans antialiased overflow-y-auto">

@@ -117,8 +117,207 @@ export async function downloadScormPackage(lesson: Lesson): Promise<void> {
   URL.revokeObjectURL(url);
 }
 
+/**
+ * Retrocompatible Defensive Migration for ELT Lesson JSON structures.
+ * Hydrates missing fields (_rawExtraction, _sourceImage, items on targetSlots, etc.)
+ * with resilient defaults without aborting lesson load.
+ */
+export function migrateAndSanitizeLesson(
+  rawJson: unknown,
+  fileNameFallback?: string
+): { success: true; data: Lesson } | { success: false; error: any } {
+  try {
+    let candidate = rawJson;
+    if (typeof candidate === 'string') {
+      try {
+        candidate = JSON.parse(candidate);
+      } catch (err: any) {
+        return {
+          success: false,
+          error: {
+            format: () => ({ _errors: ['JSON corrupto: ' + (err?.message || 'Error de parseo')] }),
+          },
+        };
+      }
+    }
+
+    if (candidate && typeof candidate === 'object') {
+      if ('lesson' in candidate && (candidate as any).lesson && typeof (candidate as any).lesson === 'object') {
+        candidate = (candidate as any).lesson;
+      } else if ('data' in candidate && (candidate as any).data && typeof (candidate as any).data === 'object' && 'lesson' in (candidate as any).data) {
+        candidate = (candidate as any).data.lesson;
+      }
+    }
+
+    // Support raw array of slides
+    if (Array.isArray(candidate)) {
+      candidate = {
+        title: fileNameFallback?.replace(/\.(elt\.)?json$/i, '') || 'Lección Importada',
+        slides: candidate,
+      };
+    }
+
+    if (!candidate || typeof candidate !== 'object') {
+      const parsed = LessonSchema.safeParse(candidate);
+      if (!parsed.success) {
+        return { success: false, error: parsed.error };
+      }
+      return { success: true, data: parsed.data };
+    }
+
+    const obj = candidate as Record<string, any>;
+    const rawTitle = obj.title || obj.lessonName || (fileNameFallback ? fileNameFallback.replace(/\.(elt\.)?json$/i, '') : '') || 'Nueva Lección';
+    const rawLevel = ['A1-A2', 'B1', 'B2', 'C1'].includes(obj.level) ? obj.level : 'B1';
+    const rawUnit = obj.unit || 'Unidad 1';
+    const rawSlides = Array.isArray(obj.slides) ? obj.slides : (Array.isArray(obj.items) ? obj.items : []);
+
+    const sanitizedSlides = rawSlides.map((slide: any, index: number) => {
+      if (!slide || typeof slide !== 'object') {
+        return {
+          id: `slide-${index + 1}-${Date.now()}`,
+          title: `Diapositiva ${index + 1}`,
+          layout: 'split_50_50',
+          rolePayloadCache: {},
+          _sourceImage: null,
+          _rawExtraction: null,
+          _answerKeyCrop: null,
+        };
+      }
+
+      const s = { ...slide };
+      s.id = s.id || `slide-${index + 1}-${Date.now()}`;
+      s.title = s.title || `Diapositiva ${index + 1}`;
+      if (!['single_column', 'split_50_50', 'header_stacked'].includes(s.layout)) {
+        s.layout = 'split_50_50';
+      }
+      s._sourceImage = s._sourceImage !== undefined ? s._sourceImage : (s.sourceImageSnippetUrl || null);
+      s._rawExtraction = s._rawExtraction !== undefined ? s._rawExtraction : null;
+      s._answerKeyCrop = s._answerKeyCrop !== undefined ? s._answerKeyCrop : null;
+      s.rolePayloadCache = s.rolePayloadCache && typeof s.rolePayloadCache === 'object' ? s.rolePayloadCache : {};
+      s.notes = s.notes || '';
+      s.isGraded = s.isGraded !== undefined ? Boolean(s.isGraded) : true;
+
+      // Interaction defensive hydration
+      if (s.interaction && typeof s.interaction === 'object') {
+        const interaction = { ...s.interaction };
+        if (interaction.type === 'buckets_matching') {
+          // Normalize buckets & targetSlots
+          let buckets = Array.isArray(interaction.buckets) ? interaction.buckets : [];
+          let targetSlots = Array.isArray(interaction.targetSlots) ? interaction.targetSlots : [];
+
+          if (buckets.length === 0 && targetSlots.length > 0) {
+            buckets = targetSlots.map((ts: any) => ({
+              id: ts.id || `target-${Date.now()}`,
+              label: ts.label || 'Target',
+              description: ts.description,
+              color: ts.color,
+              items: Array.isArray(ts.items) ? ts.items : [],
+            }));
+          }
+
+          if (targetSlots.length === 0 && buckets.length > 0) {
+            targetSlots = buckets.map((b: any) => ({
+              id: b.id || `bucket-${Date.now()}`,
+              label: b.label || 'Bucket',
+              description: b.description,
+              color: b.color,
+              items: Array.isArray(b.items) ? b.items : [],
+            }));
+          }
+
+          // Ensure every bucket and targetSlot has items: []
+          interaction.buckets = buckets.map((b: any) => ({
+            ...b,
+            items: Array.isArray(b.items) ? b.items : [],
+          }));
+          interaction.targetSlots = targetSlots.map((t: any) => ({
+            ...t,
+            items: Array.isArray(t.items) ? t.items : [],
+          }));
+
+          // Normalize tokens and sourceItems
+          let tokens = Array.isArray(interaction.tokens) ? interaction.tokens : [];
+          let sourceItems = Array.isArray(interaction.sourceItems) ? interaction.sourceItems : [];
+
+          if (tokens.length === 0 && sourceItems.length > 0) {
+            tokens = sourceItems.map((si: any) => ({
+              id: si.id || `token-${Date.now()}`,
+              text: si.text || '',
+              correctBucketId: si.correctTargetId || '',
+              isExample: si.isExample,
+              hint: si.hint,
+            }));
+          }
+          if (sourceItems.length === 0 && tokens.length > 0) {
+            sourceItems = tokens.map((tk: any) => ({
+              id: tk.id || `item-${Date.now()}`,
+              text: tk.text || '',
+              correctTargetId: tk.correctBucketId || '',
+              isExample: tk.isExample,
+              hint: tk.hint,
+            }));
+          }
+
+          interaction.tokens = tokens;
+          interaction.sourceItems = sourceItems;
+        } else if (interaction.type === 'selection') {
+          if (!Array.isArray(interaction.questions)) {
+            interaction.questions = [];
+          }
+          interaction.questions = interaction.questions.map((q: any, qIdx: number) => ({
+            ...q,
+            id: q.id || `q-${qIdx + 1}`,
+            prompt: q.prompt || q.question || '',
+            options: Array.isArray(q.options) ? q.options : [],
+          }));
+        } else if (interaction.type === 'input_fields') {
+          if (!Array.isArray(interaction.listItems)) interaction.listItems = [];
+          if (!Array.isArray(interaction.tableHeaders)) interaction.tableHeaders = [];
+          if (!Array.isArray(interaction.tableRows)) interaction.tableRows = [];
+          if (!interaction.paragraphInputs || typeof interaction.paragraphInputs !== 'object') {
+            interaction.paragraphInputs = {};
+          }
+        } else if (interaction.type === 'sequence') {
+          if (!Array.isArray(interaction.items)) interaction.items = [];
+        }
+
+        s.interaction = interaction;
+      }
+
+      return s;
+    });
+
+    const candidateToParse = {
+      ...obj,
+      id: obj.id || `lesson-${Date.now()}`,
+      title: rawTitle,
+      level: rawLevel,
+      unit: rawUnit,
+      slides: sanitizedSlides.length > 0 ? sanitizedSlides : [defaultInitialSlide],
+    };
+
+    const parsed = LessonSchema.safeParse(candidateToParse);
+    if (!parsed.success) {
+      return { success: false, error: parsed.error };
+    }
+    return { success: true, data: parsed.data };
+  } catch (err: any) {
+    return {
+      success: false,
+      error: {
+        format: () => ({ _errors: [err?.message || 'Error desconocido parseando lección'] }),
+      },
+    };
+  }
+}
+
 interface LessonState {
   lesson: Lesson;
+  lessonName: string;
+  slides: Slide[];
+  activeSlideIndex: number;
+  fileHandle: FileSystemFileHandle | null;
+  hasUnsavedChanges: boolean;
   activeSlideId: string;
   setActiveSlideId: (id: string) => void;
   extractedBlocks: ExtractedBlock[];
@@ -198,12 +397,208 @@ interface LessonState {
   saveLesson: () => Promise<boolean>;
   saveLessonAs: () => Promise<boolean>;
   openLessonWithPicker: () => Promise<boolean>;
+  loadLessonFromFile: (file: File) => Promise<boolean>;
+  openLesson: (lessonOrData: unknown, fileHandle?: FileSystemFileHandle | null, fileNameFallback?: string) => boolean;
 
   // Actions - Lesson Metadata & File Portability
   setLessonTitle: (title: string) => void;
   loadLesson: (lesson: Lesson, fileHandle?: FileSystemFileHandle | null) => void;
   exportLesson: () => void;
   exportLessonAsScorm: () => Promise<boolean>;
+  restoreActiveDraft: () => boolean;
+}
+
+/**
+ * Defensive localStorage adapter that absorbs QuotaExceededError and prevents runtime crashes.
+ */
+export const safeLocalStorage = {
+  getItem: (name: string): string | null => {
+    try {
+      if (typeof window === 'undefined' || !window.localStorage) return null;
+      return window.localStorage.getItem(name);
+    } catch (e) {
+      console.warn('[Storage] Error reading from localStorage:', e);
+      return null;
+    }
+  },
+  setItem: (name: string, value: string): void => {
+    try {
+      if (typeof window === 'undefined' || !window.localStorage) return;
+      window.localStorage.setItem(name, value);
+    } catch (e: any) {
+      console.warn('[Storage] QuotaExceededError or write failure in localStorage. Continuing safely in memory:', e);
+      try {
+        const parsed = JSON.parse(value);
+        if (parsed?.state) {
+          if (parsed.state.extractedBlocks) {
+            parsed.state.extractedBlocks = [];
+          }
+          if (parsed.state.lastExtractedPayload) {
+            parsed.state.lastExtractedPayload = undefined;
+          }
+          window.localStorage.setItem(name, JSON.stringify(parsed));
+          console.info('[Storage] Successfully preserved lesson state by pruning transient OCR cache.');
+        }
+      } catch {
+        // Safe no-op
+      }
+    }
+  },
+  removeItem: (name: string): void => {
+    try {
+      if (typeof window === 'undefined' || !window.localStorage) return;
+      window.localStorage.removeItem(name);
+    } catch (e) {
+      console.warn('[Storage] Error removing from localStorage:', e);
+    }
+  },
+};
+
+export const ACTIVE_DRAFT_KEY = 'elt_active_draft';
+
+export interface ActiveDraftPayload {
+  lesson: Lesson;
+  slides: Slide[];
+  activeSlideIndex: number;
+  lessonName: string;
+  updatedAt?: number;
+}
+
+export function readActiveDraftFromStorage(): ActiveDraftPayload | null {
+  try {
+    if (typeof window === 'undefined' || !window.localStorage) return null;
+    const raw = window.localStorage.getItem(ACTIVE_DRAFT_KEY);
+    if (!raw) return null;
+    let parsed: any;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      return null;
+    }
+    const candidate = parsed?.lesson || parsed;
+    const result = migrateAndSanitizeLesson(candidate, parsed?.lessonName);
+    if (result.success && Array.isArray(result.data.slides) && result.data.slides.length > 0) {
+      const lesson = result.data;
+      const slides = lesson.slides;
+      const rawIdx = typeof parsed?.activeSlideIndex === 'number' ? parsed.activeSlideIndex : 0;
+      const activeSlideIndex = rawIdx >= 0 && rawIdx < slides.length ? rawIdx : 0;
+      return {
+        lesson,
+        slides,
+        activeSlideIndex,
+        lessonName: parsed?.lessonName || lesson.title || 'Nueva Lección',
+        updatedAt: parsed?.updatedAt,
+      };
+    }
+  } catch (e) {
+    console.warn('[useLessonStore] Error reading active draft from localStorage:', e);
+  }
+  return null;
+}
+
+let draftDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+
+export function clearActiveDraft(): void {
+  if (draftDebounceTimer) {
+    clearTimeout(draftDebounceTimer);
+    draftDebounceTimer = null;
+  }
+  try {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      window.localStorage.removeItem(ACTIVE_DRAFT_KEY);
+    }
+  } catch (e) {
+    console.warn('[Draft] Error removing active draft from localStorage:', e);
+  }
+}
+
+export function saveActiveDraftImmediate(payload: {
+  lesson: Lesson;
+  slides?: Slide[];
+  activeSlideIndex?: number;
+  lessonName?: string;
+}): void {
+  if (draftDebounceTimer) {
+    clearTimeout(draftDebounceTimer);
+    draftDebounceTimer = null;
+  }
+  try {
+    if (typeof window === 'undefined' || !window.localStorage) return;
+    const slides = payload.slides || payload.lesson.slides || [];
+    if (slides.length === 0) {
+      clearActiveDraft();
+      return;
+    }
+    const activeSlideIndex = typeof payload.activeSlideIndex === 'number' ? payload.activeSlideIndex : 0;
+    const draft: ActiveDraftPayload = {
+      lesson: payload.lesson,
+      slides,
+      activeSlideIndex,
+      lessonName: payload.lessonName || payload.lesson.title || 'Nueva Lección',
+      updatedAt: Date.now(),
+    };
+    try {
+      window.localStorage.setItem(ACTIVE_DRAFT_KEY, JSON.stringify(draft));
+    } catch (quotaErr) {
+      console.warn('[Draft] Quota exceeded writing draft. Pruning transient clippings:', quotaErr);
+      const prunedLesson: Lesson = {
+        ...draft.lesson,
+        slides: draft.lesson.slides.map((s) => ({
+          ...s,
+          _sourceImage: undefined,
+          sourceImageSnippetUrl: undefined,
+        })),
+      };
+      const prunedDraft: ActiveDraftPayload = {
+        ...draft,
+        lesson: prunedLesson,
+        slides: prunedLesson.slides,
+      };
+      window.localStorage.setItem(ACTIVE_DRAFT_KEY, JSON.stringify(prunedDraft));
+    }
+  } catch (e: any) {
+    console.warn('[Draft] Error writing draft to localStorage:', e);
+  }
+}
+
+export function scheduleSaveActiveDraft(
+  payload: {
+    lesson: Lesson;
+    slides?: Slide[];
+    activeSlideIndex?: number;
+    lessonName?: string;
+  },
+  delayMs: number = 300
+): void {
+  if (draftDebounceTimer) {
+    clearTimeout(draftDebounceTimer);
+  }
+  draftDebounceTimer = setTimeout(() => {
+    draftDebounceTimer = null;
+    saveActiveDraftImmediate(payload);
+  }, delayMs);
+}
+
+function getInitialLessonState() {
+  const draft = readActiveDraftFromStorage();
+  if (draft && draft.slides.length > 0) {
+    const activeSlideIndex = Math.min(Math.max(0, draft.activeSlideIndex), draft.slides.length - 1);
+    const activeSlideId = draft.slides[activeSlideIndex]?.id || draft.slides[0]?.id || defaultInitialSlide.id;
+    return {
+      lesson: draft.lesson,
+      lessonName: draft.lessonName,
+      slides: draft.slides,
+      activeSlideIndex,
+      activeSlideId,
+    };
+  }
+  return {
+    lesson: defaultInitialLesson,
+    lessonName: defaultInitialLesson.title,
+    slides: defaultInitialLesson.slides,
+    activeSlideIndex: 0,
+    activeSlideId: defaultInitialSlide.id,
+  };
 }
 
 function recordHistory(state: LessonState): Partial<LessonState> {
@@ -217,17 +612,31 @@ function recordHistory(state: LessonState): Partial<LessonState> {
     past: newPast,
     future: [],
     canUndo: true,
-    canRedo: false
+    canRedo: false,
+    hasUnsavedChanges: true,
   };
 }
+
+const initialLessonState = getInitialLessonState();
 
 export const useLessonStore = create<LessonState>()(
   persist(
     (set, get) => ({
-      lesson: defaultInitialLesson,
-      activeSlideId: defaultInitialSlide.id,
+      lesson: initialLessonState.lesson,
+      lessonName: initialLessonState.lessonName,
+      slides: initialLessonState.slides,
+      activeSlideIndex: initialLessonState.activeSlideIndex,
+      activeSlideId: initialLessonState.activeSlideId,
+      fileHandle: null,
+      currentFileHandle: null,
+      hasUnsavedChanges: false,
       setActiveSlideId: (id: string) => {
-        set({ activeSlideId: id });
+        const state = get();
+        const index = state.lesson.slides.findIndex((s) => s.id === id);
+        set({
+          activeSlideId: id,
+          activeSlideIndex: index >= 0 ? index : 0,
+        });
         const sessionState = useSessionStore.getState();
         if (sessionState.currentSlideId !== id) {
           sessionState.setCurrentSlideId(id);
@@ -241,8 +650,7 @@ export const useLessonStore = create<LessonState>()(
       clearOcrError: () => set({ ocrError: null }),
       pastedImagePreview: null,
       pastedImages: [],
-      currentFileHandle: null,
-      setCurrentFileHandle: (handle) => set({ currentFileHandle: handle }),
+      setCurrentFileHandle: (handle) => set({ currentFileHandle: handle, fileHandle: handle }),
       saveFeedback: null,
       clearSaveFeedback: () => set({ saveFeedback: null }),
 
@@ -352,12 +760,15 @@ export const useLessonStore = create<LessonState>()(
           isGraded: true,
         };
 
+        const updatedSlides = [...get().lesson.slides, newSlide];
         set((state) => ({
           ...recordHistory(state),
           activeSlideId: newId,
+          activeSlideIndex: updatedSlides.length - 1,
+          slides: updatedSlides,
           lesson: {
             ...state.lesson,
-            slides: [...state.lesson.slides, newSlide],
+            slides: updatedSlides,
           },
         }));
 
@@ -372,9 +783,12 @@ export const useLessonStore = create<LessonState>()(
         if (state.activeSlideId === id) {
           nextActiveId = remaining.length > 0 ? remaining[0].id : '';
         }
+        const nextIdx = remaining.findIndex((s) => s.id === nextActiveId);
         set((s) => ({
           ...recordHistory(s),
           activeSlideId: nextActiveId,
+          activeSlideIndex: nextIdx >= 0 ? nextIdx : 0,
+          slides: remaining,
           lesson: {
             ...s.lesson,
             slides: remaining,
@@ -384,10 +798,16 @@ export const useLessonStore = create<LessonState>()(
       },
 
       clearLesson: () => {
+        clearActiveDraft();
+        safeLocalStorage.removeItem('elt-slide-builder-storage');
         set((state) => ({
           ...recordHistory(state),
           activeSlideId: '',
+          activeSlideIndex: 0,
           currentFileHandle: null,
+          fileHandle: null,
+          slides: [],
+          lessonName: state.lesson.title,
           lesson: {
             ...state.lesson,
             slides: [],
@@ -396,38 +816,125 @@ export const useLessonStore = create<LessonState>()(
         useSessionStore.getState().setCurrentSlideId('');
       },
 
+      restoreActiveDraft: (): boolean => {
+        const draft = readActiveDraftFromStorage();
+        if (draft && Array.isArray(draft.slides) && draft.slides.length > 0) {
+          const activeSlideIndex = Math.min(Math.max(0, draft.activeSlideIndex), draft.slides.length - 1);
+          const activeSlide = draft.slides[activeSlideIndex] || draft.slides[0];
+          set({
+            lesson: draft.lesson,
+            slides: draft.slides,
+            lessonName: draft.lessonName || draft.lesson.title,
+            activeSlideIndex,
+            activeSlideId: activeSlide.id,
+            hasUnsavedChanges: false,
+          });
+          useSessionStore.getState().setCurrentSlideId(activeSlide.id);
+          return true;
+        }
+        return false;
+      },
+
       setLessonTitle: (title: string) => {
         const cleaned = title.trim();
+        const nextTitle = cleaned || 'Nueva Lección';
         set((state) => ({
           ...recordHistory(state),
           lesson: {
             ...state.lesson,
-            title: cleaned || 'Nueva Lección',
+            title: nextTitle,
           },
+          lessonName: nextTitle,
+          hasUnsavedChanges: true,
         }));
       },
 
-      loadLesson: (importedLesson: Lesson, fileHandle?: FileSystemFileHandle | null) => {
-        const slides = Array.isArray(importedLesson.slides) && importedLesson.slides.length > 0
-          ? importedLesson.slides
+      openLesson: (lessonOrData: unknown, fileHandle?: FileSystemFileHandle | null, fileNameFallback?: string): boolean => {
+        const result = migrateAndSanitizeLesson(lessonOrData, fileNameFallback || fileHandle?.name);
+        if (!result.success) {
+          console.error("Error validando lección:", result.error.format());
+          set({
+            saveFeedback: {
+              message: "No se pudo cargar la lección: estructura incompatible",
+              timestamp: Date.now(),
+            },
+          });
+          return false;
+        }
+
+        const validLesson = result.data;
+        const slides = Array.isArray(validLesson.slides) && validLesson.slides.length > 0
+          ? validLesson.slides
           : [defaultInitialSlide];
-
         const firstSlideId = slides[0].id;
+        const displayName = fileHandle?.name || fileNameFallback || validLesson.title;
 
-        set((state) => ({
-          ...recordHistory(state),
+        set({
           lesson: {
-            id: importedLesson.id || `lesson-${Date.now()}`,
-            title: importedLesson.title || 'Nueva Lección',
-            level: importedLesson.level || 'B1',
-            unit: importedLesson.unit || 'Unidad 1',
+            ...validLesson,
             slides,
           },
+          lessonName: validLesson.title,
+          slides,
+          activeSlideIndex: 0,
           activeSlideId: firstSlideId,
-          currentFileHandle: fileHandle !== undefined ? fileHandle : state.currentFileHandle,
-        }));
+          fileHandle: fileHandle !== undefined ? fileHandle : null,
+          currentFileHandle: fileHandle !== undefined ? fileHandle : null,
+          hasUnsavedChanges: false,
+          past: [],
+          future: [],
+          canUndo: false,
+          canRedo: false,
+          saveFeedback: {
+            message: `Abierto: ${displayName}`,
+            timestamp: Date.now(),
+          },
+        });
+
+        // Sincronización explícita con 'elt_active_draft': sobreescribe inmediatamente
+        saveActiveDraftImmediate({
+          lesson: validLesson,
+          slides,
+          activeSlideIndex: 0,
+          lessonName: validLesson.title,
+        });
 
         useSessionStore.getState().setCurrentSlideId(firstSlideId);
+        useSessionStore.getState().resetStudentAnswers?.();
+        return true;
+      },
+
+      loadLesson: (importedLesson: Lesson, fileHandle?: FileSystemFileHandle | null) => {
+        get().openLesson(importedLesson, fileHandle);
+      },
+
+      loadLessonFromFile: async (file: File): Promise<boolean> => {
+        try {
+          const text = await file.text();
+          let json: any;
+          try {
+            json = JSON.parse(text);
+          } catch (jsonErr: any) {
+            console.error("Error validando lección:", { _errors: ['JSON corrupto o inválido: ' + jsonErr?.message] });
+            set({
+              saveFeedback: {
+                message: "No se pudo cargar la lección: estructura incompatible",
+                timestamp: Date.now(),
+              },
+            });
+            return false;
+          }
+          return get().openLesson(json, null, file.name);
+        } catch (err: any) {
+          console.error("Error validando lección:", { _errors: [err?.message || 'Error al leer el archivo'] });
+          set({
+            saveFeedback: {
+              message: "No se pudo cargar la lección: estructura incompatible",
+              timestamp: Date.now(),
+            },
+          });
+          return false;
+        }
       },
 
       saveLesson: async () => {
@@ -454,6 +961,9 @@ export const useLessonStore = create<LessonState>()(
             await writable.close();
 
             set({
+              currentFileHandle: currentFileHandle,
+              fileHandle: currentFileHandle,
+              hasUnsavedChanges: false,
               saveFeedback: {
                 message: `Guardado en ${currentFileHandle.name}`,
                 timestamp: Date.now(),
@@ -494,6 +1004,8 @@ export const useLessonStore = create<LessonState>()(
 
             set({
               currentFileHandle: handle,
+              fileHandle: handle,
+              hasUnsavedChanges: false,
               saveFeedback: {
                 message: `Guardado en ${handle.name}`,
                 timestamp: Date.now(),
@@ -510,6 +1022,7 @@ export const useLessonStore = create<LessonState>()(
         // 3. Fallback para navegadores sin File System Access API
         exportLessonToFile(lesson);
         set({
+          hasUnsavedChanges: false,
           saveFeedback: {
             message: 'Copia exportada a Descargas',
             timestamp: Date.now(),
@@ -549,6 +1062,8 @@ export const useLessonStore = create<LessonState>()(
 
             set({
               currentFileHandle: handle,
+              fileHandle: handle,
+              hasUnsavedChanges: false,
               saveFeedback: {
                 message: `Copia guardada en ${handle.name}`,
                 timestamp: Date.now(),
@@ -565,6 +1080,7 @@ export const useLessonStore = create<LessonState>()(
         // Fallback
         exportLessonToFile(lesson);
         set({
+          hasUnsavedChanges: false,
           saveFeedback: {
             message: 'Copia exportada a Descargas',
             timestamp: Date.now(),
@@ -596,45 +1112,25 @@ export const useLessonStore = create<LessonState>()(
 
           const file = await handle.getFile();
           const text = await file.text();
-          const parsedJson = JSON.parse(text);
-
-          const candidate = (parsedJson && typeof parsedJson === 'object' && 'lesson' in parsedJson)
-            ? parsedJson.lesson
-            : parsedJson;
-
-          if (!candidate || typeof candidate !== 'object') {
-            throw new Error('El archivo no contiene un formato de lección válido.');
+          let parsedJson: any;
+          try {
+            parsedJson = JSON.parse(text);
+          } catch (jsonErr: any) {
+            console.error("Error validando lección:", { _errors: ['JSON corrupto: ' + jsonErr?.message] });
+            set({
+              saveFeedback: {
+                message: "No se pudo cargar la lección: estructura incompatible",
+                timestamp: Date.now(),
+              },
+            });
+            return false;
           }
 
-          const candidateWithDefaults = {
-            id: candidate.id || `lesson-${Date.now()}`,
-            title: candidate.title || handle.name.replace(/\.(elt\.)?json$/i, '') || 'Lección Importada',
-            level: ['A1-A2', 'B1', 'B2', 'C1'].includes(candidate.level) ? candidate.level : 'B1',
-            unit: candidate.unit || 'Unidad 1',
-            slides: Array.isArray(candidate.slides) ? candidate.slides : [],
-          };
-
-          const validation = LessonSchema.safeParse(candidateWithDefaults);
-          if (!validation.success) {
-            const firstIssues = validation.error.issues
-              .slice(0, 3)
-              .map((i) => `${i.path.join('.')}: ${i.message}`)
-              .join('\n');
-            throw new Error(`El archivo no cumple con el esquema de lección:\n${firstIssues}`);
-          }
-
-          get().loadLesson(validation.data, handle);
-          set({
-            saveFeedback: {
-              message: `Abierto: ${handle.name}`,
-              timestamp: Date.now(),
-            },
-          });
-          return true;
+          return get().openLesson(parsedJson, handle, handle.name);
         } catch (err: any) {
           if (err?.name === 'AbortError') return true;
           console.error('[useLessonStore] Error abriendo archivo con picker:', err);
-          throw err;
+          return false;
         }
       },
 
@@ -1486,7 +1982,7 @@ export const useLessonStore = create<LessonState>()(
             previousSlideContext,
             {
               sourceImage: activeSlide._sourceImage || activeSlide.sourceImageSnippetUrl,
-              answerKeyCrop: activeSlide._answerKeyCrop,
+              answerKeyCrop: activeSlide._answerKeyCrop || undefined,
             }
           );
 
@@ -1553,7 +2049,7 @@ export const useLessonStore = create<LessonState>()(
             controller.signal,
             {
               previousSlideContext,
-              answerKeyCrop: activeSlide._answerKeyCrop,
+              answerKeyCrop: activeSlide._answerKeyCrop || undefined,
             }
           );
 
@@ -1619,62 +2115,50 @@ export const useLessonStore = create<LessonState>()(
       }),
       onRehydrateStorage: () => (state) => {
         if (state) {
-          const validSlideId = state.lesson.slides.some((s) => s.id === state.activeSlideId)
-            ? state.activeSlideId
-            : (state.lesson.slides[0]?.id ?? '');
-          if (validSlideId !== state.activeSlideId) {
-            state.activeSlideId = validSlideId;
+          const draft = readActiveDraftFromStorage();
+          if (draft && Array.isArray(draft.slides) && draft.slides.length > 0) {
+            state.lesson = draft.lesson;
+            state.slides = draft.slides;
+            state.lessonName = draft.lessonName;
+            state.activeSlideIndex = draft.activeSlideIndex;
+            state.activeSlideId = draft.slides[draft.activeSlideIndex]?.id || draft.slides[0]?.id;
+          } else {
+            const validSlideId = state.lesson.slides.some((s) => s.id === state.activeSlideId)
+              ? state.activeSlideId
+              : (state.lesson.slides[0]?.id ?? '');
+            if (validSlideId !== state.activeSlideId) {
+              state.activeSlideId = validSlideId;
+            }
           }
-          useSessionStore.getState().setCurrentSlideId(validSlideId);
+          useSessionStore.getState().setCurrentSlideId(state.activeSlideId);
         }
       },
     }
   )
 );
 
-/**
- * Defensive localStorage adapter that absorbs QuotaExceededError and prevents runtime crashes.
- */
-const safeLocalStorage = {
-  getItem: (name: string): string | null => {
-    try {
-      if (typeof window === 'undefined' || !window.localStorage) return null;
-      return window.localStorage.getItem(name);
-    } catch (e) {
-      console.warn('[Storage] Error reading from localStorage:', e);
-      return null;
-    }
-  },
-  setItem: (name: string, value: string): void => {
-    try {
-      if (typeof window === 'undefined' || !window.localStorage) return;
-      window.localStorage.setItem(name, value);
-    } catch (e: any) {
-      console.warn('[Storage] QuotaExceededError or write failure in localStorage. Continuing safely in memory:', e);
-      try {
-        // Recovery strategy: prune heavy transient cache and re-attempt write
-        const parsed = JSON.parse(value);
-        if (parsed?.state) {
-          if (parsed.state.extractedBlocks) {
-            parsed.state.extractedBlocks = [];
-          }
-          if (parsed.state.lastExtractedPayload) {
-            parsed.state.lastExtractedPayload = undefined;
-          }
-          window.localStorage.setItem(name, JSON.stringify(parsed));
-          console.info('[Storage] Successfully preserved lesson state by pruning transient OCR cache.');
-        }
-      } catch {
-        // Safe no-op: memory state remains 100% active and healthy!
-      }
-    }
-  },
-  removeItem: (name: string): void => {
-    try {
-      if (typeof window === 'undefined' || !window.localStorage) return;
-      window.localStorage.removeItem(name);
-    } catch (e) {
-      console.warn('[Storage] Error removing from localStorage:', e);
-    }
-  },
-};
+// Sincronización continua del estado activo de la lección ('elt_active_draft') en localStorage con debounce de 300ms
+useLessonStore.subscribe((state, prevState) => {
+  // Si no hay diapositivas o la lección fue vaciada, omitir guardado
+  if (!state.slides || state.slides.length === 0) {
+    return;
+  }
+
+  // Detectar cambios en lesson, slides, activeSlideIndex o lessonName
+  if (
+    state.lesson !== prevState.lesson ||
+    state.slides !== prevState.slides ||
+    state.activeSlideIndex !== prevState.activeSlideIndex ||
+    state.lessonName !== prevState.lessonName
+  ) {
+    scheduleSaveActiveDraft(
+      {
+        lesson: state.lesson,
+        slides: state.slides,
+        activeSlideIndex: state.activeSlideIndex,
+        lessonName: state.lessonName || state.lesson.title,
+      },
+      300
+    );
+  }
+});
