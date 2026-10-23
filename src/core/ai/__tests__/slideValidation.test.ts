@@ -17,6 +17,7 @@ import {
   normalizeBucketsMatchingInteraction,
   extractTwoPartItemsFromSlide,
   assembleTwoPartToken,
+  parseBucketsCategoryAnswerKey,
 } from '../digitizeBook';
 
 describe('slideValidation - Direct Schema & Architectural Invariant Tests', () => {
@@ -4535,6 +4536,129 @@ describe('slideValidation - Direct Schema & Architectural Invariant Tests', () =
         expect(it.tokens[5].correctBucketId).toBe('B');
 
         // 4. Verificación de targetSlots y targets sincronizados con los buckets
+        expect(it.targetSlots[0].items).toHaveLength(1);
+        expect(it.targetSlots[0].items[0].isExample).toBe(true);
+      });
+
+      it('13. Resolución de Muestra Universal en Bucket A e Integración Íntegra de Fichas desde Clave de Respuestas (e.g. A2; 6; 9 B3 C4; 5; 7; 8)', () => {
+        // Validación directa del parser de clave de respuestas
+        const parsedKey = parseBucketsCategoryAnswerKey('A2; 6; 9 B3 C4; 5; 7; 8');
+        expect(parsedKey).not.toBeNull();
+        expect(parsedKey?.size).toBe(8);
+        expect(parsedKey?.get(2)).toBe('A');
+        expect(parsedKey?.get(6)).toBe('A');
+        expect(parsedKey?.get(9)).toBe('A');
+        expect(parsedKey?.get(3)).toBe('B');
+        expect(parsedKey?.get(4)).toBe('C');
+        expect(parsedKey?.get(5)).toBe('C');
+        expect(parsedKey?.get(7)).toBe('C');
+        expect(parsedKey?.get(8)).toBe('C');
+
+        // Diapositiva previa con N = 9 oraciones (listItems emparejados en dos partes)
+        const previousSlideContext: any = {
+          id: 'slide-prev-matching-9',
+          title: 'Exercise 2a: Matching Sentences',
+          subtitle: 'Match 1-9 with a-i',
+          interaction: {
+            type: 'input_fields',
+            listItems: [
+              { id: '1', prompt: '1. I always enjoy', expectedAnswer: 'a. swimming in the pool.' },
+              { id: '2', prompt: '2. She rarely drinks', expectedAnswer: 'b. green tea in the morning.' },
+              { id: '3', prompt: '3. We prefer reading', expectedAnswer: 'c. mystery novels.' },
+              { id: '4', prompt: '4. He never watches', expectedAnswer: 'd. science fiction films.' },
+              { id: '5', prompt: '5. They often play', expectedAnswer: 'e. basketball after school.' },
+              { id: '6', prompt: '6. You should try', expectedAnswer: 'f. Italian pasta.' },
+              { id: '7', prompt: '7. I can\'t stand', expectedAnswer: 'g. waiting for the bus.' },
+              { id: '8', prompt: '8. My brother likes', expectedAnswer: 'h. eating spicy noodles.' },
+              { id: '9', prompt: '9. She loves', expectedAnswer: 'i. listening to rock music.' },
+            ],
+          },
+        };
+
+        // Diapositiva actual de categorización (buckets)
+        // Subtítulo / texto indica ejemplo '1' preubicado en contenedor A (A HOBBIES: 1)
+        // Clave de respuestas: A2; 6; 9 B3 C4; 5; 7; 8
+        const bucketsSlide: any = {
+          id: 'slide-curr-buckets-9',
+          title: 'Exercise 2b: Categorization',
+          subtitle: 'Put the sentences from 2a into categories A–C: A HOBBIES: 1 B HABITS C FOOD. Key: A2; 6; 9 B3 C4; 5; 7; 8',
+          interaction: {
+            type: 'buckets_matching',
+            instruction: 'Put the sentences from 2a into categories.',
+            buckets: [
+              { id: 'A', label: 'Hobbies' },
+              { id: 'B', label: 'Habits' },
+              { id: 'C', label: 'Food' },
+            ],
+            tokens: [],
+          },
+        };
+
+        normalizeBucketsMatchingInteraction(bucketsSlide, undefined, previousSlideContext);
+
+        const it = bucketsSlide.interaction;
+
+        // 1. Muestra universal: tokenExample DEBE ser estrictamente el primer elemento de la diapositiva previa
+        // Fijado en el bucket 'A' con isExample: true
+        expect(it.buckets[0].items).toHaveLength(1);
+        expect(it.buckets[0].items[0]).toEqual({
+          id: 'tok-1',
+          text: 'I always enjoy swimming in the pool.',
+          isExample: true,
+          correctBucketId: 'A',
+        });
+
+        // 2. Integración Íntegra de Fichas desde la Clave de Respuestas:
+        // Todos los identificadores explícitos presentes en la clave (2, 3, 4, 5, 6, 7, 8, 9)
+        // corresponden a ítems interactivos a resolver por el estudiante.
+        // Ninguno se degrada a ejemplo ni se resta de la bandeja -> exactamente 8 fichas en 'tokens'.
+        expect(it.tokens).toHaveLength(8);
+        expect(it.sourceItems).toHaveLength(8);
+
+        // Fichas en bucket A (2, 6, 9)
+        const tok2 = it.tokens.find((t: any) => t.id === 'tok-2');
+        expect(tok2).toBeDefined();
+        expect(tok2.text).toBe('She rarely drinks green tea in the morning.');
+        expect(tok2.correctBucketId).toBe('A');
+
+        const tok6 = it.tokens.find((t: any) => t.id === 'tok-6');
+        expect(tok6).toBeDefined();
+        expect(tok6.text).toBe('You should try Italian pasta.');
+        expect(tok6.correctBucketId).toBe('A');
+
+        const tok9 = it.tokens.find((t: any) => t.id === 'tok-9');
+        expect(tok9).toBeDefined();
+        expect(tok9.text).toBe('She loves listening to rock music.');
+        expect(tok9.correctBucketId).toBe('A');
+
+        // Ficha en bucket B (3)
+        const tok3 = it.tokens.find((t: any) => t.id === 'tok-3');
+        expect(tok3).toBeDefined();
+        expect(tok3.text).toBe('We prefer reading mystery novels.');
+        expect(tok3.correctBucketId).toBe('B');
+
+        // Fichas en bucket C (4, 5, 7, 8)
+        const tok4 = it.tokens.find((t: any) => t.id === 'tok-4');
+        expect(tok4).toBeDefined();
+        expect(tok4.text).toBe('He never watches science fiction films.');
+        expect(tok4.correctBucketId).toBe('C');
+
+        const tok5 = it.tokens.find((t: any) => t.id === 'tok-5');
+        expect(tok5).toBeDefined();
+        expect(tok5.text).toBe('They often play basketball after school.');
+        expect(tok5.correctBucketId).toBe('C');
+
+        const tok7 = it.tokens.find((t: any) => t.id === 'tok-7');
+        expect(tok7).toBeDefined();
+        expect(tok7.text).toBe('I can\'t stand waiting for the bus.');
+        expect(tok7.correctBucketId).toBe('C');
+
+        const tok8 = it.tokens.find((t: any) => t.id === 'tok-8');
+        expect(tok8).toBeDefined();
+        expect(tok8.text).toBe('My brother likes eating spicy noodles.');
+        expect(tok8.correctBucketId).toBe('C');
+
+        // 3. Sincronización en targetSlots
         expect(it.targetSlots[0].items).toHaveLength(1);
         expect(it.targetSlots[0].items[0].isExample).toBe(true);
       });

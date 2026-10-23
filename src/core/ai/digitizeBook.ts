@@ -1586,6 +1586,63 @@ export function isAnswerKeySlide(slide: any): boolean {
 }
 
 /**
+ * Parses bucket categorization answer keys (e.g. 'A2; 6; 9 B3 C4; 5; 7; 8' or 'A: 2, 6, 9; B: 3; C: 4, 5, 7, 8').
+ * Maps each ordinal number k to its destination bucket identifier.
+ */
+export function parseBucketsCategoryAnswerKey(
+  text: string,
+  buckets?: Array<{ id: string; label?: string }>
+): Map<number, string> | null {
+  if (!text || typeof text !== 'string') return null;
+
+  const mapping = new Map<number, string>();
+  // Match bucket indicator (e.g. A, B, C, or 1, 2) followed by numbers
+  const bucketKeyRegex = /(?:^|[\s,;|/])([A-Za-z]|\d+)[\.\)\:\s-]*(\d+(?:[\s,;]+\d+)*)/g;
+
+  let match: RegExpExecArray | null;
+  const distinctBuckets = new Set<string>();
+
+  while ((match = bucketKeyRegex.exec(text)) !== null) {
+    const rawBucketKey = match[1].trim();
+    const numbersStr = match[2].trim();
+
+    let targetBucketId = rawBucketKey;
+    if (buckets && buckets.length > 0) {
+      const found = buckets.find(
+        (b) => b.id.toLowerCase() === rawBucketKey.toLowerCase()
+      );
+      if (found) {
+        targetBucketId = found.id;
+      } else if (/^[A-Za-z]$/.test(rawBucketKey)) {
+        const letterIdx = rawBucketKey.toUpperCase().charCodeAt(0) - 65;
+        if (letterIdx >= 0 && letterIdx < buckets.length) {
+          targetBucketId = buckets[letterIdx].id;
+        }
+      }
+    }
+
+    const numbers = numbersStr
+      .split(/[\s,;]+/)
+      .map((n) => parseInt(n, 10))
+      .filter((n) => !isNaN(n));
+
+    if (numbers.length > 0) {
+      distinctBuckets.add(targetBucketId);
+      for (const num of numbers) {
+        mapping.set(num, targetBucketId);
+      }
+    }
+  }
+
+  // Se considera clave de respuestas válida si cubre al menos 2 categorías distintas y al menos 2 reactivos
+  if (distinctBuckets.size >= 2 && mapping.size >= 2) {
+    return mapping;
+  }
+
+  return null;
+}
+
+/**
  * Universally parses all format-agnostic answer keys from textual material into a structured map:
  * { [sectionId: string]: { [itemIndex: string]: answerText } }
  */
@@ -1619,10 +1676,19 @@ export function parseAllAnswerKeys(text: string): Record<string, Record<string, 
 
     if (!sections[currentSection]) sections[currentSection] = {};
 
+    // 0. Categorization bucket answer keys: 'A2; 6; 9 B3 C4; 5; 7; 8'
+    const bKeyMap = parseBucketsCategoryAnswerKey(workLine);
+    let foundNumbered = false;
+    if (bKeyMap && bKeyMap.size >= 2) {
+      foundNumbered = true;
+      for (const [k, bId] of bKeyMap.entries()) {
+        sections[currentSection][String(k)] = bId;
+      }
+    }
+
     // 1. Numbered items: '1 tidy up 2 look after' or '1. b, 2. c' or '1: was' or full sentences
     const numRegex = /(?:^|[\s,;|\n]+)(\d+)[\.\)\:\s-]\s*(.+?)(?=(?:[\s,;|\n]+\d+[\.\)\:\s-]|$))/gi;
     let match: RegExpExecArray | null;
-    let foundNumbered = false;
     while ((match = numRegex.exec(workLine)) !== null) {
       foundNumbered = true;
       const num = match[1];
@@ -1797,6 +1863,11 @@ export function applyAnswerKeysToSlide(
         }
       }
     });
+  }
+
+  // Apply to buckets_matching
+  if (slide.interaction.type === 'buckets_matching' && targetSection) {
+    (slide.interaction as any)._answerKeyMap = targetSection;
   }
 }
 
@@ -2340,6 +2411,24 @@ export function normalizeBucketsMatchingInteraction(
     parsedBuckets = extractCategoryBucketsFromText(textToScan, it.tokens || it.sourceItems);
   }
 
+  // Detección temprana de clave de respuestas de categorización (e.g. 'A2; 6; 9 B3 C4; 5; 7; 8')
+  // ANTES de que los textos sean podados por isolateCanonicalInstruction
+  let bucketAnswerKeyMap: Map<number, string> | null = null;
+  const candidateKeySources = [
+    textToScan,
+    ...candidateTexts,
+    rawSlide.contextBody,
+    (rawSlide.referenceContent as any)?.content,
+  ].filter(Boolean) as string[];
+
+  for (const txt of candidateKeySources) {
+    const parsedKey = parseBucketsCategoryAnswerKey(txt, it.buckets || parsedBuckets);
+    if (parsedKey && parsedKey.size >= 2) {
+      bucketAnswerKeyMap = parsedKey;
+      break;
+    }
+  }
+
   // 2. Prohibir terminantemente que el texto explicativo de las categorías sea concatenado en 'instruction' o 'prompt'
   if (it.instruction) {
     const cleanInst = isolateCanonicalInstruction(it.instruction);
@@ -2443,33 +2532,81 @@ export function normalizeBucketsMatchingInteraction(
     return null;
   };
 
-  // Detectar ordinal de ejemplo k_e y contenedor destino
-  let exampleOrdinal: number | null = null;
-  let exampleBucketId: string | null = null;
+  if (!bucketAnswerKeyMap) {
+    const candidateAnswerKeySources = [
+      textToScan,
+      fallbackRawText,
+      (rawSlide as any)._rawInstructionText,
+      rawSlide.contextBody,
+      rawSlide.subtitle,
+      it.instruction,
+      it.prompt,
+      (rawSlide.referenceContent as any)?.content,
+      (rawSlide.referenceContent as any)?.body,
+      rawSlide.title,
+    ].filter(Boolean) as string[];
 
-  for (const bucket of (it.buckets || [])) {
-    const marker = bucket._exampleMarker || markerMap.get(bucket.id);
-    if (marker) {
-      const numMatch = String(marker).match(/\d+/);
-      exampleOrdinal = numMatch ? parseInt(numMatch[0], 10) : 1;
-      exampleBucketId = bucket.id;
-      break;
-    }
-    if (Array.isArray(bucket.items)) {
-      const exItem = bucket.items.find((item: any) => item.isExample);
-      if (exItem) {
-        exampleOrdinal = extractOrdinalIndex(exItem) || 1;
-        exampleBucketId = bucket.id;
+    for (const txt of candidateAnswerKeySources) {
+      const parsedKey = parseBucketsCategoryAnswerKey(txt, it.buckets);
+      if (parsedKey && parsedKey.size >= 2) {
+        bucketAnswerKeyMap = parsedKey;
         break;
       }
     }
   }
 
-  if (exampleOrdinal === null && Array.isArray(it.tokens)) {
+  if (!bucketAnswerKeyMap && (it as any)._answerKeyMap) {
+    const rawMap = (it as any)._answerKeyMap;
+    const m = new Map<number, string>();
+    for (const [kStr, bVal] of Object.entries(rawMap)) {
+      const num = parseInt(kStr, 10);
+      if (!isNaN(num)) {
+        m.set(num, String(bVal));
+      }
+    }
+    if (m.size >= 2) {
+      bucketAnswerKeyMap = m;
+    }
+  }
+
+  // Detectar si el texto del ejercicio indica un ejemplo (e.g. '1' preubicado en un contenedor)
+  let hasExampleIndication = false;
+  let exampleBucketId: string | null = null;
+
+  for (const bucket of (it.buckets || [])) {
+    const marker = bucket._exampleMarker || markerMap.get(bucket.id);
+    if (marker) {
+      exampleBucketId = bucket.id;
+      hasExampleIndication = true;
+      break;
+    }
+    if (Array.isArray(bucket.items)) {
+      const exItem = bucket.items.find((item: any) => item.isExample);
+      if (exItem) {
+        exampleBucketId = bucket.id;
+        hasExampleIndication = true;
+        break;
+      }
+    }
+  }
+
+  if (!hasExampleIndication && Array.isArray(it.tokens)) {
     const exToken = it.tokens.find((t: any) => t.isExample);
     if (exToken) {
-      exampleOrdinal = extractOrdinalIndex(exToken) || 1;
       exampleBucketId = exToken.correctBucketId || it.buckets?.[0]?.id || 'slot-1';
+      hasExampleIndication = true;
+    }
+  }
+
+  if (!hasExampleIndication) {
+    if (
+      /\b(?:example|e\.g\.)\b/i.test(textToScan) ||
+      /(?:^|[\sA-Za-z0-9])[:–—]\s*1\b/.test(textToScan) ||
+      /\((?:e\.g\.?|example)?\s*1\)/i.test(textToScan) ||
+      (bucketAnswerKeyMap && !bucketAnswerKeyMap.has(1))
+    ) {
+      hasExampleIndication = true;
+      exampleBucketId = it.buckets?.[0]?.id || 'A';
     }
   }
 
@@ -2480,27 +2617,42 @@ export function normalizeBucketsMatchingInteraction(
     if (prevTwoPartItems.length > 0) {
       const N = prevTwoPartItems.length;
 
-      // Inyección y Renderizado de Muestra Preasignada:
-      // Para el ordinal k_e marcado o detectado como ejemplo:
-      if (exampleOrdinal !== null && exampleOrdinal >= 1 && exampleOrdinal <= N) {
-        const k_e = exampleOrdinal;
-        const prevEx = prevTwoPartItems[k_e - 1];
+      // 1. Resolución del Reactivo de Ejemplo Universal:
+      // Si el texto del ejercicio indica un ejemplo (e.g. '1' preubicado en un contenedor), el ítem de muestra
+      // DEBE ser estrictamente el primer elemento de la diapositiva previa:
+      // tokenExample = assembleTwoPartToken(previousTwoPartItems[0].prompt, previousTwoPartItems[0].expectedAnswer)
+      // Fijar dicho token en el bucket 'A' con { isExample: true }.
+      if (hasExampleIndication) {
+        const prevEx = prevTwoPartItems[0];
         const tokenExampleText = assembleTwoPartToken(prevEx.prompt, prevEx.expectedAnswer);
-        const targetBucket = (it.buckets || []).find((b: any) => b.id === exampleBucketId) || it.buckets?.[0];
-        if (targetBucket) {
-          if (!Array.isArray(targetBucket.items)) targetBucket.items = [];
+        const targetBucketA =
+          (it.buckets || []).find((b: any) => b.id === 'A' || b.id.toUpperCase() === 'A') ||
+          (it.buckets || []).find((b: any) => b.id === exampleBucketId) ||
+          it.buckets?.[0];
+
+        if (targetBucketA) {
+          if (!Array.isArray(targetBucketA.items)) targetBucketA.items = [];
           const tokenExample = {
-            id: `tok-${k_e}`,
+            id: `tok-1`,
             text: tokenExampleText,
             isExample: true,
-            correctBucketId: targetBucket.id,
+            correctBucketId: targetBucketA.id,
           };
-          const exIdx = targetBucket.items.findIndex((item: any) => item.id === tokenExample.id || item.isExample || extractOrdinalIndex(item) === k_e);
+          const exIdx = targetBucketA.items.findIndex(
+            (item: any) => item.id === tokenExample.id || item.isExample || extractOrdinalIndex(item) === 1
+          );
           if (exIdx >= 0) {
-            targetBucket.items[exIdx] = { ...targetBucket.items[exIdx], ...tokenExample };
+            targetBucketA.items[exIdx] = { ...targetBucketA.items[exIdx], ...tokenExample };
           } else {
-            targetBucket.items.push(tokenExample);
+            targetBucketA.items.push(tokenExample);
           }
+
+          // Limpiar cualquier muestra residual en otros buckets
+          (it.buckets || []).forEach((b: any) => {
+            if (b.id !== targetBucketA.id && Array.isArray(b.items)) {
+              b.items = b.items.filter((item: any) => !item.isExample);
+            }
+          });
         }
       }
 
@@ -2508,11 +2660,22 @@ export function normalizeBucketsMatchingInteraction(
       const ordinalToBucketMap = new Map<number, string>();
       const ordinalTokenIdMap = new Map<number, string>();
 
+      if (bucketAnswerKeyMap) {
+        for (const [k, bId] of bucketAnswerKeyMap.entries()) {
+          const matchedBucket =
+            (it.buckets || []).find((b: any) => b.id.toLowerCase() === bId.toLowerCase()) ||
+            (it.buckets || []).find((b: any) => /^[A-Za-z]$/.test(bId) && b.id.toUpperCase().charCodeAt(0) - 65 === bId.toUpperCase().charCodeAt(0) - 65) ||
+            (it.buckets || []).find((b: any) => b.id === bId) ||
+            it.buckets?.[0];
+          ordinalToBucketMap.set(k, matchedBucket ? matchedBucket.id : bId);
+        }
+      }
+
       if (Array.isArray(it.tokens)) {
         it.tokens.forEach((t: any) => {
           const k = extractOrdinalIndex(t);
           if (k !== null && k >= 1 && k <= N) {
-            if (t.correctBucketId) ordinalToBucketMap.set(k, t.correctBucketId);
+            if (t.correctBucketId && !ordinalToBucketMap.has(k)) ordinalToBucketMap.set(k, t.correctBucketId);
             if (t.id) ordinalTokenIdMap.set(k, t.id);
           }
         });
@@ -2531,9 +2694,19 @@ export function normalizeBucketsMatchingInteraction(
         });
       }
 
-      // La colección interactiva de fichas DEBE generarse iterando exclusivamente sobre el conjunto de índices k no marcados como ejemplo
-      const interactiveOrdinals: number[] = [];
-      if (Array.isArray(it.tokens) && it.tokens.length > 0) {
+      // 2. Integración Íntegra de Fichas desde la Clave de Respuestas:
+      // Todos los identificadores explícitos presentes en la clave de respuestas (e.g. 'A2; 6; 9 B3 C4; 5; 7; 8')
+      // corresponden a ítems interactivos a resolver por el estudiante.
+      // Ningún elemento explícito de la clave de respuestas debe ser degradado a ejemplo ni restado de la bandeja.
+      // Generar exactamente una ficha interactiva por cada ordinal k presente en la clave (accediendo a previousTwoPartItems[k - 1]),
+      // resultando en 8 fichas interactivas en 'tokens'.
+      let interactiveOrdinals: number[] = [];
+
+      if (bucketAnswerKeyMap && bucketAnswerKeyMap.size >= 2) {
+        interactiveOrdinals = Array.from(bucketAnswerKeyMap.keys())
+          .filter((k) => k >= 1 && k <= N)
+          .sort((a, b) => a - b);
+      } else if (Array.isArray(it.tokens) && it.tokens.length > 0) {
         for (let tIdx = 0; tIdx < it.tokens.length; tIdx++) {
           const t = it.tokens[tIdx];
           let k = extractOrdinalIndex(t);
@@ -2541,8 +2714,8 @@ export function normalizeBucketsMatchingInteraction(
             k = tIdx + 1;
           }
           if (k !== null && k >= 1 && k <= N) {
-            if (k === exampleOrdinal || t.isExample) {
-              continue; // Excluir la muestra preasignada
+            if (hasExampleIndication && k === 1) {
+              continue; // Excluir la muestra preasignada k=1
             }
             if (!interactiveOrdinals.includes(k)) {
               interactiveOrdinals.push(k);
@@ -2550,10 +2723,9 @@ export function normalizeBucketsMatchingInteraction(
           }
         }
       } else {
-        for (let k = 1; k <= N; k++) {
-          if (k !== exampleOrdinal) {
-            interactiveOrdinals.push(k);
-          }
+        const startK = hasExampleIndication ? 2 : 1;
+        for (let k = startK; k <= N; k++) {
+          interactiveOrdinals.push(k);
         }
       }
 
