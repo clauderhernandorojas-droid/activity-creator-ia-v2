@@ -4,7 +4,7 @@ import { BucketsRenderer } from '../BucketsRenderer';
 import type { BucketsMatchingBlock } from '../../../types/schema';
 import type { SessionEvaluation } from '../../../store/useSessionStore';
 
-describe('BucketsRenderer - Fichas de Muestra (isExample: true)', () => {
+describe('BucketsRenderer - Fichas de Muestra (Single Source of Truth en block.tokens)', () => {
   const sampleBlock: BucketsMatchingBlock = {
     id: 'block-1',
     type: 'buckets_matching',
@@ -13,30 +13,30 @@ describe('BucketsRenderer - Fichas de Muestra (isExample: true)', () => {
       {
         id: 'bucket-A',
         label: 'Category A',
-        items: [
-          {
-            id: 'tok-example-1',
-            text: 'Sample Example Card',
-            isExample: true,
-          },
-        ],
       },
       {
         id: 'bucket-B',
         label: 'Category B',
-        items: [],
       },
     ],
     tokens: [
       {
+        id: 'token-example-1',
+        text: 'Sample Example Card',
+        correctBucketId: 'bucket-A',
+        isExample: true,
+      },
+      {
         id: 'tok-user-1',
         text: 'User Token 1',
         correctBucketId: 'bucket-A',
+        isExample: false,
       },
       {
         id: 'tok-user-2',
         text: 'User Token 2',
         correctBucketId: 'bucket-B',
+        isExample: false,
       },
     ],
   };
@@ -44,11 +44,11 @@ describe('BucketsRenderer - Fichas de Muestra (isExample: true)', () => {
   const defaultEvaluation: SessionEvaluation = {
     isSubmitted: false,
     score: 0,
-    maxScore: 2,
+    maxScore: 3,
     details: {},
   };
 
-  it('renderiza la ficha de ejemplo dentro del bucket desde el primer montaje con estado vacío de respuestas', () => {
+  it('renderiza la ficha de ejemplo dentro del bucket desde block.tokens desde el primer montaje con estado vacío de respuestas', () => {
     const html = renderToString(
       <BucketsRenderer
         block={sampleBlock}
@@ -72,9 +72,12 @@ describe('BucketsRenderer - Fichas de Muestra (isExample: true)', () => {
     // No debe contener botón de remover '✕' para la ficha de ejemplo
     // Las fichas de usuario aún no están asignadas, por lo que no debe haber ningún botón '✕'
     expect(html).not.toContain('✕');
+
+    // La bandeja de fichas por ubicar no debe incluir el ejemplo (debe listar exactamente 2 fichas de usuario)
+    expect(html).toMatch(/Fichas por ubicar \(<!-- -->2<!-- -->\):/);
   });
 
-  it('computa assignedTokens.length adecuadamente al sumar fichas de usuario y de ejemplo', () => {
+  it('computa bucketTokens.length adecuadamente al sumar fichas de usuario y de ejemplo', () => {
     const html = renderToString(
       <BucketsRenderer
         block={sampleBlock}
@@ -88,5 +91,8 @@ describe('BucketsRenderer - Fichas de Muestra (isExample: true)', () => {
 
     // La ficha de usuario asignada sí debe mostrar el botón '✕'
     expect(html).toContain('✕');
+
+    // Fichas por ubicar se decrementa a 1
+    expect(html).toMatch(/Fichas por ubicar \(<!-- -->1<!-- -->\):/);
   });
 });

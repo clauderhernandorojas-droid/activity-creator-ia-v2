@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import type { BucketsMatchingBlock, BucketTarget, BucketToken } from '../../types/schema';
 import { useSessionStore, type SessionEvaluation } from '../../store/useSessionStore';
 import { Plus, Trash2, CheckCircle2, XCircle } from 'lucide-react';
@@ -43,21 +43,6 @@ export const BucketsRenderer: React.FC<Props> = ({
       items: mergedItems,
     };
   });
-
-  // Asegurar que al montar el componente, las fichas marcadas con 'isExample: true' dentro de 'bucket.items'
-  // registren su ubicación preasignada en studentAnswers si aún no está presente
-  useEffect(() => {
-    targetSlots.forEach((bucket) => {
-      if (Array.isArray(bucket.items)) {
-        bucket.items.forEach((item: any) => {
-          if (item?.isExample && item?.id && studentAnswers[item.id] !== bucket.id) {
-            onAnswerChange?.(item.id, bucket.id);
-          }
-        });
-      }
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   const handleBucketChange = (bIndex: number, field: keyof BucketTarget, val: any) => {
     if (!onChange) return;
@@ -311,10 +296,7 @@ export const BucketsRenderer: React.FC<Props> = ({
           <div className="flex-1 flex flex-col space-y-4">
             {(() => {
               const unassignedTokens = (block.tokens || []).filter(
-                (tok) =>
-                  !tok.isExample &&
-                  !studentAnswers[tok.id] &&
-                  !targetSlots.some((b) => Array.isArray(b.items) && b.items.some((it: any) => it.id === tok.id))
+                (tok) => !tok.isExample && !studentAnswers[tok.id]
               );
 
               return (
@@ -366,17 +348,16 @@ export const BucketsRenderer: React.FC<Props> = ({
             ) : (
               <div className={`flex-1 grid ${getGridColsClass(targetSlots.length)} gap-3.5 min-h-[180px]`}>
                 {targetSlots.map((bucket) => {
-                  const userPlacedTokensForThisBucket = (block.tokens || []).filter(
-                    (tok) =>
-                      studentAnswers[tok.id] === bucket.id &&
-                      !tok.isExample &&
-                      !(bucket.items || []).some((item: any) => item.id === tok.id)
+                  const exampleTokens = (block.tokens || []).filter(
+                    (tok) => tok.isExample && tok.correctBucketId === bucket.id
                   );
-
-                  const assignedTokens = [
-                    ...(bucket.items || []).filter((item: any) => item.isExample === true),
-                    ...userPlacedTokensForThisBucket,
-                  ];
+                  const userPlacedTokens = (block.tokens || []).filter(
+                    (tok) => !tok.isExample && studentAnswers[tok.id] === bucket.id
+                  );
+                  const legacyExamples = (bucket.items || []).filter(
+                    (item: any) => item.isExample === true && !exampleTokens.some((t) => t.id === item.id)
+                  );
+                  const bucketTokens = [...exampleTokens, ...legacyExamples, ...userPlacedTokens];
 
                   return (
                     <div
@@ -403,13 +384,13 @@ export const BucketsRenderer: React.FC<Props> = ({
                           <span className="truncate">{bucket.label}</span>
                         </h4>
                         <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-white border border-slate-200 text-slate-600 font-bold shadow-2xs flex-shrink-0">
-                          {assignedTokens.length}
+                          {bucketTokens.length}
                         </span>
                       </div>
 
                     {/* Assigned tokens inside bucket */}
                     <div className="flex-1 space-y-1.5 overflow-y-auto">
-                      {assignedTokens.map((tok, tokIdx) => {
+                      {bucketTokens.map((tok, tokIdx) => {
                         const isEvaluated = evaluation.isSubmitted;
                         const isGraded = evaluation.isGraded !== false;
                         const isCorrect = isGraded ? (tok.correctBucketId === bucket.id || Boolean(tok.isExample)) : true;
@@ -471,7 +452,7 @@ export const BucketsRenderer: React.FC<Props> = ({
                         );
                       })}
 
-                      {assignedTokens.length === 0 && (
+                      {bucketTokens.length === 0 && (
                         <div className="h-full flex items-center justify-center border-2 border-dashed border-slate-200 rounded-xl p-2 text-center min-h-[70px]">
                           <span className="text-xs text-slate-400 font-medium">
                             {selectedTokenId ? 'Toca para soltar' : 'Arrastra o toca aquí'}

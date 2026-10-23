@@ -2617,11 +2617,13 @@ export function normalizeBucketsMatchingInteraction(
     if (prevTwoPartItems.length > 0) {
       const N = prevTwoPartItems.length;
 
-      // 1. Resolución del Reactivo de Ejemplo Universal:
-      // Si el texto del ejercicio indica un ejemplo (e.g. '1' preubicado en un contenedor), el ítem de muestra
-      // DEBE ser estrictamente el primer elemento de la diapositiva previa:
-      // tokenExample = assembleTwoPartToken(previousTwoPartItems[0].prompt, previousTwoPartItems[0].expectedAnswer)
-      // Fijar dicho token en el bucket 'A' con { isExample: true }.
+      // 1. Fuente Única de Verdad en 'block.tokens':
+      // Eliminar cualquier mutación o dependencia sobre arrays secundarios como 'bucket.items'.
+      (it.buckets || []).forEach((b: any) => {
+        delete b.items;
+      });
+
+      let tokenExample: any = null;
       if (hasExampleIndication) {
         const prevEx = prevTwoPartItems[0];
         const tokenExampleText = assembleTwoPartToken(prevEx.prompt, prevEx.expectedAnswer);
@@ -2630,30 +2632,13 @@ export function normalizeBucketsMatchingInteraction(
           (it.buckets || []).find((b: any) => b.id === exampleBucketId) ||
           it.buckets?.[0];
 
-        if (targetBucketA) {
-          if (!Array.isArray(targetBucketA.items)) targetBucketA.items = [];
-          const tokenExample = {
-            id: `tok-1`,
-            text: tokenExampleText,
-            isExample: true,
-            correctBucketId: targetBucketA.id,
-          };
-          const exIdx = targetBucketA.items.findIndex(
-            (item: any) => item.id === tokenExample.id || item.isExample || extractOrdinalIndex(item) === 1
-          );
-          if (exIdx >= 0) {
-            targetBucketA.items[exIdx] = { ...targetBucketA.items[exIdx], ...tokenExample };
-          } else {
-            targetBucketA.items.push(tokenExample);
-          }
-
-          // Limpiar cualquier muestra residual en otros buckets
-          (it.buckets || []).forEach((b: any) => {
-            if (b.id !== targetBucketA.id && Array.isArray(b.items)) {
-              b.items = b.items.filter((item: any) => !item.isExample);
-            }
-          });
-        }
+        const bucketAId = targetBucketA ? targetBucketA.id : 'A';
+        tokenExample = {
+          id: 'token-example-1',
+          text: tokenExampleText,
+          correctBucketId: bucketAId,
+          isExample: true,
+        };
       }
 
       // Mapear TargetId -> lista de ordinales k_i para cada contenedor
@@ -2676,7 +2661,7 @@ export function normalizeBucketsMatchingInteraction(
           const k = extractOrdinalIndex(t);
           if (k !== null && k >= 1 && k <= N) {
             if (t.correctBucketId && !ordinalToBucketMap.has(k)) ordinalToBucketMap.set(k, t.correctBucketId);
-            if (t.id) ordinalTokenIdMap.set(k, t.id);
+            if (t.id && !t.isExample) ordinalTokenIdMap.set(k, t.id);
           }
         });
       }
@@ -2699,12 +2684,12 @@ export function normalizeBucketsMatchingInteraction(
       // corresponden a ítems interactivos a resolver por el estudiante.
       // Ningún elemento explícito de la clave de respuestas debe ser degradado a ejemplo ni restado de la bandeja.
       // Generar exactamente una ficha interactiva por cada ordinal k presente en la clave (accediendo a previousTwoPartItems[k - 1]),
-      // resultando en 8 fichas interactivas en 'tokens'.
+      // resultando en N - 1 fichas interactivas con isExample: false.
       let interactiveOrdinals: number[] = [];
 
       if (bucketAnswerKeyMap && bucketAnswerKeyMap.size >= 2) {
         interactiveOrdinals = Array.from(bucketAnswerKeyMap.keys())
-          .filter((k) => k >= 1 && k <= N)
+          .filter((k) => k >= 1 && k <= N && (!hasExampleIndication || k !== 1))
           .sort((a, b) => a - b);
       } else if (Array.isArray(it.tokens) && it.tokens.length > 0) {
         for (let tIdx = 0; tIdx < it.tokens.length; tIdx++) {
@@ -2729,8 +2714,8 @@ export function normalizeBucketsMatchingInteraction(
         }
       }
 
-      // Para cada ordinal k válido: tokenSource = previousTwoPartItems[k - 1]
-      it.tokens = interactiveOrdinals.map((k) => {
+      // Para cada ordinal k interactivo: tokenSource = previousTwoPartItems[k - 1]
+      const interactiveTokens = interactiveOrdinals.map((k) => {
         const tokenSource = prevTwoPartItems[k - 1];
         const tokenText = assembleTwoPartToken(tokenSource.prompt, tokenSource.expectedAnswer);
         const correctBucketId = ordinalToBucketMap.get(k) || it.buckets?.[0]?.id || 'slot-1';
@@ -2739,14 +2724,22 @@ export function normalizeBucketsMatchingInteraction(
           id: tokenId,
           text: tokenText,
           correctBucketId,
+          isExample: false,
         };
       });
+
+      // 'block.tokens' contiene exactamente N elementos (1 token con isExample: true + las N - 1 fichas interactivas)
+      if (tokenExample) {
+        it.tokens = [tokenExample, ...interactiveTokens];
+      } else {
+        it.tokens = interactiveTokens;
+      }
 
       it.sourceItems = it.tokens.map((t: any) => ({
         id: t.id,
         text: t.text,
         correctTargetId: t.correctBucketId,
-        isExample: false,
+        isExample: Boolean(t.isExample),
       }));
     }
   } else if (Array.isArray(it.buckets) && it.buckets.length > 0) {

@@ -4501,43 +4501,43 @@ describe('slideValidation - Direct Schema & Architectural Invariant Tests', () =
 
         const it = currentBucketsSlide.interaction;
 
-        // 1. Muestra preasignada k_e = 1 inyectada determinísticamente en bucket A con isExample: true
-        expect(it.buckets[0].items).toHaveLength(1);
-        expect(it.buckets[0].items[0]).toEqual({
-          id: 'tok-1',
+        // 1. Single Source of Truth: token de ejemplo k_e = 1 reside directamente en block.tokens con isExample: true
+        expect(it.tokens).toHaveLength(7); // N = 7: 1 ficha de ejemplo + 6 fichas interactivas
+        expect(it.tokens[0]).toEqual({
+          id: 'token-example-1',
           text: 'I always enjoy swimming in the ocean.',
           isExample: true,
           correctBucketId: 'A',
         });
 
-        // 2. Banco interactivo arrastrable consta de exactamente N - 1 = 6 fichas (excluyendo el ejemplo k=1)
-        expect(it.tokens).toHaveLength(6);
-        expect(it.sourceItems).toHaveLength(6);
+        // Sin mutación ni dependencia en arrays secundarios como bucket.items
+        expect(it.buckets[0].items).toBeUndefined();
 
-        // 3. Cada ficha corresponde estrictamente al índice ordinal absoluto k_i sin desalineamiento posicional relativo
+        // 2. Banco interactivo consta de exactamente N - 1 = 6 fichas (con isExample: false)
+        const interactiveTokens = it.tokens.filter((t: any) => !t.isExample);
+        expect(interactiveTokens).toHaveLength(6);
+        expect(it.sourceItems).toHaveLength(7);
+
+        // 3. Cada ficha interactiva corresponde estrictamente al índice ordinal absoluto k_i sin desalineamiento posicional relativo
         // y ninguna ficha contiene valores numéricos en crudo
-        expect(it.tokens[0].text).toBe('She rarely drinks coffee after dinner.'); // k = 2 -> previousTwoPartItems[1]
-        expect(it.tokens[0].correctBucketId).toBe('B');
+        expect(interactiveTokens[0].text).toBe('She rarely drinks coffee after dinner.'); // k = 2 -> previousTwoPartItems[1]
+        expect(interactiveTokens[0].correctBucketId).toBe('B');
 
-        expect(it.tokens[1].text).toBe('We prefer reading historical fiction books.'); // k = 3 -> previousTwoPartItems[2]
-        expect(it.tokens[1].correctBucketId).toBe('A');
+        expect(interactiveTokens[1].text).toBe('We prefer reading historical fiction books.'); // k = 3 -> previousTwoPartItems[2]
+        expect(interactiveTokens[1].correctBucketId).toBe('A');
 
-        expect(it.tokens[2].text).toBe('He never watches horror movies at night.'); // k = 4 -> previousTwoPartItems[3]
-        expect(it.tokens[2].correctBucketId).toBe('B');
+        expect(interactiveTokens[2].text).toBe('He never watches horror movies at night.'); // k = 4 -> previousTwoPartItems[3]
+        expect(interactiveTokens[2].correctBucketId).toBe('B');
 
-        expect(it.tokens[3].text).toBe('They often play badminton at the park.'); // k = 5 -> previousTwoPartItems[4]
-        expect(it.tokens[3].correctBucketId).toBe('A');
+        expect(interactiveTokens[3].text).toBe('They often play badminton at the park.'); // k = 5 -> previousTwoPartItems[4]
+        expect(interactiveTokens[3].correctBucketId).toBe('A');
 
-        expect(it.tokens[4].text).toBe('You should try cooking Indian curry.'); // k = 6 -> previousTwoPartItems[5]
-        expect(it.tokens[4].correctBucketId).toBe('C');
+        expect(interactiveTokens[4].text).toBe('You should try cooking Indian curry.'); // k = 6 -> previousTwoPartItems[5]
+        expect(interactiveTokens[4].correctBucketId).toBe('C');
 
         // El reactivo N = 7 accede estrictamente a previousTwoPartItems[6] sin caer en fallback '7'
-        expect(it.tokens[5].text).toBe('I can\'t stand waiting in long lines.'); // k = 7 -> previousTwoPartItems[6]
-        expect(it.tokens[5].correctBucketId).toBe('B');
-
-        // 4. Verificación de targetSlots y targets sincronizados con los buckets
-        expect(it.targetSlots[0].items).toHaveLength(1);
-        expect(it.targetSlots[0].items[0].isExample).toBe(true);
+        expect(interactiveTokens[5].text).toBe('I can\'t stand waiting in long lines.'); // k = 7 -> previousTwoPartItems[6]
+        expect(interactiveTokens[5].correctBucketId).toBe('B');
       });
 
       it('13. Resolución de Muestra Universal en Bucket A e Integración Íntegra de Fichas desde Clave de Respuestas (e.g. A2; 6; 9 B3 C4; 5; 7; 8)', () => {
@@ -4598,22 +4598,23 @@ describe('slideValidation - Direct Schema & Architectural Invariant Tests', () =
 
         const it = bucketsSlide.interaction;
 
-        // 1. Muestra universal: tokenExample DEBE ser estrictamente el primer elemento de la diapositiva previa
-        // Fijado en el bucket 'A' con isExample: true
-        expect(it.buckets[0].items).toHaveLength(1);
-        expect(it.buckets[0].items[0]).toEqual({
-          id: 'tok-1',
+        // 1. Single Source of Truth: tokenExample reside directamente en block.tokens con isExample: true
+        // y sin mutación de bucket.items
+        expect(it.tokens).toHaveLength(9); // N = 9 (1 ficha ejemplo + 8 fichas interactivas)
+        expect(it.tokens[0]).toEqual({
+          id: 'token-example-1',
           text: 'I always enjoy swimming in the pool.',
           isExample: true,
           correctBucketId: 'A',
         });
+        expect(it.buckets[0].items).toBeUndefined();
 
         // 2. Integración Íntegra de Fichas desde la Clave de Respuestas:
         // Todos los identificadores explícitos presentes en la clave (2, 3, 4, 5, 6, 7, 8, 9)
-        // corresponden a ítems interactivos a resolver por el estudiante.
-        // Ninguno se degrada a ejemplo ni se resta de la bandeja -> exactamente 8 fichas en 'tokens'.
-        expect(it.tokens).toHaveLength(8);
-        expect(it.sourceItems).toHaveLength(8);
+        // corresponden a ítems interactivos con isExample: false.
+        const interactiveTokens = it.tokens.filter((t: any) => !t.isExample);
+        expect(interactiveTokens).toHaveLength(8);
+        expect(it.sourceItems).toHaveLength(9);
 
         // Fichas en bucket A (2, 6, 9)
         const tok2 = it.tokens.find((t: any) => t.id === 'tok-2');
@@ -4657,10 +4658,6 @@ describe('slideValidation - Direct Schema & Architectural Invariant Tests', () =
         expect(tok8).toBeDefined();
         expect(tok8.text).toBe('My brother likes eating spicy noodles.');
         expect(tok8.correctBucketId).toBe('C');
-
-        // 3. Sincronización en targetSlots
-        expect(it.targetSlots[0].items).toHaveLength(1);
-        expect(it.targetSlots[0].items[0].isExample).toBe(true);
       });
     });
   });
