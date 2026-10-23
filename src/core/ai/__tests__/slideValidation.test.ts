@@ -14,6 +14,9 @@ import {
   detectCrossActivityReference,
   formatPreviousSlideContext,
   canonicalizeReferencePositionMarkers,
+  normalizeBucketsMatchingInteraction,
+  extractTwoPartItemsFromSlide,
+  assembleTwoPartToken,
 } from '../digitizeBook';
 
 describe('slideValidation - Direct Schema & Architectural Invariant Tests', () => {
@@ -3993,10 +3996,292 @@ describe('slideValidation - Direct Schema & Architectural Invariant Tests', () =
         expect(it.buckets[0].items[0].isExample).toBe(true);
         expect(it.buckets[0].items[0].id).toBe('tok-1');
 
-        // 4. Token correspondiente marcado con isExample: true
-        expect(it.tokens[0].isExample).toBe(true);
+        // 4. Descuento determinístico del ejemplo: el banco interactivo contiene únicamente los ítems no ejemplo
+        expect(it.tokens).toHaveLength(2);
+        expect(it.tokens.map((t: any) => t.id)).toEqual(['tok-2', 'tok-3']);
+        expect(it.tokens[0].isExample).toBeUndefined();
         expect(it.tokens[1].isExample).toBeUndefined();
-        expect(it.tokens[2].isExample).toBeUndefined();
+      });
+    });
+
+    describe('5. Hidratación Determinística de Buckets y Ensamblado de Referencias Cruzadas (Zero-LLM Synthesis)', () => {
+      it('1. Hidratación Determinística de Targets: reemplaza etiquetas cortas (A, B) por descriptores del texto', () => {
+        const rawSlide: any = {
+          id: 'slide-target-hydration',
+          title: 'Classification Exercise',
+          subtitle: 'Put the words into categories: A FOOD AND DRINK B CLOTHES',
+          interaction: {
+            id: 'int-buckets-hyd',
+            type: 'buckets_matching',
+            instruction: 'Put the words into categories: A FOOD AND DRINK B CLOTHES',
+            targets: [
+              { id: 'A', label: 'A', items: [] },
+              { id: 'B', label: 'B', items: [] },
+            ],
+            tokens: [
+              { id: 'tok-1', text: 'Apple', correctBucketId: 'A' },
+              { id: 'tok-2', text: 'Jacket', correctBucketId: 'B' },
+            ],
+          },
+        };
+
+        normalizeBucketsMatchingInteraction(rawSlide);
+
+        expect(rawSlide.interaction.buckets).toHaveLength(2);
+        expect(rawSlide.interaction.buckets[0].label).toBe('Food and drink');
+        expect(rawSlide.interaction.buckets[1].label).toBe('Clothes');
+        expect(rawSlide.interaction.targetSlots[0].label).toBe('Food and drink');
+        expect(rawSlide.interaction.targets[0].label).toBe('Food and drink');
+      });
+
+      it('2. Ensamblado Programático de Reactivos por Referencia Cruzada (Zero-LLM Synthesis)', () => {
+        const previousSlide: any = {
+          id: 'slide-prev-matching',
+          title: 'Exercise 2a: Matching halves',
+          subtitle: 'Match the sentence halves 1-4 with A-D',
+          layout: 'single_column',
+          isGraded: true,
+          referenceContent: null,
+          interaction: {
+            id: 'int-prev-input',
+            type: 'input_fields',
+            instruction: 'Match sentence halves',
+            layoutMode: 'list',
+            listItems: [
+              { id: 'li-1', prompt: '1. I always go to work', expectedAnswer: 'by train every morning.', acceptedAnswers: [] },
+              { id: 'li-2', prompt: '2. She enjoys eating', expectedAnswer: 'fresh fruit and yogurt.', acceptedAnswers: [] },
+              { id: 'li-3', prompt: '3. They never watch TV', expectedAnswer: 'during weekdays.', acceptedAnswers: [] },
+            ],
+          },
+        };
+
+        const extracted = extractTwoPartItemsFromSlide(previousSlide);
+        expect(extracted).toHaveLength(3);
+        expect(extracted[0].prompt).toBe('1. I always go to work');
+        expect(extracted[0].expectedAnswer).toBe('by train every morning.');
+
+        const rawSlide: any = {
+          id: 'slide-meta-categorization',
+          title: 'Exercise 2b: Categorization',
+          subtitle: 'Look at the phrases in Exercise 2a. Put them into categories A–B: A ROUTINES B DIET',
+          interaction: {
+            id: 'int-meta-buckets',
+            type: 'buckets_matching',
+            instruction: 'Use the phrases in 2a. Put them into categories.',
+            buckets: [
+              { id: 'A', label: 'A', items: [] },
+              { id: 'B', label: 'B', items: [] },
+            ],
+            // The LLM complies with Zero-LLM directive and emits numeric index references
+            tokens: [
+              { id: '1', text: '1', correctBucketId: 'A' },
+              { id: '2', text: '2', correctBucketId: 'B' },
+              { id: '3', text: '3', correctBucketId: 'A' },
+            ],
+          },
+        };
+
+        normalizeBucketsMatchingInteraction(rawSlide, undefined, previousSlide);
+
+        // Verify programmatic synthesis: tokenText = `${cleanP} ${cleanA}`.replace(/\s+/g, ' ');
+        // P and A segments are sanitized removing leading numbers/letters, ordered strictly P + A
+        expect(rawSlide.interaction.tokens[0].text).toBe('I always go to work by train every morning.');
+        expect(rawSlide.interaction.tokens[1].text).toBe('She enjoys eating fresh fruit and yogurt.');
+        expect(rawSlide.interaction.tokens[2].text).toBe('They never watch TV during weekdays.');
+
+        // Verify target hydration
+        expect(rawSlide.interaction.buckets[0].label).toBe('Routines');
+        expect(rawSlide.interaction.buckets[1].label).toBe('Diet');
+      });
+
+      it('3. Descuento Determinístico de Ejemplos en Buckets', () => {
+        const rawSlide: any = {
+          id: 'slide-example-discount',
+          title: 'Activity 4: Classification',
+          subtitle: 'Classify items: A ANIMALS (e.g. 1) B PLANTS',
+          interaction: {
+            id: 'int-buckets-ex',
+            type: 'buckets_matching',
+            instruction: 'Classify items',
+            buckets: [
+              { id: 'A', label: 'A ANIMALS' },
+              { id: 'B', label: 'B PLANTS' },
+            ],
+            tokens: [
+              { id: 'tok-1', text: '1. Elephant', correctBucketId: 'A' },
+              { id: 'tok-2', text: '2. Oak tree', correctBucketId: 'B' },
+              { id: 'tok-3', text: '3. Giraffe', correctBucketId: 'A' },
+            ],
+          },
+        };
+
+        normalizeBucketsMatchingInteraction(rawSlide);
+
+        // The example item (tok-1) is moved to bucket A items with isExample: true
+        expect(rawSlide.interaction.buckets[0].items).toHaveLength(1);
+        expect(rawSlide.interaction.buckets[0].items[0].id).toBe('tok-1');
+        expect(rawSlide.interaction.buckets[0].items[0].isExample).toBe(true);
+
+        // The interactive bank contains exclusively non-example tokens
+        expect(rawSlide.interaction.tokens).toHaveLength(2);
+        expect(rawSlide.interaction.tokens.map((t: any) => t.id)).toEqual(['tok-2', 'tok-3']);
+        expect(rawSlide.interaction.sourceItems.map((s: any) => s.id)).toEqual(['tok-2', 'tok-3']);
+      });
+
+      it('4. Contrato Estricto de Layout para buckets_matching (100% viewport, single_column, sin paneles laterales)', () => {
+        const rawSlideWithSidePanel: any = {
+          id: 'slide-bucket-layout',
+          title: 'Exercise 5: Buckets Layout Test',
+          subtitle: 'Put the verbs into the correct column: A REGULAR B IRREGULAR',
+          contextBody: 'Long explanatory grammatical reference note that would normally trigger split_50_50',
+          referenceContent: {
+            id: 'ref-aux-1',
+            type: 'text',
+            category: 'grammar_note',
+            title: 'Collateral Reference Note',
+            content: 'Regular verbs form past with -ed while irregular verbs change root vowel.',
+          },
+          layout: 'split_50_50',
+          interaction: {
+            id: 'int-bucket-col',
+            type: 'buckets_matching',
+            instruction: 'Classify verbs',
+            buckets: [
+              { id: 'A', label: 'Regular' },
+              { id: 'B', label: 'Irregular' },
+            ],
+            tokens: [
+              { id: 'tok-1', text: 'walked', correctBucketId: 'A' },
+              { id: 'tok-2', text: 'ran', correctBucketId: 'B' },
+            ],
+          },
+        };
+
+        // Test in normalizeBucketsMatchingInteraction
+        normalizeBucketsMatchingInteraction(rawSlideWithSidePanel);
+        expect(rawSlideWithSidePanel.layout).toBe('single_column');
+        expect(rawSlideWithSidePanel.referenceContent).toBeNull();
+        expect(rawSlideWithSidePanel.contextBody).toBeUndefined();
+
+        // Test through validateAndParseSlides pipeline
+        const parsedSlides = validateAndParseSlides(
+          JSON.stringify({
+            slides: [
+              {
+                id: 'slide-pipeline-bucket',
+                title: 'Exercise 5b: Classification',
+                subtitle: 'A FOOD B SPORTS',
+                contextBody: 'Autonomous note text from OCR or model',
+                layout: 'split_50_50',
+                interaction: {
+                  type: 'buckets_matching',
+                  instruction: 'Drag items',
+                  buckets: [
+                    { id: 'A', label: 'A FOOD' },
+                    { id: 'B', label: 'B SPORTS' },
+                  ],
+                  tokens: [
+                    { id: 'tok-1', text: 'Pizza', correctBucketId: 'A' },
+                    { id: 'tok-2', text: 'Tennis', correctBucketId: 'B' },
+                  ],
+                },
+              },
+            ],
+          })
+        );
+
+        expect(parsedSlides).toHaveLength(1);
+        expect(parsedSlides[0].layout).toBe('single_column');
+        expect(parsedSlides[0].referenceContent).toBeNull();
+      });
+
+      it('5. Invariante Universal de Ensamble Sintáctico (Concatenación P + A agnóstica sin inversión)', () => {
+        // Test assembleTwoPartToken directly
+        expect(assembleTwoPartToken('1. take', 'b. notes')).toBe('take notes');
+        expect(assembleTwoPartToken('2) make', 'c) a decision')).toBe('make a decision');
+        expect(assembleTwoPartToken('A - do', '1: homework')).toBe('do homework');
+        expect(assembleTwoPartToken('clean prompt', 'clean answer')).toBe('clean prompt clean answer');
+        expect(assembleTwoPartToken('10: go', 'f) home')).toBe('go home');
+
+        // Test with synthesis between matching previous slide and buckets slide
+        const prevSlide: any = {
+          id: 'prev-collocations',
+          title: 'Exercise 1: Match verbs with phrases',
+          subtitle: 'Match 1-4 with a-d',
+          interaction: {
+            type: 'input_fields',
+            instruction: 'Match verbs and phrases',
+            listItems: [
+              { id: '1', prompt: '1. do', expectedAnswer: 'c. your best' },
+              { id: '2', prompt: '2. make', expectedAnswer: 'a. friends' },
+              { id: '3', prompt: '3. have', expectedAnswer: 'b. a good time' },
+              { id: '4', prompt: '4. take', expectedAnswer: 'd. photos' },
+            ],
+          },
+        };
+
+        const currentSlide: any = {
+          id: 'curr-buckets',
+          title: 'Exercise 2: Categorization',
+          subtitle: 'Use the phrases from Exercise 1. Put them in categories A–B: A SOCIAL B EFFORT',
+          interaction: {
+            type: 'buckets_matching',
+            instruction: 'Sort into categories',
+            buckets: [
+              { id: 'A', label: 'Social' },
+              { id: 'B', label: 'Effort' },
+            ],
+            tokens: [
+              { id: '1', text: '1', correctBucketId: 'B' },
+              { id: '2', text: '2', correctBucketId: 'A' },
+              { id: '3', text: '3', correctBucketId: 'A' },
+              { id: '4', text: '4', correctBucketId: 'A' },
+            ],
+          },
+        };
+
+        normalizeBucketsMatchingInteraction(currentSlide, undefined, prevSlide);
+
+        // Strict deterministic P + A assembly
+        expect(currentSlide.interaction.tokens[0].text).toBe('do your best');
+        expect(currentSlide.interaction.tokens[1].text).toBe('make friends');
+        expect(currentSlide.interaction.tokens[2].text).toBe('have a good time');
+        expect(currentSlide.interaction.tokens[3].text).toBe('take photos');
+      });
+
+      it('6. Asignación Estructural de Muestras con descriptor ordinal k (_exampleMarker)', () => {
+        const rawSlide: any = {
+          id: 'slide-example-k',
+          title: 'Exercise 6: Category assignment with example k=2',
+          subtitle: 'Sort the items: A WORK B LEISURE (e.g. 2)',
+          interaction: {
+            type: 'buckets_matching',
+            instruction: 'Sort items into buckets',
+            buckets: [
+              { id: 'A', label: 'WORK' },
+              { id: 'B', label: 'LEISURE', _exampleMarker: '2' },
+            ],
+            tokens: [
+              { id: 'tok-1', text: 'Write report', correctBucketId: 'A' },
+              { id: 'tok-2', text: 'Play video games', correctBucketId: 'B' },
+              { id: 'tok-3', text: 'Attend meeting', correctBucketId: 'A' },
+            ],
+          },
+        };
+
+        normalizeBucketsMatchingInteraction(rawSlide);
+
+        // The 2nd element ('tok-2' / k=2) must be deterministically moved to bucket B items with isExample: true
+        const bucketB = rawSlide.interaction.buckets.find((b: any) => b.id === 'B');
+        expect(bucketB.items).toHaveLength(1);
+        expect(bucketB.items[0].id).toBe('tok-2');
+        expect(bucketB.items[0].text).toBe('Play video games');
+        expect(bucketB.items[0].isExample).toBe(true);
+
+        // Excluded from interactive draggable tokens and sourceItems
+        expect(rawSlide.interaction.tokens).toHaveLength(2);
+        expect(rawSlide.interaction.tokens.map((t: any) => t.id)).toEqual(['tok-1', 'tok-3']);
+        expect(rawSlide.interaction.sourceItems.map((s: any) => s.id)).toEqual(['tok-1', 'tok-3']);
       });
     });
   });

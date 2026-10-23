@@ -70,18 +70,19 @@ function tableToMarkdownText(ref: StructuredReferenceBlock | ReferenceTableBlock
   }
 
   if ('columns' in ref && Array.isArray(ref.columns) && ref.columns.length > 0) {
-    ref.columns.forEach((col) => {
+    (ref.columns as Array<{ header: string; items?: string[] }>).forEach((col) => {
       const colParts: string[] = [`**${col.header}**:`];
-      col.items.forEach((item) => {
+      (col.items || []).forEach((item: string) => {
         if (item && item.trim()) colParts.push(`• ${item.trim()}`);
       });
       parts.push(colParts.join('\n'));
     });
   } else if ('headers' in ref && Array.isArray(ref.headers) && ref.headers.length > 0) {
-    const headers = ref.headers;
+    const tableRef = ref as ReferenceTableBlock;
+    const headers = tableRef.headers;
     const headerLine = `| ${headers.join(' | ')} |`;
     const separatorLine = `| ${headers.map(() => '---').join(' | ')} |`;
-    const rowLines = (ref.rows || []).map((row) => `| ${row.join(' | ')} |`);
+    const rowLines = (tableRef.rows || []).map((row: string[]) => `| ${row.join(' | ')} |`);
     parts.push([headerLine, separatorLine, ...rowLines].join('\n'));
   }
 
@@ -236,13 +237,17 @@ export function convertSlideToRole(slide: Slide, targetRole: PedagogicalRole): S
     roleCache[targetRole] = nextInteraction;
   }
 
+  const isBucket = nextInteraction?.type === 'buckets_matching';
+  const effectiveReference = isBucket ? null : nextReference;
+  const effectiveLayout = isBucket ? 'single_column' : (effectiveReference && nextInteraction ? 'split_50_50' : 'single_column');
+
   return {
     ...slide,
-    referenceContent: nextReference,
+    referenceContent: effectiveReference,
     interaction: nextInteraction,
     cachedInteraction: nextInteraction || slide.cachedInteraction || null,
     rolePayloadCache: roleCache,
-    layout: nextReference && nextInteraction ? 'split_50_50' : 'single_column',
+    layout: effectiveLayout,
   };
 }
 

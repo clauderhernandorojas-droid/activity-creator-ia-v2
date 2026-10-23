@@ -2125,22 +2125,53 @@ export function extractTwoPartItemsFromSlide(
         items.push({ id: q.id, prompt: p, expectedAnswer: a });
       }
     }
+  } else if (Array.isArray((it as any).pairs)) {
+    for (const pair of (it as any).pairs) {
+      const p = (pair.prompt || pair.left || pair.first || '').trim();
+      const a = (pair.expectedAnswer || pair.right || pair.second || pair.answer || '').trim();
+      if (p && a) {
+        items.push({ id: pair.id, prompt: p, expectedAnswer: a });
+      }
+    }
   }
 
   return items;
 }
 
 /**
+ * Invariante Universal de Ensamble Sintáctico (Concatenación P + A):
+ * Al reconstruir reactivos a partir de una diapositiva previa de tipo matching/two-part:
+ * - 'P' es el segmento inicial ('prompt') y 'A' el segmento terminal ('expectedAnswer').
+ * - Sanitiza ambos segmentos mediante patrones regulares agnósticos:
+ *   cleanP: remueve índices/ordinales numéricos o alfabéticos iniciales
+ *   cleanA: remueve índices/ordinales numéricos o alfabéticos iniciales
+ * - Orden determinístico estricto: `${cleanP} ${cleanA}`.replace(/\s+/g, ' ')
+ * - Prohibida la inversión A + P.
+ */
+export function assembleTwoPartToken(prompt: string, expectedAnswer: string): string {
+  const P = String(prompt || '');
+  const A = String(expectedAnswer || '');
+  const cleanP = P.replace(/^\s*(?:[\d]+|[a-zA-Z])[\.\)\-\:\s]+\s*/, '').trim();
+  const cleanA = A.replace(/^\s*(?:[\d]+|[a-zA-Z])[\.\)\-\:\s]+\s*/, '').trim();
+  const pSegment = cleanP || P.trim();
+  const aSegment = cleanA || A.trim();
+  return `${pSegment} ${aSegment}`.replace(/\s+/g, ' ');
+}
+
+/**
  * Normaliza y estructura un bloque de interacción de tipo buckets_matching:
- * 1. Poda cualquier texto explicativo de las categorías que haya fugado a instruction, prompt o subtitle.
+ * 1. Contrato Estricto de Layout:
+ *    - layout = 'single_column' obligatoriamente.
+ *    - Se prohíbe la instanciación de bloques auxiliares o paneles laterales ('split_50_50', referencias estáticas o notas colaterales).
+ *    - La interacción consume el 100% del ancho del viewport disponible.
  * 2. Hidratación Determinística de Targets: si parsedBuckets tiene definiciones y los targets del payload
  *    tienen etiquetas cortas (length <= 2, e.g. 'A', 'B'), se reemplazan determinísticamente con las etiquetas descriptivas.
- * 3. Ensamblado Programático de Reactivos por Referencia Cruzada (Zero-LLM Synthesis):
+ * 3. Invariante Universal de Ensamble Sintáctico (Zero-LLM Synthesis P + A):
  *    Sintetiza programáticamente cada ficha si es una meta-actividad sobre un ejercicio previo de dos partes:
- *    `${prevItem.prompt.trim()} ${prevItem.expectedAnswer.trim()}`.
+ *    `${cleanP} ${cleanA}`.replace(/\s+/g, ' ').
  * 4. Normalización Tipográfica: Preserva 'sentence case' en las cabeceras de los contenedores.
- * 5. Descuento Determinístico de Ejemplos: Si un bucket tiene _exampleMarker con identificador k,
- *    mueve la ficha al bucket receptor con isExample: true y la excluye del banco interactivo de fichas ('draggable items').
+ * 5. Asignación Estructural de Muestras (Examples): Si un target bucket contiene _exampleMarker con índice k,
+ *    mueve el k-ésimo elemento sintetizado a bucket.items con { isExample: true } y lo excluye de tokens / sourceItems.
  */
 export function normalizeBucketsMatchingInteraction(
   rawSlide: any,
@@ -2149,6 +2180,15 @@ export function normalizeBucketsMatchingInteraction(
 ): void {
   if (!rawSlide.interaction || rawSlide.interaction.type !== 'buckets_matching') return;
   const it = rawSlide.interaction;
+
+  // 1. Contrato Estricto de Layout para 'buckets_matching':
+  // Toda interacción clasificada como 'buckets_matching' DEBE asignar obligatoriamente layout = 'single_column'
+  // y consumir el 100% del ancho del viewport disponible sin paneles laterales ni notas auxiliares.
+  rawSlide.layout = 'single_column';
+  rawSlide.referenceContent = null;
+  if (rawSlide.contextBody) {
+    rawSlide.contextBody = undefined;
+  }
 
   // 1. Hidratación Determinística de Targets en buckets_matching:
   // Escanear fuentes de texto crudo individuales (fallbackRawText, subtitle, instruction, etc.)
@@ -2228,7 +2268,7 @@ export function normalizeBucketsMatchingInteraction(
     it.targetSlots = existingTargets;
   }
 
-  // 3. Ensamblado Programático de Reactivos por Referencia Cruzada (Zero-LLM Synthesis)
+  // 3. Invariante Universal de Ensamble Sintáctico (Concatenación P + A)
   const crossRef = detectCrossActivityReference(textToScan);
   if (previousSlideContext && (crossRef || /\b(?:from|in|use|using)\s+(?:the\s+)?(?:phrases|words|items|sentences|exercise|activity)\b/i.test(textToScan))) {
     const prevTwoPartItems = extractTwoPartItemsFromSlide(previousSlideContext);
@@ -2266,16 +2306,14 @@ export function normalizeBucketsMatchingInteraction(
           }
 
           if (prevItem) {
-            const tokenText = `${prevItem.prompt.trim()} ${prevItem.expectedAnswer.trim()}`.replace(/\s+/g, ' ');
-            token.text = tokenText;
+            token.text = assembleTwoPartToken(prevItem.prompt, prevItem.expectedAnswer);
           }
         });
       } else if ((!Array.isArray(it.tokens) || it.tokens.length === 0) && prevTwoPartItems.length > 0) {
         it.tokens = prevTwoPartItems.map((prevItem, pIdx) => {
-          const tokenText = `${prevItem.prompt.trim()} ${prevItem.expectedAnswer.trim()}`.replace(/\s+/g, ' ');
           return {
             id: `tok-${pIdx + 1}`,
-            text: tokenText,
+            text: assembleTwoPartToken(prevItem.prompt, prevItem.expectedAnswer),
             correctBucketId: it.buckets?.[0]?.id || 'slot-1',
           };
         });
@@ -2292,7 +2330,7 @@ export function normalizeBucketsMatchingInteraction(
     }
   }
 
-  // 4. Normalización Tipográfica y 5. Descuento Determinístico de Ejemplos
+  // 4. Normalización Tipográfica y 5. Asignación Estructural de Muestras (Examples)
   if (Array.isArray(it.buckets) && it.buckets.length > 0) {
     it.buckets = it.buckets.map((b: any, bIdx: number) => {
       const id = b.id || (parsedBuckets[bIdx] ? parsedBuckets[bIdx].id : `slot-${bIdx + 1}`);
@@ -2347,34 +2385,52 @@ export function normalizeBucketsMatchingInteraction(
       }
 
       // Step B: Resolve example markers (_exampleMarker) from parsed categories
+      // Asignación Estructural de Muestras (Examples):
+      // - Si un target bucket contiene _exampleMarker con índice ordinal k:
+      // - Mover de forma determinística el k-ésimo elemento sintetizado al arreglo 'items' con { isExample: true }.
+      // - Excluir dicho elemento de la colección de ítems interactivos arrastrables ('tokens' / 'sourceItems').
       for (const bucket of it.buckets) {
         const marker = bucket._exampleMarker || markerMap.get(bucket.id);
         if (marker) {
-          const targetToken = it.tokens.find(
-            (t: any, tIdx: number) => {
-              const kStr = String(marker).replace(/[\.\)]/g, '').trim().toLowerCase();
-              if (kStr === 'example' || kStr === '1') {
-                if (t.isExample) return true;
-                if (tIdx === 0) return true;
-              }
-              const tIdStr = String(t.id || '').replace(/^tok-|^src-/, '');
-              if (tIdStr === kStr) return true;
-              if (t.text && (t.text.startsWith(`${kStr}.`) || t.text.startsWith(`${kStr} `) || t.text.trim() === kStr)) {
-                return true;
-              }
-              if (/^\d+$/.test(kStr) && parseInt(kStr, 10) - 1 === tIdx) {
-                return true;
-              }
-              return false;
-            }
-          );
+          const numMatch = String(marker).match(/\d+/);
+          const k = numMatch ? parseInt(numMatch[0], 10) : 1;
 
-          if (targetToken) {
+          let targetTokenIndex = -1;
+
+          // 1. Concordancia por ID numérico (ej. "tok-1", "src-1", o id="1")
+          targetTokenIndex = it.tokens.findIndex((t: any) => {
+            const idNum = String(t.id || '').match(/(\d+)/)?.[1];
+            return idNum && parseInt(idNum, 10) === k;
+          });
+
+          // 2. Concordancia por prefijo textual ("1. ...", "1 ...", o "1")
+          if (targetTokenIndex === -1) {
+            targetTokenIndex = it.tokens.findIndex((t: any) => {
+              const str = String(t.text || '').trim();
+              return str.startsWith(`${k}.`) || str.startsWith(`${k} `) || str === String(k);
+            });
+          }
+
+          // 3. Posición ordinal estricta k-1 (1-based -> 0-based index)
+          if (targetTokenIndex === -1 && k >= 1 && k <= it.tokens.length) {
+            targetTokenIndex = k - 1;
+          }
+
+          // 4. Fallback si k=1 o es 'example', buscar token con isExample premarcado
+          if (targetTokenIndex === -1 && (k === 1 || String(marker).toLowerCase().includes('example'))) {
+            targetTokenIndex = it.tokens.findIndex((t: any) => t.isExample);
+            if (targetTokenIndex === -1 && it.tokens.length > 0) {
+              targetTokenIndex = 0;
+            }
+          }
+
+          if (targetTokenIndex !== -1) {
+            const targetToken = it.tokens[targetTokenIndex];
             targetToken.isExample = true;
             targetToken.correctBucketId = bucket.id;
             discountedExampleIds.add(targetToken.id);
 
-            if (!bucket.items) bucket.items = [];
+            if (!Array.isArray(bucket.items)) bucket.items = [];
             if (!bucket.items.some((item: any) => item.id === targetToken.id)) {
               bucket.items.push({
                 id: targetToken.id,
@@ -2394,7 +2450,7 @@ export function normalizeBucketsMatchingInteraction(
           id: t.id,
           text: t.text,
           correctTargetId: t.correctBucketId,
-          isExample: t.isExample,
+          isExample: false,
         }));
       }
     }
@@ -3928,7 +3984,14 @@ export function validateAndParseSlides(
       rawSlide.subtitle = normalizeNonInteractiveInstruction(rawSlide.subtitle);
     }
 
-    if (!rawSlide.referenceContent && rawSlide.contextBody && rawSlide.interaction) {
+    if (rawSlide.interaction && rawSlide.interaction.type === 'buckets_matching') {
+      // Contrato Estricto de Layout para 'buckets_matching':
+      // Se prohíbe la instanciación de bloques auxiliares o paneles laterales ('split_50_50', referencias estáticas o notas colaterales)
+      // en interacciones de tipo bucket. La interacción debe consumir el 100% del ancho del viewport disponible.
+      rawSlide.referenceContent = null;
+      rawSlide.contextBody = undefined;
+      rawSlide.layout = 'single_column';
+    } else if (!rawSlide.referenceContent && rawSlide.contextBody && rawSlide.interaction) {
       if (isAnswerKeyContent(rawSlide.contextBody, rawSlide.title, rawSlide.subtitle)) {
         const keys = parseAllAnswerKeys(rawSlide.contextBody);
         for (const [secKey, secMap] of Object.entries(keys)) {
@@ -3959,19 +4022,26 @@ export function validateAndParseSlides(
     }
 
     // Principio ontológico de selección de Layout:
+    // - Toda interacción clasificada como 'buckets_matching' DEBE asignar obligatoriamente: layout = 'single_column' y referenceContent = null.
     // - 'split_50_50': Se utiliza ÚNICAMENTE cuando existe un texto continuo de consulta autónomo
     //   (un artículo, un audioscript, un diálogo completo, o tabla de consulta) que el estudiante
     //   necesita leer a la izquierda mientras interactúa a la derecha. NUNCA para audio o media.
     // - 'single_column': Es el layout por defecto para cualquier ejercicio de oraciones, listas o
     //   reactivos donde el contenido sea autosuficiente, o cuando no hay interacción activa.
-    const hasAutonomousReadingOrTable = Boolean(
-      rawSlide.referenceContent && (
-        rawSlide.referenceContent.type === 'reference_table' ||
-        rawSlide.referenceContent.type === 'table_reference' ||
-        (rawSlide.referenceContent.type === 'text' && !isSpuriousReferenceMetadata(rawSlide.referenceContent, rawSlide.interaction, rawSlide.subtitle, rawSlide.title))
-      )
-    );
-    rawSlide.layout = (hasAutonomousReadingOrTable && rawSlide.interaction) ? 'split_50_50' : 'single_column';
+    if (rawSlide.interaction && rawSlide.interaction.type === 'buckets_matching') {
+      rawSlide.layout = 'single_column';
+      rawSlide.referenceContent = null;
+      rawSlide.contextBody = undefined;
+    } else {
+      const hasAutonomousReadingOrTable = Boolean(
+        rawSlide.referenceContent && (
+          rawSlide.referenceContent.type === 'reference_table' ||
+          rawSlide.referenceContent.type === 'table_reference' ||
+          (rawSlide.referenceContent.type === 'text' && !isSpuriousReferenceMetadata(rawSlide.referenceContent, rawSlide.interaction, rawSlide.subtitle, rawSlide.title))
+        )
+      );
+      rawSlide.layout = (hasAutonomousReadingOrTable && rawSlide.interaction) ? 'split_50_50' : 'single_column';
+    }
 
     // Principio Universal de Densidad Máxima por Diapositiva (Slide Ergonomics & Cognitive Load):
     // Cuando una actividad interactiva se basa en un texto o diálogo de referencia (layout split_50_50):
