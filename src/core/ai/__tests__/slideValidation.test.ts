@@ -3887,6 +3887,22 @@ describe('slideValidation - Direct Schema & Architectural Invariant Tests', () =
 
         expect(clean).toBe('');
       });
+
+      it('purga escalas semánticas o leyendas auxiliares con secuencias ordinales (e.g. 1. I love it. 2. I like it...)', () => {
+        const withScale =
+          'Match the sentences in 1a) to the categories A–C. 1. I love it. 2. I like it. 3. It\'s okay. 4. I don\'t like it. 5. I hate it.';
+        const clean = isolateCanonicalInstruction(withScale);
+
+        expect(clean).toBe('Match the sentences in 1a) to the categories A–C.');
+      });
+
+      it('purga leyendas con dos puntos o equivalencias antes de la escala ordinal', () => {
+        const withColonScale =
+          'Match the sentences in 1a) to the categories A–C: 1 = I love it. 2 = I like it. 3 = I hate it.';
+        const clean = isolateCanonicalInstruction(withColonScale);
+
+        expect(clean).toBe('Match the sentences in 1a) to the categories A–C.');
+      });
     });
 
     describe('3. Asignación de Ejemplos Pre-resueltos en Contenedores', () => {
@@ -4365,6 +4381,50 @@ describe('slideValidation - Direct Schema & Architectural Invariant Tests', () =
         // Tokens only retain non-example items
         expect(rawSlide.interaction.tokens).toHaveLength(1);
         expect(rawSlide.interaction.tokens[0].id).toBe('tok-2');
+      });
+
+      it('10. garantiza que el reactivo N acceda correctamente a previousItems[N - 1] sin caer en fallback de índice numérico en crudo', () => {
+        const prevSlideWith8Items: any = {
+          id: 'prev-matching-8',
+          interaction: {
+            type: 'input_fields',
+            listItems: [
+              { id: '1', prompt: '1. do', expectedAnswer: 'homework.' },
+              { id: '2', prompt: '2. make', expectedAnswer: 'a mistake.' },
+              { id: '3', prompt: '3. have', expectedAnswer: 'lunch.' },
+              { id: '4', prompt: '4. take', expectedAnswer: 'a bus.' },
+              { id: '5', prompt: '5. go', expectedAnswer: 'home.' },
+              { id: '6', prompt: '6. play', expectedAnswer: 'tennis.' },
+              { id: '7', prompt: '7. read', expectedAnswer: 'a book.' },
+              { id: '8', prompt: '8. watch', expectedAnswer: 'a film.' },
+            ],
+          },
+        };
+
+        const bucketsSlide: any = {
+          id: 'slide-buckets-8',
+          subtitle: 'Use the phrases from exercise 1. Put them in categories A–B',
+          interaction: {
+            type: 'buckets_matching',
+            instruction: 'Categorize phrases',
+            buckets: [
+              { id: 'A', label: 'Activity' },
+              { id: 'B', label: 'Rest' },
+            ],
+            // Notice: token 8 is the last item (N = 8)
+            tokens: [
+              { id: 'tok-1', text: '1', correctBucketId: 'A' },
+              { id: 'tok-8', text: '8', correctBucketId: 'B' },
+            ],
+          },
+        };
+
+        normalizeBucketsMatchingInteraction(bucketsSlide, undefined, prevSlideWith8Items);
+
+        // Token 1 accesses prevTwoPartItems[0]
+        expect(bucketsSlide.interaction.tokens[0].text).toBe('do homework.');
+        // Token 8 (N) accesses prevTwoPartItems[7] (N-1) strictly, avoiding fallback of raw '8'
+        expect(bucketsSlide.interaction.tokens[1].text).toBe('watch a film.');
       });
     });
   });

@@ -31,7 +31,7 @@ export const BucketsRenderer: React.FC<Props> = ({
     block.targetSlots && block.targetSlots.length > 0 ? block.targetSlots : block.buckets || [];
 
   const targetSlots: BucketTarget[] = rawSlots.map((slot) => {
-    const bucketMatch = block.buckets?.find((b) => b.id === slot.id);
+    const bucketMatch = block.buckets?.find((b) => b.id === slot.id || (b.label && b.label === slot.label));
     const mergedItems =
       Array.isArray(slot.items) && slot.items.length > 0
         ? slot.items
@@ -417,7 +417,9 @@ export const BucketsRenderer: React.FC<Props> = ({
                         const isGraded = evaluation.isGraded !== false;
                         const isCorrect = isGraded ? (tok.correctBucketId === bucket.id || Boolean(tok.isExample)) : true;
 
-                        let tokenStyle = 'bg-white border-slate-200 text-slate-800 shadow-2xs';
+                        let tokenStyle = tok.isExample
+                          ? 'bg-slate-50 border-slate-300 text-slate-700 font-medium shadow-2xs select-none'
+                          : 'bg-white border-slate-200 text-slate-800 shadow-2xs';
                         if (isEvaluated) {
                           if (!isGraded) {
                             tokenStyle = 'bg-indigo-50 border-indigo-300 text-indigo-950 font-medium';

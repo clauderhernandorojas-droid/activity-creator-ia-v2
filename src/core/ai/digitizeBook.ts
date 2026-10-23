@@ -1269,6 +1269,31 @@ export function isolateCanonicalInstruction(text?: string): string {
   const restoreRanges = (s: string) =>
     s.replace(/__RANGE_MARKER_(\d+)__/g, (_, idx) => preservedRanges[Number(idx)] || '');
 
+  // Purgar escalas semánticas o leyendas auxiliares que comiencen con secuencias ordinales (e.g. '1. I love it. 2. I like it...')
+  const isScaleOrLegend = (str: string) => {
+    if (/(?:[:;–—\n\.]|\s*\(|\s+)\s*(?:(?:scale|legend|rating|key)[:\s]+)?\(?1\s*=\s*.*?\s*\(?2\s*=\s*/i.test(str)) return true;
+    if (/(?:[:;–—\n\.]|\s*\(|\s+)\s*(?:(?:scale|legend|rating|key)[:\s]+)?\(?1\s*[.):=-]\s*(?:I\s+(?:love|like|hate|don'?t|prefer)|strongly|agree|disagree|neutral)\b.*?\s*\(?2\s*[.):=-]/i.test(str)) return true;
+    if (/\b(?:categories|category|columns?|buckets?|groups?)\b/i.test(str) && /(?:[:;–—\n\.]|\s*\(|\s+)\s*\(?1\s*[.):=-]\s+[A-Za-z].*?\s*\(?2\s*[.):=-]\s+[A-Za-z]/i.test(str)) return true;
+    return false;
+  };
+
+  if (isScaleOrLegend(protectedText)) {
+    const scaleRegex = /(?:[:;–—\n\.]|\s*\()\s*(?:(?:scale|legend|rating|key)[:\s]+)?(?:\(?1\s*[.):=-]\s+.*?\s*\(?2\s*[.):=-]\s+.*)/i;
+    const scaleMatch = protectedText.match(scaleRegex);
+    if (scaleMatch && typeof scaleMatch.index === 'number') {
+      const prefix = protectedText.slice(0, scaleMatch.index).trim();
+      if (prefix) {
+        let candidateDirective = restoreRanges(prefix).trim().replace(/[:–—\s(]+$/, '').trim();
+        if (candidateDirective.length >= 5) {
+          if (!candidateDirective.endsWith('.') && !candidateDirective.endsWith('?') && !candidateDirective.endsWith('!')) {
+            candidateDirective += '.';
+          }
+          return candidateDirective;
+        }
+      }
+    }
+  }
+
   // Poda Canónica de la Consigna: Si la consigna contiene incrustada la declaración de las categorías,
   // podar dichas definiciones dejando únicamente la directiva principal (e.g., 'Match the sentences to categories A–C.')
   const detectedBuckets = extractCategoryBucketsFromText(protectedText);
@@ -1278,7 +1303,7 @@ export function isolateCanonicalInstruction(text?: string): string {
       const prefix = protectedText.slice(0, firstHeaderStart).trim();
       if (!prefix) return '';
       let candidateDirective = restoreRanges(prefix).trim();
-      candidateDirective = candidateDirective.replace(/[:–—\s]+$/, '');
+      candidateDirective = candidateDirective.replace(/[:–—\s(]+$/, '').trim();
       if (!candidateDirective.endsWith('.') && !candidateDirective.endsWith('?') && !candidateDirective.endsWith('!')) {
         candidateDirective += '.';
       }
@@ -2349,32 +2374,51 @@ export function normalizeBucketsMatchingInteraction(
       if (Array.isArray(it.tokens) && it.tokens.length > 0) {
         it.tokens.forEach((token: any, tIdx: number) => {
           let prevItem: { prompt: string; expectedAnswer: string } | null = null;
+          let targetIndex: number | null = null;
 
-          // 1. By numeric ID (e.g. "1", "tok-1", "src-1")
-          const idMatch = String(token.id || '').match(/(\d+)/);
-          if (idMatch) {
-            const num = parseInt(idMatch[1], 10);
-            if (num >= 1 && num <= prevTwoPartItems.length) {
-              prevItem = prevTwoPartItems[num - 1];
-            }
+          // 1. By explicit numeric index property (targetIndex, sourceIndex, index, itemIndex)
+          if (typeof token.targetIndex === 'number') {
+            targetIndex = token.targetIndex;
+          } else if (typeof token.sourceIndex === 'number') {
+            targetIndex = token.sourceIndex;
+          } else if (typeof token.index === 'number') {
+            targetIndex = token.index;
+          } else if (typeof token.itemIndex === 'number') {
+            targetIndex = token.itemIndex >= 1 ? token.itemIndex : token.itemIndex + 1;
           }
 
-          // 2. By text index (e.g. "1", "1.", "Phrase 1", "Item 1")
-          if (!prevItem) {
-            const textMatch = String(token.text || '').trim().match(/^(?:(?:phrase|item|reactivo|sentence)\s*)?(\d+)[.)]?\s*$/i);
+          // 2. By text index (e.g. "1", "1.", "Phrase 1", "Item 1", "Reactivo 1", "Sentence 1", "1: ")
+          if (targetIndex === null && token.text) {
+            const trimmedText = String(token.text).trim();
+            const textMatch = trimmedText.match(/^(?:(?:phrase|item|reactivo|sentence|oraci[oó]n|frase|no\.?|number)\s*)?(\d+)[.)\-:\s]*$/i) ||
+                              trimmedText.match(/\b(\d+)\b/);
             if (textMatch) {
-              const num = parseInt(textMatch[1], 10);
-              if (num >= 1 && num <= prevTwoPartItems.length) {
-                prevItem = prevTwoPartItems[num - 1];
-              }
+              targetIndex = parseInt(textMatch[1], 10);
             }
           }
 
-          // 3. Fallback by position index if placeholder or array counts match
-          if (!prevItem && tIdx < prevTwoPartItems.length) {
+          // 3. By numeric ID (e.g. "1", "tok-1", "src-1", "reactivo-1")
+          if (targetIndex === null && token.id) {
+            const idMatch = String(token.id).match(/(\d+)/);
+            if (idMatch) {
+              targetIndex = parseInt(idMatch[1], 10);
+            }
+          }
+
+          // 4. Fallback by position index (1-based) if placeholder or array counts match
+          if (targetIndex === null && tIdx < prevTwoPartItems.length) {
             const isPlaceholder = !token.text || token.text.trim().length <= 4 || /^\d+$/.test(token.text.trim());
             if (isPlaceholder || it.tokens.length === prevTwoPartItems.length) {
-              prevItem = prevTwoPartItems[tIdx];
+              targetIndex = tIdx + 1;
+            }
+          }
+
+          // Normalización estricta a base 0: const itemIndex = targetIndex - 1
+          // Garantizar que el reactivo N (último elemento) acceda correctamente a previousItems[N - 1]
+          if (targetIndex !== null) {
+            const itemIndex = targetIndex >= 1 ? targetIndex - 1 : targetIndex;
+            if (itemIndex >= 0 && itemIndex < prevTwoPartItems.length) {
+              prevItem = prevTwoPartItems[itemIndex];
             }
           }
 
