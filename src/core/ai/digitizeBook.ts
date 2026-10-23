@@ -1184,10 +1184,10 @@ export function extractCategoryBucketsFromText(
 
     let content = restoreRanges(rawContent).trim();
 
-    // Detección de marcadores ordinales de ejemplo (e.g. ': 1', ': 1.', '(1)', '(example: 1)', ': example')
+    // Detección de marcadores ordinales de ejemplo (e.g. ': 1', ': 1.', '(1)', '(example: 1)', '(e.g. 1)', ': example')
     let exampleMarker: string | null = null;
     const exMatch = content.match(
-      /(?:[:–—]\s*(?:example\s*)?(\d+[\.\)]?|\bexample\b)|\((?:example[:\s]*)?(\d+[\.\)]?)\))\s*$/i
+      /(?:[:–—]\s*(?:(?:example|e\.g\.)\s*[:\s]*)?(\d+[\.\)]?|\bexample\b)|\((?:(?:example|e\.g\.)[:\s]*)?(\d+[\.\)]?)\))\s*$/i
     );
     if (exMatch) {
       exampleMarker = (exMatch[1] || exMatch[2] || 'example').replace(/[\.\)]/g, '').trim();
@@ -2093,17 +2093,90 @@ export function decoupleWordBankTokensAndPreserveContext(
 }
 
 /**
+ * Extracts prompt and expectedAnswer pairs from previous slide context for two-part matching meta-activities.
+ */
+export function extractTwoPartItemsFromSlide(
+  slide?: Slide | null
+): Array<{ prompt: string; expectedAnswer: string; id?: string }> {
+  if (!slide || !slide.interaction) return [];
+  const it = slide.interaction as any;
+  const items: Array<{ prompt: string; expectedAnswer: string; id?: string }> = [];
+
+  if (it.type === 'input_fields' && Array.isArray(it.listItems)) {
+    for (const li of it.listItems) {
+      const p = (li.prompt || li.text || '').trim();
+      const a = (li.expectedAnswer || (Array.isArray(li.acceptedAnswers) ? li.acceptedAnswers[0] : '') || '').trim();
+      if (p && a) {
+        items.push({ id: li.id, prompt: p, expectedAnswer: a });
+      }
+    }
+  } else if (it.type === 'buckets_matching' && Array.isArray(it.tokens)) {
+    for (const tok of it.tokens) {
+      if (tok.text && tok.correctBucketId) {
+        const bucket = it.buckets?.find((b: any) => b.id === tok.correctBucketId);
+        items.push({ id: tok.id, prompt: tok.text, expectedAnswer: bucket?.label || tok.correctBucketId });
+      }
+    }
+  } else if (it.type === 'selection' && Array.isArray(it.questions)) {
+    for (const q of it.questions) {
+      const p = (q.prompt || q.question || '').trim();
+      const a = (q.options?.find((o: any) => o.isCorrect)?.text || '').trim();
+      if (p && a) {
+        items.push({ id: q.id, prompt: p, expectedAnswer: a });
+      }
+    }
+  }
+
+  return items;
+}
+
+/**
  * Normaliza y estructura un bloque de interacción de tipo buckets_matching:
  * 1. Poda cualquier texto explicativo de las categorías que haya fugado a instruction, prompt o subtitle.
- * 2. Si las categorías no estaban estructuradas, las extrae de forma agnóstica mediante extractCategoryBucketsFromText.
- * 3. Preserva 'sentence case' en las cabeceras de cada contenedor.
- * 4. Asigna ejemplos pre-resueltos en los contenedores meta con isExample: true y los excluye del banco interactivo.
+ * 2. Hidratación Determinística de Targets: si parsedBuckets tiene definiciones y los targets del payload
+ *    tienen etiquetas cortas (length <= 2, e.g. 'A', 'B'), se reemplazan determinísticamente con las etiquetas descriptivas.
+ * 3. Ensamblado Programático de Reactivos por Referencia Cruzada (Zero-LLM Synthesis):
+ *    Sintetiza programáticamente cada ficha si es una meta-actividad sobre un ejercicio previo de dos partes:
+ *    `${prevItem.prompt.trim()} ${prevItem.expectedAnswer.trim()}`.
+ * 4. Normalización Tipográfica: Preserva 'sentence case' en las cabeceras de los contenedores.
+ * 5. Descuento Determinístico de Ejemplos: Si un bucket tiene _exampleMarker con identificador k,
+ *    mueve la ficha al bucket receptor con isExample: true y la excluye del banco interactivo de fichas ('draggable items').
  */
-export function normalizeBucketsMatchingInteraction(rawSlide: any, fallbackRawText?: string): void {
+export function normalizeBucketsMatchingInteraction(
+  rawSlide: any,
+  fallbackRawText?: string,
+  previousSlideContext?: Slide | null
+): void {
   if (!rawSlide.interaction || rawSlide.interaction.type !== 'buckets_matching') return;
   const it = rawSlide.interaction;
 
-  // 1. Prohibir terminantemente que el texto explicativo de las categorías sea concatenado en 'instruction' o 'prompt'
+  // 1. Hidratación Determinística de Targets en buckets_matching:
+  // Escanear fuentes de texto crudo individuales (fallbackRawText, subtitle, instruction, etc.)
+  // ANTES de que sean podadas por isolateCanonicalInstruction
+  const candidateTexts = [
+    fallbackRawText,
+    (rawSlide as any)._rawInstructionText,
+    rawSlide.subtitle,
+    it.instruction,
+    it.prompt,
+    rawSlide.title,
+  ].filter(Boolean) as string[];
+
+  let parsedBuckets: any[] = [];
+  for (const txt of candidateTexts) {
+    const detected = extractCategoryBucketsFromText(txt, it.tokens || it.sourceItems);
+    if (detected.length >= 2) {
+      parsedBuckets = detected;
+      break;
+    }
+  }
+
+  const textToScan = `${fallbackRawText || ''} ${(rawSlide as any)._rawInstructionText || ''} ${rawSlide.title || ''} ${rawSlide.subtitle || ''} ${it.instruction || ''} ${it.prompt || ''} ${rawSlide.contextBody || ''} ${(rawSlide.referenceContent as any)?.content || ''}`;
+  if (parsedBuckets.length === 0) {
+    parsedBuckets = extractCategoryBucketsFromText(textToScan, it.tokens || it.sourceItems);
+  }
+
+  // 2. Prohibir terminantemente que el texto explicativo de las categorías sea concatenado en 'instruction' o 'prompt'
   if (it.instruction) {
     const cleanInst = isolateCanonicalInstruction(it.instruction);
     if (cleanInst) it.instruction = cleanInst;
@@ -2117,52 +2190,190 @@ export function normalizeBucketsMatchingInteraction(rawSlide: any, fallbackRawTe
     rawSlide.subtitle = cleanSub || undefined;
   }
 
-  // 2. Extraer o enriquecer categorías receptoras si faltan o si se declaran en el texto
-  const textToScan = `${fallbackRawText || ''} ${rawSlide.title || ''} ${rawSlide.subtitle || ''} ${it.instruction || ''} ${rawSlide.contextBody || ''} ${(rawSlide.referenceContent as any)?.content || ''}`;
-  const detected = extractCategoryBucketsFromText(textToScan, it.tokens || it.sourceItems);
+  const existingTargets = (Array.isArray(it.buckets) && it.buckets.length > 0)
+    ? it.buckets
+    : (Array.isArray(it.targetSlots) && it.targetSlots.length > 0)
+    ? it.targetSlots
+    : Array.isArray(it.targets)
+    ? it.targets
+    : [];
 
-  if ((!Array.isArray(it.buckets) || it.buckets.length === 0) && detected.length >= 2) {
-    it.buckets = detected;
-    it.targetSlots = detected;
+  const isShortOrIndexLabel = (label?: string) => {
+    if (!label) return true;
+    const t = label.trim();
+    return t.length <= 2 && (/^[A-Za-z0-9][\.\)]?$/.test(t) || !/[a-z]{2,}/i.test(t));
+  };
+
+  if (parsedBuckets.length > 0) {
+    const hasShortLabels = existingTargets.length === 0 ||
+      existingTargets.some((b: any) => isShortOrIndexLabel(b.label));
+
+    if (hasShortLabels) {
+      const hydratedTargets = parsedBuckets.map((b, bIdx) => {
+        const rawLabel = b.label || '';
+        const cleanLabel = toSentenceCase(rawLabel.replace(/^[A-Za-z0-9]\s*·\s*/, ''));
+        return {
+          id: b.id,
+          label: cleanLabel || b.label,
+          items: (b.items && b.items.length > 0) ? b.items : (existingTargets[bIdx]?.items || []),
+          _exampleMarker: b._exampleMarker,
+        };
+      });
+      it.buckets = hydratedTargets;
+      it.targetSlots = hydratedTargets;
+      it.targets = hydratedTargets;
+    }
+  } else if (existingTargets.length >= 2 && (!it.buckets || it.buckets.length === 0)) {
+    it.buckets = existingTargets;
+    it.targetSlots = existingTargets;
   }
 
+  // 3. Ensamblado Programático de Reactivos por Referencia Cruzada (Zero-LLM Synthesis)
+  const crossRef = detectCrossActivityReference(textToScan);
+  if (previousSlideContext && (crossRef || /\b(?:from|in|use|using)\s+(?:the\s+)?(?:phrases|words|items|sentences|exercise|activity)\b/i.test(textToScan))) {
+    const prevTwoPartItems = extractTwoPartItemsFromSlide(previousSlideContext);
+    if (prevTwoPartItems.length > 0) {
+      if (Array.isArray(it.tokens) && it.tokens.length > 0) {
+        it.tokens.forEach((token: any, tIdx: number) => {
+          let prevItem: { prompt: string; expectedAnswer: string } | null = null;
+
+          // 1. By numeric ID (e.g. "1", "tok-1", "src-1")
+          const idMatch = String(token.id || '').match(/(\d+)/);
+          if (idMatch) {
+            const num = parseInt(idMatch[1], 10);
+            if (num >= 1 && num <= prevTwoPartItems.length) {
+              prevItem = prevTwoPartItems[num - 1];
+            }
+          }
+
+          // 2. By text index (e.g. "1", "1.", "Phrase 1", "Item 1")
+          if (!prevItem) {
+            const textMatch = String(token.text || '').trim().match(/^(?:(?:phrase|item|reactivo|sentence)\s*)?(\d+)[.)]?\s*$/i);
+            if (textMatch) {
+              const num = parseInt(textMatch[1], 10);
+              if (num >= 1 && num <= prevTwoPartItems.length) {
+                prevItem = prevTwoPartItems[num - 1];
+              }
+            }
+          }
+
+          // 3. Fallback by position index if placeholder or array counts match
+          if (!prevItem && tIdx < prevTwoPartItems.length) {
+            const isPlaceholder = !token.text || token.text.trim().length <= 4 || /^\d+$/.test(token.text.trim());
+            if (isPlaceholder || it.tokens.length === prevTwoPartItems.length) {
+              prevItem = prevTwoPartItems[tIdx];
+            }
+          }
+
+          if (prevItem) {
+            const tokenText = `${prevItem.prompt.trim()} ${prevItem.expectedAnswer.trim()}`.replace(/\s+/g, ' ');
+            token.text = tokenText;
+          }
+        });
+      } else if ((!Array.isArray(it.tokens) || it.tokens.length === 0) && prevTwoPartItems.length > 0) {
+        it.tokens = prevTwoPartItems.map((prevItem, pIdx) => {
+          const tokenText = `${prevItem.prompt.trim()} ${prevItem.expectedAnswer.trim()}`.replace(/\s+/g, ' ');
+          return {
+            id: `tok-${pIdx + 1}`,
+            text: tokenText,
+            correctBucketId: it.buckets?.[0]?.id || 'slot-1',
+          };
+        });
+      }
+
+      if (Array.isArray(it.tokens)) {
+        it.sourceItems = it.tokens.map((t: any) => ({
+          id: t.id,
+          text: t.text,
+          correctTargetId: t.correctBucketId,
+          isExample: t.isExample,
+        }));
+      }
+    }
+  }
+
+  // 4. Normalización Tipográfica y 5. Descuento Determinístico de Ejemplos
   if (Array.isArray(it.buckets) && it.buckets.length > 0) {
-    // 3. Normalización Tipográfica: Preservar 'sentence case' en las cabeceras de los contenedores
     it.buckets = it.buckets.map((b: any, bIdx: number) => {
-      const id = b.id || (detected[bIdx] ? detected[bIdx].id : `slot-${bIdx + 1}`);
+      const id = b.id || (parsedBuckets[bIdx] ? parsedBuckets[bIdx].id : `slot-${bIdx + 1}`);
       const rawLabel = b.label || b.id || '';
+      const cleanLabel = toSentenceCase(rawLabel.replace(/^[A-Za-z0-9]\s*·\s*/, ''));
       return {
         ...b,
         id,
-        label: toSentenceCase(rawLabel),
+        label: cleanLabel,
         items: Array.isArray(b.items) ? b.items : [],
       };
     });
 
-    // 4. Asignación de Ejemplos Pre-resueltos en Contenedores:
-    // Identificar marcadores ordinales de muestra (e.g. '1', '1.', 'example')
     const markerMap = new Map<string, string>();
-    for (const d of detected) {
+    for (const d of parsedBuckets) {
       if (d._exampleMarker) {
         markerMap.set(d.id, d._exampleMarker);
       }
     }
 
+    const discountedExampleIds = new Set<string>();
+
+    // Also collect any example item IDs already present in bucket items
+    for (const bucket of it.buckets) {
+      if (Array.isArray(bucket.items)) {
+        bucket.items.forEach((item: any) => {
+          if (item.isExample && item.id) {
+            discountedExampleIds.add(item.id);
+          }
+        });
+      }
+    }
+
     if (Array.isArray(it.tokens)) {
+      // Step A: Preserve tokens already explicitly marked with isExample into their target bucket
+      for (const t of it.tokens) {
+        if (t.isExample && t.correctBucketId) {
+          const destBucket = it.buckets.find((b: any) => b.id === t.correctBucketId);
+          if (destBucket) {
+            discountedExampleIds.add(t.id);
+            if (!destBucket.items) destBucket.items = [];
+            if (!destBucket.items.some((item: any) => item.id === t.id)) {
+              destBucket.items.push({
+                id: t.id,
+                text: t.text,
+                correctBucketId: destBucket.id,
+                isExample: true,
+              });
+            }
+          }
+        }
+      }
+
+      // Step B: Resolve example markers (_exampleMarker) from parsed categories
       for (const bucket of it.buckets) {
-        const marker = markerMap.get(bucket.id);
+        const marker = bucket._exampleMarker || markerMap.get(bucket.id);
         if (marker) {
           const targetToken = it.tokens.find(
-            (t: any) =>
-              t.id === marker ||
-              t.id === `tok-${marker}` ||
-              t.id === `src-${marker}` ||
-              (t.text && (t.text.startsWith(`${marker}.`) || t.text.startsWith(`${marker} `)))
-          ) || (marker === 'example' || marker === '1' ? it.tokens[0] : null);
+            (t: any, tIdx: number) => {
+              const kStr = String(marker).replace(/[\.\)]/g, '').trim().toLowerCase();
+              if (kStr === 'example' || kStr === '1') {
+                if (t.isExample) return true;
+                if (tIdx === 0) return true;
+              }
+              const tIdStr = String(t.id || '').replace(/^tok-|^src-/, '');
+              if (tIdStr === kStr) return true;
+              if (t.text && (t.text.startsWith(`${kStr}.`) || t.text.startsWith(`${kStr} `) || t.text.trim() === kStr)) {
+                return true;
+              }
+              if (/^\d+$/.test(kStr) && parseInt(kStr, 10) - 1 === tIdx) {
+                return true;
+              }
+              return false;
+            }
+          );
 
           if (targetToken) {
             targetToken.isExample = true;
             targetToken.correctBucketId = bucket.id;
+            discountedExampleIds.add(targetToken.id);
+
             if (!bucket.items) bucket.items = [];
             if (!bucket.items.some((item: any) => item.id === targetToken.id)) {
               bucket.items.push({
@@ -2175,10 +2386,24 @@ export function normalizeBucketsMatchingInteraction(rawSlide: any, fallbackRawTe
           }
         }
       }
+
+      // El banco interactivo debe quedar constituido exclusivamente por los ítems no marcados como ejemplo
+      if (discountedExampleIds.size > 0) {
+        it.tokens = it.tokens.filter((t: any) => !t.isExample && !discountedExampleIds.has(t.id));
+        it.sourceItems = it.tokens.map((t: any) => ({
+          id: t.id,
+          text: t.text,
+          correctTargetId: t.correctBucketId,
+          isExample: t.isExample,
+        }));
+      }
     }
 
     if (Array.isArray(it.targetSlots)) {
       it.targetSlots = it.buckets;
+    }
+    if (Array.isArray(it.targets)) {
+      it.targets = it.buckets;
     }
   }
 }
@@ -3869,7 +4094,7 @@ export function validateAndParseSlides(
       if (rawSlide.interaction.type === 'input_fields') {
         decoupleWordBankTokensAndPreserveContext(rawSlide, effectiveContext);
       } else if (rawSlide.interaction.type === 'buckets_matching') {
-        normalizeBucketsMatchingInteraction(rawSlide, (rawSlide as any)._rawInstructionText);
+        normalizeBucketsMatchingInteraction(rawSlide, (rawSlide as any)._rawInstructionText, effectiveContext);
       }
     }
 
@@ -4062,6 +4287,9 @@ MULTI-SLIDE SEGMENTATION & CROSS-REFERENCING DIRECTIVES:
      * The model MUST emit one distinct element in the "slides" array for EACH identified activity (e.g. [slide-1, slide-2, ...]).
      * It is STRICTLY FORBIDDEN to ignore visible activities or to arbitrarily merge separate, independent exercises into a single slide.
 2. CROSS-REFERENCING RESOLUTION INVARIANT & STRICT ISOLATION OF INTERACTIVE ITEMS:
+   - ZERO-LLM TOKEN SYNTHESIS EN META-ACTIVIDADES DE CLASIFICACIÓN (BUCKETS):
+     * Si la consigna actual es una meta-actividad referencial sobre un ejercicio previo de dos partes (e.g. clasificar frases de un matching o completado de mitades de 'PREVIOUS_SLIDE_CONTEXT' en categorías o buckets):
+       QUEDA TERMINANTEMENTE PROHIBIDO reescribir o transcribir los textos de las frases en los 'tokens' de 'buckets_matching'. En su lugar, el modelo DEBE emitir únicamente los índices de referencia numérica correspondientes (ej. id: "1", "2", ... o text: "1", "2", ... con 'correctBucketId'). El sistema ensamblará y sintetizará los textos de las fichas programáticamente en TypeScript con identidad textual 100% idéntica a la diapositiva fuente.
    - AISLAMIENTO ESTRICTO DE REACTIVOS (ZERO CROSS-SLIDE CLONING):
      * Los reactivos interactivos (preguntas, reactivos, selecciones, casillas, y audios de verificación) de CADA diapositiva se originan ÚNICA Y EXCLUSIVAMENTE a partir de los elementos impresos y visibles en el recorte actual.
      * Queda estrictamente prohibido arrastrar, clonar, fusionar o reemitir preguntas, opciones interactivas, audios ('verificationAudioUrl') o consignas presentes en 'PREVIOUS_SLIDE_CONTEXT'.

@@ -317,9 +317,14 @@ export const BucketsRenderer: React.FC<Props> = ({
             ) : (
               <div className={`flex-1 grid ${getGridColsClass(targetSlots.length)} gap-3.5 min-h-[180px]`}>
                 {targetSlots.map((bucket) => {
-                  const assignedTokens = block.tokens.filter(
+                  const bucketExampleItems = (Array.isArray(bucket.items) ? bucket.items : []).filter((item: any) => item.isExample);
+                  const assignedTokensFromUser = (block.tokens || []).filter(
                     (tok) => (studentAnswers[tok.id] || (tok.isExample ? tok.correctBucketId : undefined)) === bucket.id
                   );
+                  const assignedTokens = [
+                    ...bucketExampleItems,
+                    ...assignedTokensFromUser.filter((tok) => !bucketExampleItems.some((e: any) => e.id === tok.id)),
+                  ];
 
                   return (
                     <div
