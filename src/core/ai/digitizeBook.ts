@@ -1019,6 +1019,235 @@ export function extractDisjunctiveAlternatives(text: string): { prompt: string; 
 }
 
 /**
+ * Normaliza una cabecera de categoría o texto para preservar 'sentence case',
+ * evitando conversiones involuntarias a mayúsculas sostenidas.
+ */
+export function toSentenceCase(str?: string): string {
+  if (!str || typeof str !== 'string') return '';
+  const trimmed = str.trim();
+  if (!trimmed) return '';
+
+  const prefixMatch = trimmed.match(/^([A-Za-z\d]+)\s*[·:-]\s*(.*)$/);
+  if (prefixMatch) {
+    const id = prefixMatch[1];
+    const rest = prefixMatch[2].trim();
+    return `${id} · ${toSentenceCase(rest)}`;
+  }
+
+  if (trimmed === trimmed.toUpperCase() && trimmed.length > 2 && /[A-Z]/.test(trimmed)) {
+    return trimmed.charAt(0).toUpperCase() + trimmed.slice(1).toLowerCase();
+  }
+
+  return trimmed;
+}
+
+export interface ExtractedCategoryBucket {
+  id: string;
+  label: string;
+  items: Array<{
+    id?: string;
+    text: string;
+    correctBucketId?: string;
+    isExample?: boolean;
+    [key: string]: any;
+  }>;
+  headerStart?: number;
+  _exampleMarker?: string;
+}
+
+/**
+ * Detección y Extracción Estructural de Categorías Receptores (Buckets).
+ * Detecta patrones secuenciales de encabezados de categoría delimitados por letras, números o viñetas
+ * y mapea cada coincidencia como un bucket independiente:
+ *   id: match[1],
+ *   label: `${match[1]} · ${cleanLabel}`,
+ *   items: []
+ * Prohíbe terminantemente que el texto explicativo de las categorías sea concatenado en 'instruction' o 'prompt'.
+ * Si bajo la definición de una categoría existen marcadores ordinales de muestra (e.g. '1', '1.', 'example'),
+ * identifica el ítem correspondiente del corpus referencial y lo inserta en el contenedor meta con isExample: true.
+ */
+export function extractCategoryBucketsFromText(
+  text?: string,
+  referenceCorpus?: string | string[] | Array<{ id?: string; text?: string; prompt?: string; [key: string]: any }>
+): ExtractedCategoryBucket[] {
+  if (!text || typeof text !== 'string') return [];
+  const trimmed = text.trim();
+  if (!trimmed) return [];
+
+  // Enmascaramiento de rangos alfanuméricos (e.g. 'A–C', '1–5') para proteger su integridad
+  const preservedRanges: string[] = [];
+  const rangeRegex = /\b(?:\d+\s*(?:[-–—]|\bto\b)\s*\d+|[a-zA-Z]\s*(?:[-–—]|\bto\b)\s*[a-zA-Z])\b/g;
+  const protectedText = trimmed.replace(rangeRegex, (match) => {
+    preservedRanges.push(match);
+    return `__RANGE_MARKER_${preservedRanges.length - 1}__`;
+  });
+  const restoreRanges = (s: string) =>
+    s.replace(/__RANGE_MARKER_(\d+)__/g, (_, idx) => preservedRanges[Number(idx)] || '');
+
+  // Detección de posibles cabeceras de categoría: letras [A-Z] o dígitos \d+
+  // Delimitados por inicio, salto de línea o espacios.
+  // Los dígitos después de dos puntos (: 1) se excluyen para no confundir ejemplos con categorías
+  const headerRegex = /(?:^|(?<=\s))([A-Z])[\.\):]?\s+|(?:^|(?<![:–—]\s*)(?<=\s))(\d+)[\.\):]?\s+/g;
+
+  const allHeaders: Array<{
+    id: string;
+    upperId: string;
+    headerStart: number;
+    contentStart: number;
+    fullMatch: string;
+  }> = [];
+
+  let m: RegExpExecArray | null;
+  while ((m = headerRegex.exec(protectedText)) !== null) {
+    const rawId = m[1] || m[2];
+    const fullMatch = m[0];
+    const headerStart = m.index + (fullMatch.length - fullMatch.trimStart().length);
+    const contentStart = m.index + fullMatch.length;
+    allHeaders.push({
+      id: rawId,
+      upperId: rawId.toUpperCase(),
+      headerStart,
+      contentStart,
+      fullMatch,
+    });
+  }
+
+  // Buscar la mejor subsecuencia secuencial de al menos 2 categorías (A -> B -> C o 1 -> 2 -> 3)
+  let bestSequence: typeof allHeaders = [];
+  for (let i = 0; i < allHeaders.length; i++) {
+    const currentSeq = [allHeaders[i]];
+    for (let j = i + 1; j < allHeaders.length; j++) {
+      const prev = currentSeq[currentSeq.length - 1];
+      const curr = allHeaders[j];
+
+      const isLetterSeq =
+        /^[A-Z]$/.test(prev.upperId) &&
+        /^[A-Z]$/.test(curr.upperId) &&
+        curr.upperId.charCodeAt(0) === prev.upperId.charCodeAt(0) + 1;
+      const isNumSeq =
+        /^\d+$/.test(prev.id) &&
+        /^\d+$/.test(curr.id) &&
+        Number(curr.id) === Number(prev.id) + 1;
+
+      if (isLetterSeq || isNumSeq) {
+        currentSeq.push(curr);
+      }
+    }
+    if (currentSeq.length > bestSequence.length) {
+      bestSequence = currentSeq;
+    }
+  }
+
+  if (bestSequence.length < 2) {
+    return [];
+  }
+
+  // Parsear corpus referencial si se proporciona
+  let parsedCorpus: Array<{ id: string; text: string; raw: any }> = [];
+  if (Array.isArray(referenceCorpus)) {
+    parsedCorpus = referenceCorpus.map((item, idx) => {
+      if (typeof item === 'string') {
+        const ordMatch = item.match(/^(\d+)[.)]?\s*(.*)$/);
+        return {
+          id: ordMatch ? ordMatch[1] : String(idx + 1),
+          text: ordMatch ? ordMatch[2].trim() || item.trim() : item.trim(),
+          raw: item.trim(),
+        };
+      }
+      return {
+        id: String(item.id || idx + 1),
+        text: String(item.text || item.prompt || '').trim(),
+        raw: item,
+      };
+    });
+  } else if (typeof referenceCorpus === 'string' && referenceCorpus.trim()) {
+    const lines = referenceCorpus.split(/\n+/).map((l) => l.trim()).filter(Boolean);
+    parsedCorpus = lines.map((l, idx) => {
+      const ordMatch = l.match(/^(\d+)[.)]?\s*(.*)$/);
+      return {
+        id: ordMatch ? ordMatch[1] : String(idx + 1),
+        text: ordMatch ? ordMatch[2].trim() || l : l,
+        raw: l,
+      };
+    });
+  }
+
+  const buckets: ExtractedCategoryBucket[] = [];
+  const assignedExampleItemIds = new Set<string>();
+
+  for (let k = 0; k < bestSequence.length; k++) {
+    const curr = bestSequence[k];
+    const next = bestSequence[k + 1];
+    const rawContent = next
+      ? protectedText.slice(curr.contentStart, next.headerStart)
+      : protectedText.slice(curr.contentStart);
+
+    let content = restoreRanges(rawContent).trim();
+
+    // Detección de marcadores ordinales de ejemplo (e.g. ': 1', ': 1.', '(1)', '(example: 1)', ': example')
+    let exampleMarker: string | null = null;
+    const exMatch = content.match(
+      /(?:[:–—]\s*(?:example\s*)?(\d+[\.\)]?|\bexample\b)|\((?:example[:\s]*)?(\d+[\.\)]?)\))\s*$/i
+    );
+    if (exMatch) {
+      exampleMarker = (exMatch[1] || exMatch[2] || 'example').replace(/[\.\)]/g, '').trim();
+      content = content.slice(0, exMatch.index).trim();
+    } else {
+      content = content.replace(/[:–—\s]+$/, '').trim();
+    }
+
+    const normalized = toSentenceCase(content);
+    const cleanLabel = normalized ? normalized.charAt(0).toUpperCase() + normalized.slice(1) : '';
+    const bucketItems: any[] = [];
+
+    // Inserción de ejemplo pre-resuelto en el contenedor meta con isExample: true
+    if (exampleMarker && parsedCorpus.length > 0) {
+      let matchedItem: { id: string; text: string; raw: any } | null = null;
+      if (exampleMarker.toLowerCase() === 'example') {
+        matchedItem = parsedCorpus[0];
+      } else {
+        matchedItem = parsedCorpus.find((c) => c.id === exampleMarker || c.text.startsWith(exampleMarker)) || null;
+        if (!matchedItem && /^\d+$/.test(exampleMarker)) {
+          const idx = parseInt(exampleMarker, 10) - 1;
+          if (idx >= 0 && idx < parsedCorpus.length) {
+            matchedItem = parsedCorpus[idx];
+          }
+        }
+      }
+
+      if (matchedItem) {
+        assignedExampleItemIds.add(matchedItem.id);
+        bucketItems.push({
+          id: matchedItem.id,
+          text: matchedItem.text,
+          correctBucketId: curr.id,
+          isExample: true,
+        });
+      }
+    }
+
+    buckets.push({
+      id: curr.id,
+      label: `${curr.id} · ${cleanLabel}`,
+      items: bucketItems,
+      headerStart: curr.headerStart,
+      _exampleMarker: exampleMarker || undefined,
+    });
+  }
+
+  if (parsedCorpus.length > 0) {
+    const unassigned = parsedCorpus.filter((item) => !assignedExampleItemIds.has(item.id));
+    Object.defineProperty(buckets, 'unassignedItems', {
+      value: unassigned,
+      enumerable: false,
+      writable: true,
+    });
+  }
+
+  return buckets;
+}
+
+/**
  * Isolates the canonical pedagogical directive in instructions or subtitles,
  * pruning any child reactive items, numbered sequences, or slash-delimited breakdowns
  * that leaked into the instruction node (Instruction Isolation Principle).
@@ -1039,6 +1268,23 @@ export function isolateCanonicalInstruction(text?: string): string {
 
   const restoreRanges = (s: string) =>
     s.replace(/__RANGE_MARKER_(\d+)__/g, (_, idx) => preservedRanges[Number(idx)] || '');
+
+  // Poda Canónica de la Consigna: Si la consigna contiene incrustada la declaración de las categorías,
+  // podar dichas definiciones dejando únicamente la directiva principal (e.g., 'Match the sentences to categories A–C.')
+  const detectedBuckets = extractCategoryBucketsFromText(protectedText);
+  if (detectedBuckets.length >= 2) {
+    const firstHeaderStart = detectedBuckets[0].headerStart;
+    if (typeof firstHeaderStart === 'number') {
+      const prefix = protectedText.slice(0, firstHeaderStart).trim();
+      if (!prefix) return '';
+      let candidateDirective = restoreRanges(prefix).trim();
+      candidateDirective = candidateDirective.replace(/[:–—\s]+$/, '');
+      if (!candidateDirective.endsWith('.') && !candidateDirective.endsWith('?') && !candidateDirective.endsWith('!')) {
+        candidateDirective += '.';
+      }
+      return candidateDirective;
+    }
+  }
 
   // Has child items / delimiters signature
   const hasChildLeak =
@@ -1847,6 +2093,97 @@ export function decoupleWordBankTokensAndPreserveContext(
 }
 
 /**
+ * Normaliza y estructura un bloque de interacción de tipo buckets_matching:
+ * 1. Poda cualquier texto explicativo de las categorías que haya fugado a instruction, prompt o subtitle.
+ * 2. Si las categorías no estaban estructuradas, las extrae de forma agnóstica mediante extractCategoryBucketsFromText.
+ * 3. Preserva 'sentence case' en las cabeceras de cada contenedor.
+ * 4. Asigna ejemplos pre-resueltos en los contenedores meta con isExample: true y los excluye del banco interactivo.
+ */
+export function normalizeBucketsMatchingInteraction(rawSlide: any, fallbackRawText?: string): void {
+  if (!rawSlide.interaction || rawSlide.interaction.type !== 'buckets_matching') return;
+  const it = rawSlide.interaction;
+
+  // 1. Prohibir terminantemente que el texto explicativo de las categorías sea concatenado en 'instruction' o 'prompt'
+  if (it.instruction) {
+    const cleanInst = isolateCanonicalInstruction(it.instruction);
+    if (cleanInst) it.instruction = cleanInst;
+  }
+  if (it.prompt) {
+    const cleanPrompt = isolateCanonicalInstruction(it.prompt);
+    it.prompt = cleanPrompt || undefined;
+  }
+  if (rawSlide.subtitle) {
+    const cleanSub = isolateCanonicalInstruction(rawSlide.subtitle);
+    rawSlide.subtitle = cleanSub || undefined;
+  }
+
+  // 2. Extraer o enriquecer categorías receptoras si faltan o si se declaran en el texto
+  const textToScan = `${fallbackRawText || ''} ${rawSlide.title || ''} ${rawSlide.subtitle || ''} ${it.instruction || ''} ${rawSlide.contextBody || ''} ${(rawSlide.referenceContent as any)?.content || ''}`;
+  const detected = extractCategoryBucketsFromText(textToScan, it.tokens || it.sourceItems);
+
+  if ((!Array.isArray(it.buckets) || it.buckets.length === 0) && detected.length >= 2) {
+    it.buckets = detected;
+    it.targetSlots = detected;
+  }
+
+  if (Array.isArray(it.buckets) && it.buckets.length > 0) {
+    // 3. Normalización Tipográfica: Preservar 'sentence case' en las cabeceras de los contenedores
+    it.buckets = it.buckets.map((b: any, bIdx: number) => {
+      const id = b.id || (detected[bIdx] ? detected[bIdx].id : `slot-${bIdx + 1}`);
+      const rawLabel = b.label || b.id || '';
+      return {
+        ...b,
+        id,
+        label: toSentenceCase(rawLabel),
+        items: Array.isArray(b.items) ? b.items : [],
+      };
+    });
+
+    // 4. Asignación de Ejemplos Pre-resueltos en Contenedores:
+    // Identificar marcadores ordinales de muestra (e.g. '1', '1.', 'example')
+    const markerMap = new Map<string, string>();
+    for (const d of detected) {
+      if (d._exampleMarker) {
+        markerMap.set(d.id, d._exampleMarker);
+      }
+    }
+
+    if (Array.isArray(it.tokens)) {
+      for (const bucket of it.buckets) {
+        const marker = markerMap.get(bucket.id);
+        if (marker) {
+          const targetToken = it.tokens.find(
+            (t: any) =>
+              t.id === marker ||
+              t.id === `tok-${marker}` ||
+              t.id === `src-${marker}` ||
+              (t.text && (t.text.startsWith(`${marker}.`) || t.text.startsWith(`${marker} `)))
+          ) || (marker === 'example' || marker === '1' ? it.tokens[0] : null);
+
+          if (targetToken) {
+            targetToken.isExample = true;
+            targetToken.correctBucketId = bucket.id;
+            if (!bucket.items) bucket.items = [];
+            if (!bucket.items.some((item: any) => item.id === targetToken.id)) {
+              bucket.items.push({
+                id: targetToken.id,
+                text: targetToken.text,
+                correctBucketId: bucket.id,
+                isExample: true,
+              });
+            }
+          }
+        }
+      }
+    }
+
+    if (Array.isArray(it.targetSlots)) {
+      it.targetSlots = it.buckets;
+    }
+  }
+}
+
+/**
  * Detects whether reference content is solely spurious metadata
  * (an exercise instruction, task directive, or single model/example sentence)
  * rather than an autonomous continuous reading or consultation text.
@@ -2488,6 +2825,9 @@ export function validateAndParseSlides(
     if (rawSlide.subtitle && isAnswerKeyContent(rawSlide.subtitle)) {
       rawSlide.subtitle = undefined;
     }
+
+    const rawInstructionText = `${rawSlide.subtitle || ''} ${(rawSlide.interaction as any)?.instruction || ''} ${rawSlide.contextBody || ''} ${(rawSlide.referenceContent as any)?.content || ''}`;
+    (rawSlide as any)._rawInstructionText = rawInstructionText;
 
     // Invariante de Aislamiento de la Consigna (Instruction Isolation Principle)
     if (rawSlide.subtitle) {
@@ -3518,8 +3858,12 @@ export function validateAndParseSlides(
       }
       if (rawSlide.interaction.type === 'input_fields') {
         decoupleWordBankTokensAndPreserveContext(rawSlide, effectiveContext);
+      } else if (rawSlide.interaction.type === 'buckets_matching') {
+        normalizeBucketsMatchingInteraction(rawSlide, (rawSlide as any)._rawInstructionText);
       }
     }
+
+    delete (rawSlide as any)._rawInstructionText;
 
     const parseResult = SlideSchema.safeParse(rawSlide);
 

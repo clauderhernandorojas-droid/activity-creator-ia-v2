@@ -174,6 +174,7 @@ export const TargetSlotSchema = z.object({
   label: z.string(),
   description: z.string().optional(),
   color: z.string().optional(),
+  items: z.array(z.any()).optional(),
 });
 
 export const SourceItemSchema = z.object({

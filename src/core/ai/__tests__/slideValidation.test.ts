@@ -8,6 +8,8 @@ import {
   extractDisjunctiveAlternatives,
   cleanSelectionPrompt,
   isolateCanonicalInstruction,
+  extractCategoryBucketsFromText,
+  toSentenceCase,
   buildExtractionPrompt,
   detectCrossActivityReference,
   formatPreviousSlideContext,
@@ -3801,6 +3803,200 @@ describe('slideValidation - Direct Schema & Architectural Invariant Tests', () =
         expect(items[1].isExample).toBe(false);
         expect(items[1].expectedAnswer).toBe('look');
         expect(items[1].prompt).toContain('after');
+      });
+    });
+  });
+
+  // =========================================================================
+  // CASO F: Refactorización Agnóstica para Categorización y Buckets
+  // =========================================================================
+  describe('Caso F: Refactorización Agnóstica para Categorización y Emparejamiento por Grupos (Buckets)', () => {
+    describe('1. Detección y Extracción Estructural de Categorías Receptores (extractCategoryBucketsFromText)', () => {
+      it('detecta encabezados secuenciales delimitados por letras y mapea id, label y items vacíos', () => {
+        const raw = 'A Talking about a hobby B Talking about work C Talking about family';
+        const buckets = extractCategoryBucketsFromText(raw);
+
+        expect(buckets).toHaveLength(3);
+        expect(buckets[0]).toEqual({
+          id: 'A',
+          label: 'A · Talking about a hobby',
+          items: [],
+          headerStart: expect.any(Number),
+        });
+        expect(buckets[1]).toEqual({
+          id: 'B',
+          label: 'B · Talking about work',
+          items: [],
+          headerStart: expect.any(Number),
+        });
+        expect(buckets[2]).toEqual({
+          id: 'C',
+          label: 'C · Talking about family',
+          items: [],
+          headerStart: expect.any(Number),
+        });
+      });
+
+      it('detecta encabezados numéricos y viñetas con puntuaciones (. o ) o :)', () => {
+        const raw = '1. Things at school 2. Things at home 3. Things outdoors';
+        const buckets = extractCategoryBucketsFromText(raw);
+
+        expect(buckets).toHaveLength(3);
+        expect(buckets[0].id).toBe('1');
+        expect(buckets[0].label).toBe('1 · Things at school');
+        expect(buckets[1].id).toBe('2');
+        expect(buckets[1].label).toBe('2 · Things at home');
+        expect(buckets[2].id).toBe('3');
+        expect(buckets[2].label).toBe('3 · Things outdoors');
+      });
+
+      it('prohíbe que el texto explicativo de las categorías sea concatenado en instruction o prompt', () => {
+        const rawInstruction = 'Match the sentences to categories A–C: A Talking about a hobby B Talking about work C Talking about family';
+        const isolated = isolateCanonicalInstruction(rawInstruction);
+
+        expect(isolated).toBe('Match the sentences to categories A–C.');
+        expect(isolated).not.toContain('Talking about a hobby');
+        expect(isolated).not.toContain('Talking about work');
+        expect(isolated).not.toContain('Talking about family');
+      });
+    });
+
+    describe('2. Poda Canónica de la Consigna en isolateCanonicalInstruction', () => {
+      it('poda la declaración de categorías incrustada en la consigna dejando únicamente la directiva principal', () => {
+        const directiveWithCategories =
+          'Match the sentences to categories A–C. A is talking about a hobby B is talking about work C is talking about family';
+        const clean = isolateCanonicalInstruction(directiveWithCategories);
+
+        expect(clean).toBe('Match the sentences to categories A–C.');
+      });
+
+      it('mantiene la integridad de rangos alfanuméricos protegidos (A–C, 1–5, A to C)', () => {
+        const withRanges =
+          'Match sentences 1–5 to categories A–C: A Things you do every day: 1 B Things you do at the weekend C Things you do on holiday';
+        const clean = isolateCanonicalInstruction(withRanges);
+
+        expect(clean).toBe('Match sentences 1–5 to categories A–C.');
+      });
+
+      it('devuelve cadena vacía si el string contiene únicamente definiciones de categorías sin directiva principal', () => {
+        const pureCategories = 'A Talking about a hobby B Talking about work C Talking about family';
+        const clean = isolateCanonicalInstruction(pureCategories);
+
+        expect(clean).toBe('');
+      });
+    });
+
+    describe('3. Asignación de Ejemplos Pre-resueltos en Contenedores', () => {
+      it('identifica ítem del corpus por marcador ordinal y lo inserta en el contenedor meta con isExample: true', () => {
+        const categoryText =
+          'A Things you do every day: 1 B Things you do at the weekend C Things you do on holiday';
+        const corpus = [
+          '1. I love playing tennis in my free time.',
+          '2. She is an accountant in a bank.',
+          '3. We go on vacation every summer.'
+        ];
+
+        const buckets = extractCategoryBucketsFromText(categoryText, corpus);
+
+        expect(buckets).toHaveLength(3);
+        // Bucket A recibió el ejemplo pre-resuelto
+        expect(buckets[0].id).toBe('A');
+        expect(buckets[0].items).toHaveLength(1);
+        expect(buckets[0].items[0]).toEqual({
+          id: '1',
+          text: 'I love playing tennis in my free time.',
+          correctBucketId: 'A',
+          isExample: true,
+        });
+
+        // Buckets B y C no tienen ejemplos
+        expect(buckets[1].items).toHaveLength(0);
+        expect(buckets[2].items).toHaveLength(0);
+
+        // Fichas por ubicar (excluye el ítem 1 resuelto como ejemplo)
+        const unassigned = (buckets as any).unassignedItems;
+        expect(unassigned).toBeDefined();
+        expect(unassigned).toHaveLength(2);
+        expect(unassigned.map((it: any) => it.id)).toEqual(['2', '3']);
+      });
+
+      it('soporta marcadores de ejemplo alternativos como "(example: 1)" o "example"', () => {
+        const categoryText = 'A Things you do (example: 1) B Things you make C Things you buy';
+        const corpus = [
+          { id: '1', text: 'Clean the kitchen' },
+          { id: '2', text: 'A wooden chair' },
+          { id: '3', text: 'Groceries' }
+        ];
+
+        const buckets = extractCategoryBucketsFromText(categoryText, corpus);
+        expect(buckets[0].items).toHaveLength(1);
+        expect(buckets[0].items[0].isExample).toBe(true);
+        expect(buckets[0].items[0].text).toBe('Clean the kitchen');
+      });
+    });
+
+    describe('4. Normalización Tipográfica (Preservación de Sentence Case)', () => {
+      it('convierte mayúsculas sostenidas a sentence case y preserva títulos ya en sentence case', () => {
+        expect(toSentenceCase('TALKING ABOUT WORK')).toBe('Talking about work');
+        expect(toSentenceCase('A · TALKING ABOUT A HOBBY')).toBe('A · Talking about a hobby');
+        expect(toSentenceCase('Talking about a hobby')).toBe('Talking about a hobby');
+        expect(toSentenceCase('A · Talking about a hobby')).toBe('A · Talking about a hobby');
+        expect(toSentenceCase('play')).toBe('play');
+      });
+    });
+
+    describe('5. Integración en Pipeline validateAndParseSlides', () => {
+      it('normaliza un slide buckets_matching: poda consigna, asigna ejemplo a contenedor meta y normaliza tipografía', () => {
+        const rawJson = JSON.stringify({
+          slides: [
+            {
+              id: 'slide-buckets-agnostic',
+              title: 'Activity 3: Categorization',
+              subtitle: 'Match the sentences to categories A–C: A TALKING ABOUT WORK: 1 B TALKING ABOUT HOBBIES C TALKING ABOUT FAMILY',
+              layout: 'single_column',
+              referenceContent: null,
+              interaction: {
+                id: 'int-buckets-1',
+                type: 'buckets_matching',
+                instruction: 'Match the sentences to categories A–C: A TALKING ABOUT WORK: 1 B TALKING ABOUT HOBBIES C TALKING ABOUT FAMILY',
+                buckets: [
+                  { id: 'A', label: 'TALKING ABOUT WORK' },
+                  { id: 'B', label: 'TALKING ABOUT HOBBIES' },
+                  { id: 'C', label: 'TALKING ABOUT FAMILY' }
+                ],
+                tokens: [
+                  { id: 'tok-1', text: '1. I work in an international office.', correctBucketId: 'A' },
+                  { id: 'tok-2', text: '2. I play the guitar on Saturdays.', correctBucketId: 'B' },
+                  { id: 'tok-3', text: '3. I live with my parents and sister.', correctBucketId: 'C' }
+                ]
+              }
+            }
+          ]
+        });
+
+        const slides = validateAndParseSlides(rawJson);
+        expect(slides).toHaveLength(1);
+
+        const slide = slides[0];
+        // 1. Poda de consigna
+        expect(slide.subtitle).toBe('Match the sentences to categories A–C.');
+        expect(slide.interaction?.instruction).toBe('Match the sentences to categories A–C.');
+
+        // 2. Normalización de buckets a sentence case sin mayúsculas sostenidas
+        const it = slide.interaction as any;
+        expect(it.buckets[0].label).toBe('Talking about work');
+        expect(it.buckets[1].label).toBe('Talking about hobbies');
+        expect(it.buckets[2].label).toBe('Talking about family');
+
+        // 3. Asignación de ejemplo pre-resuelto en contenedor A
+        expect(it.buckets[0].items).toHaveLength(1);
+        expect(it.buckets[0].items[0].isExample).toBe(true);
+        expect(it.buckets[0].items[0].id).toBe('tok-1');
+
+        // 4. Token correspondiente marcado con isExample: true
+        expect(it.tokens[0].isExample).toBe(true);
+        expect(it.tokens[1].isExample).toBeUndefined();
+        expect(it.tokens[2].isExample).toBeUndefined();
       });
     });
   });

@@ -338,7 +338,7 @@ export const BucketsRenderer: React.FC<Props> = ({
                     >
                       {/* Bucket Title */}
                       <div className="flex items-center justify-between mb-2 gap-1.5">
-                        <h4 className="text-xs font-black tracking-wider text-slate-800 uppercase flex items-center gap-1.5 truncate">
+                        <h4 className="text-xs font-black tracking-wider text-slate-800 flex items-center gap-1.5 truncate">
                           <span
                             className="w-2 h-2 rounded-full flex-shrink-0"
                             style={{ backgroundColor: bucket.color || '#4f46e5' }}
