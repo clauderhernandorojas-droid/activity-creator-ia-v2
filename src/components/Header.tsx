@@ -1,7 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useLessonStore } from '../store/useLessonStore';
 import { useSessionStore } from '../store/useSessionStore';
-import { LessonSchema } from '../types/schema';
 import { 
   BookOpen, 
   Eye, 
@@ -20,14 +19,15 @@ import {
   Check,
   Package,
   RotateCcw,
-  Sparkles
+  Sparkles,
+  AlertCircle
 } from 'lucide-react';
 
 export const Header: React.FC = () => {
   const { 
     lesson, 
     setLessonTitle,
-    loadLesson,
+    loadLessonFromFile,
     saveLesson,
     saveLessonAs,
     openLessonWithPicker,
@@ -39,7 +39,7 @@ export const Header: React.FC = () => {
     canUndo, 
     canRedo,
     exportLessonAsScorm,
-    reprocessActiveSlide,
+    reprocessSlide,
     regenerateActiveSlideWithAI,
     ocrProcessing
   } = useLessonStore();
@@ -127,6 +127,10 @@ export const Header: React.FC = () => {
   };
 
   useEffect(() => {
+    setTempTitle(lesson.title);
+  }, [lesson.title]);
+
+  useEffect(() => {
     if (isEditingTitle) {
       titleInputRef.current?.focus();
       titleInputRef.current?.select();
@@ -141,68 +145,34 @@ export const Header: React.FC = () => {
     }
   };
 
-  const handleImportFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleImportFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      try {
-        const rawText = event.target?.result as string;
-        if (!rawText) return;
-        const parsedJson = JSON.parse(rawText);
-
-        // Support direct lesson object or wrapper { lesson: ... }
-        const candidate = (parsedJson && typeof parsedJson === 'object' && 'lesson' in parsedJson)
-          ? parsedJson.lesson
-          : parsedJson;
-
-        if (!candidate || typeof candidate !== 'object') {
-          alert('El archivo no contiene un formato de lección válido.');
-          return;
-        }
-
-        const candidateWithDefaults = {
-          id: candidate.id || `lesson-${Date.now()}`,
-          title: candidate.title || 'Lección Importada',
-          level: ['A1-A2', 'B1', 'B2', 'C1'].includes(candidate.level) ? candidate.level : 'B1',
-          unit: candidate.unit || 'Unidad 1',
-          slides: Array.isArray(candidate.slides) ? candidate.slides : [],
-        };
-
-        const validation = LessonSchema.safeParse(candidateWithDefaults);
-        if (!validation.success) {
-          console.error('Error de validación de lección:', validation.error);
-          const firstIssues = validation.error.issues
-            .slice(0, 3)
-            .map((i) => `${i.path.join('.')}: ${i.message}`)
-            .join('\n');
-          alert(`El archivo no cumple con el esquema de lección:\n${firstIssues}`);
-          return;
-        }
-
-        loadLesson(validation.data);
-      } catch (err: any) {
-        console.error('Error al procesar archivo de lección:', err);
-        alert('Error al leer el archivo JSON: asegúrate de que sea un archivo .json o .elt.json válido.');
-      } finally {
-        e.target.value = '';
-      }
-    };
-    reader.readAsText(file);
+    try {
+      await loadLessonFromFile(file);
+    } finally {
+      e.target.value = '';
+    }
   };
 
+  useEffect(() => {
+    if (lesson.slides.length > 0 && !lesson.slides.some((s) => s.id === currentSlideId)) {
+      setCurrentSlideId(lesson.slides[0].id);
+    }
+  }, [lesson.slides, currentSlideId, setCurrentSlideId]);
+
   const currentSlideIndex = lesson.slides.findIndex((s) => s.id === currentSlideId);
+  const effectiveSlideIndex = currentSlideIndex >= 0 ? currentSlideIndex : 0;
 
   const goToPrevSlide = () => {
-    if (currentSlideIndex > 0) {
-      setCurrentSlideId(lesson.slides[currentSlideIndex - 1].id);
+    if (effectiveSlideIndex > 0) {
+      setCurrentSlideId(lesson.slides[effectiveSlideIndex - 1].id);
     }
   };
 
   const goToNextSlide = () => {
-    if (currentSlideIndex < lesson.slides.length - 1) {
-      setCurrentSlideId(lesson.slides[currentSlideIndex + 1].id);
+    if (effectiveSlideIndex < lesson.slides.length - 1) {
+      setCurrentSlideId(lesson.slides[effectiveSlideIndex + 1].id);
     }
   };
 
@@ -265,7 +235,7 @@ export const Header: React.FC = () => {
       <div className="flex items-center gap-1.5 bg-slate-100/90 px-2 py-1 rounded-xl border border-slate-200/80">
         <button
           onClick={goToPrevSlide}
-          disabled={currentSlideIndex <= 0 || lesson.slides.length === 0}
+          disabled={effectiveSlideIndex <= 0 || lesson.slides.length === 0}
           className="p-1 rounded-lg text-slate-500 hover:text-slate-900 hover:bg-white disabled:opacity-30 transition"
           title="Diapositiva anterior"
         >
@@ -273,12 +243,12 @@ export const Header: React.FC = () => {
         </button>
 
         <span className="text-xs font-semibold text-slate-700 px-2">
-          {lesson.slides.length > 0 ? `${currentSlideIndex + 1} / ${lesson.slides.length}` : '0 / 0'}
+          {lesson.slides.length > 0 ? `${effectiveSlideIndex + 1} / ${lesson.slides.length}` : '0 / 0'}
         </span>
 
         <button
           onClick={goToNextSlide}
-          disabled={currentSlideIndex >= lesson.slides.length - 1 || lesson.slides.length === 0}
+          disabled={effectiveSlideIndex >= lesson.slides.length - 1 || lesson.slides.length === 0}
           className="p-1 rounded-lg text-slate-500 hover:text-slate-900 hover:bg-white disabled:opacity-30 transition"
           title="Diapositiva siguiente"
         >
@@ -423,7 +393,11 @@ export const Header: React.FC = () => {
             <button
               type="button"
               disabled={!hasRawExtraction || ocrProcessing}
-              onClick={() => reprocessActiveSlide()}
+              onClick={() => {
+                const idx = lesson.slides.findIndex((s) => s.id === currentSlide.id);
+                const previousSlide = idx > 0 ? lesson.slides[idx - 1] : null;
+                reprocessSlide(currentSlide, { previousSlide });
+              }}
               className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition ${
                 hasRawExtraction && !ocrProcessing
                   ? 'text-slate-700 hover:text-indigo-700 hover:bg-white shadow-2xs cursor-pointer'
@@ -529,8 +503,18 @@ export const Header: React.FC = () => {
 
       {/* Visual Toast Feedback for Quick Save / File Operations */}
       {toastMessage && (
-        <div className="fixed bottom-5 right-5 z-50 flex items-center gap-2.5 bg-slate-900/95 backdrop-blur text-white text-xs font-semibold px-4 py-2.5 rounded-xl shadow-2xl border border-slate-700/80 animate-bounce duration-300">
-          <Check className="w-4 h-4 text-emerald-400 shrink-0" />
+        <div
+          className={`fixed bottom-5 right-5 z-50 flex items-center gap-2.5 backdrop-blur text-xs font-semibold px-4 py-2.5 rounded-xl shadow-2xl border animate-bounce duration-300 ${
+            toastMessage.toLowerCase().includes('no se pudo') || toastMessage.toLowerCase().includes('error')
+              ? 'bg-rose-950/95 border-rose-700/80 text-rose-100'
+              : 'bg-slate-900/95 border-slate-700/80 text-white'
+          }`}
+        >
+          {toastMessage.toLowerCase().includes('no se pudo') || toastMessage.toLowerCase().includes('error') ? (
+            <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+          ) : (
+            <Check className="w-4 h-4 text-emerald-400 shrink-0" />
+          )}
           <span>{toastMessage}</span>
         </div>
       )}

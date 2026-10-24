@@ -58,7 +58,7 @@ export const Canvas: React.FC = () => {
     updateReferenceBlock,
     convertSlideRole,
     updateSlideIsGraded,
-    reprocessActiveSlide,
+    reprocessSlide,
     regenerateActiveSlideWithAI,
     ocrProcessing,
   } = useLessonStore();
@@ -442,7 +442,11 @@ export const Canvas: React.FC = () => {
                     <button
                       type="button"
                       disabled={!hasRawExtraction || ocrProcessing}
-                      onClick={() => reprocessActiveSlide()}
+                      onClick={() => {
+                        const idx = lesson.slides.findIndex((s) => s.id === currentSlide.id);
+                        const previousSlide = idx > 0 ? lesson.slides[idx - 1] : null;
+                        reprocessSlide(currentSlide, { previousSlide });
+                      }}
                       className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold transition-all ${
                         hasRawExtraction && !ocrProcessing
                           ? 'text-slate-700 hover:text-indigo-700 hover:bg-indigo-50 border border-transparent hover:border-indigo-100 cursor-pointer'

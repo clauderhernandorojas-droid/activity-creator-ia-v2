@@ -4045,10 +4045,14 @@ describe('slideValidation - Direct Schema & Architectural Invariant Tests', () =
         normalizeBucketsMatchingInteraction(rawSlide);
 
         expect(rawSlide.interaction.buckets).toHaveLength(2);
-        expect(rawSlide.interaction.buckets[0].label).toBe('Food and drink');
-        expect(rawSlide.interaction.buckets[1].label).toBe('Clothes');
-        expect(rawSlide.interaction.targetSlots[0].label).toBe('Food and drink');
-        expect(rawSlide.interaction.targets[0].label).toBe('Food and drink');
+        expect(rawSlide.interaction.buckets[0].id).toBe('bucket-A');
+        expect(rawSlide.interaction.buckets[0].label).toBe('A · Food and drink');
+        expect(rawSlide.interaction.buckets[1].id).toBe('bucket-B');
+        expect(rawSlide.interaction.buckets[1].label).toBe('B · Clothes');
+        expect(rawSlide.interaction.targetSlots[0].id).toBe('bucket-A');
+        expect(rawSlide.interaction.targetSlots[0].label).toBe('A · Food and drink');
+        expect(rawSlide.interaction.targets[0].id).toBe('bucket-A');
+        expect(rawSlide.interaction.targets[0].label).toBe('A · Food and drink');
       });
 
       it('2. Ensamblado Programático de Reactivos por Referencia Cruzada (Zero-LLM Synthesis)', () => {
@@ -4106,9 +4110,11 @@ describe('slideValidation - Direct Schema & Architectural Invariant Tests', () =
         expect(rawSlide.interaction.tokens[1].text).toBe('She enjoys eating fresh fruit and yogurt.');
         expect(rawSlide.interaction.tokens[2].text).toBe('They never watch TV during weekdays.');
 
-        // Verify target hydration
-        expect(rawSlide.interaction.buckets[0].label).toBe('Routines');
-        expect(rawSlide.interaction.buckets[1].label).toBe('Diet');
+        // Verify target hydration preserving category prefixes
+        expect(rawSlide.interaction.buckets[0].id).toBe('bucket-A');
+        expect(rawSlide.interaction.buckets[0].label).toBe('A · Routines');
+        expect(rawSlide.interaction.buckets[1].id).toBe('bucket-B');
+        expect(rawSlide.interaction.buckets[1].label).toBe('B · Diet');
       });
 
       it('3. Descuento Determinístico de Ejemplos en Buckets', () => {
@@ -4503,12 +4509,10 @@ describe('slideValidation - Direct Schema & Architectural Invariant Tests', () =
 
         // 1. Single Source of Truth: token de ejemplo k_e = 1 reside directamente en block.tokens con isExample: true
         expect(it.tokens).toHaveLength(7); // N = 7: 1 ficha de ejemplo + 6 fichas interactivas
-        expect(it.tokens[0]).toEqual({
-          id: 'token-example-1',
-          text: 'I always enjoy swimming in the ocean.',
-          isExample: true,
-          correctBucketId: 'A',
-        });
+        expect(it.tokens[0].id).toBe('token-example-1');
+        expect(it.tokens[0].text).toBe('I always enjoy swimming in the ocean.');
+        expect(it.tokens[0].isExample).toBe(true);
+        expect(it.tokens[0].correctBucketId).toBe('A');
 
         // Sin mutación ni dependencia en arrays secundarios como bucket.items
         expect(it.buckets[0].items).toBeUndefined();
@@ -4601,12 +4605,10 @@ describe('slideValidation - Direct Schema & Architectural Invariant Tests', () =
         // 1. Single Source of Truth: tokenExample reside directamente en block.tokens con isExample: true
         // y sin mutación de bucket.items
         expect(it.tokens).toHaveLength(9); // N = 9 (1 ficha ejemplo + 8 fichas interactivas)
-        expect(it.tokens[0]).toEqual({
-          id: 'token-example-1',
-          text: 'I always enjoy swimming in the pool.',
-          isExample: true,
-          correctBucketId: 'A',
-        });
+        expect(it.tokens[0].id).toBe('token-example-1');
+        expect(it.tokens[0].text).toBe('I always enjoy swimming in the pool.');
+        expect(it.tokens[0].isExample).toBe(true);
+        expect(it.tokens[0].correctBucketId).toBe('A');
         expect(it.buckets[0].items).toBeUndefined();
 
         // 2. Integración Íntegra de Fichas desde la Clave de Respuestas:
@@ -4658,6 +4660,211 @@ describe('slideValidation - Direct Schema & Architectural Invariant Tests', () =
         expect(tok8).toBeDefined();
         expect(tok8.text).toBe('My brother likes eating spicy noodles.');
         expect(tok8.correctBucketId).toBe('C');
+      });
+
+      it('14. Preservación de Prefijos de Categoría (A, B, C) y Reconciliación de bucket.id (bucket-A, bucket-B)', () => {
+        const rawSlideWithPrefixes: any = {
+          id: 'slide-prefixes-test',
+          title: 'Exercise 6: Likes and Dislikes',
+          subtitle: 'Put the phrases in the correct category',
+          interaction: {
+            id: 'int-prefixes',
+            type: 'buckets_matching',
+            instruction: 'Classify the phrases',
+            buckets: [
+              { id: 'bucket-1', label: 'A phrases to say you like something:' },
+              { id: 'bucket-2', label: 'B phrases to say you do not like something:' },
+            ],
+            tokens: [
+              { id: 'tok-1', text: 'I really like it', correctBucketId: 'A' },
+              { id: 'tok-2', text: 'I cannot stand it', correctBucketId: 'B' },
+            ],
+          },
+        };
+
+        normalizeBucketsMatchingInteraction(rawSlideWithPrefixes);
+
+        const buckets = rawSlideWithPrefixes.interaction.buckets;
+        expect(buckets).toHaveLength(2);
+
+        // 1. Prohibición de eliminar la letra identificadora inicial ('A', 'B') en bucket.label
+        expect(buckets[0].label).toBe('A Phrases to say you like something:');
+        expect(buckets[1].label).toBe('B Phrases to say you do not like something:');
+
+        // 2. bucket.id debe reflejar la categoría ('bucket-A', 'bucket-B')
+        expect(buckets[0].id).toBe('bucket-A');
+        expect(buckets[1].id).toBe('bucket-B');
+      });
+
+      it('15. Alineamiento Agnóstico de Ordinales e Inyección de Muestra en interaction.tokens', () => {
+        const previousSlideContext: any = {
+          id: 'slide-prev-pairs',
+          title: 'Exercise 3a: Sentences',
+          interaction: {
+            type: 'input_fields',
+            layoutMode: 'list',
+            listItems: [
+              { id: 'li-1', prompt: '1. I always enjoy', expectedAnswer: 'going camping in the summer.' },
+              { id: 'li-2', prompt: '2. She rarely drinks', expectedAnswer: 'black coffee with breakfast.' },
+              { id: 'li-3', prompt: '3. We never play', expectedAnswer: 'tennis on rainy afternoons.' },
+              { id: 'li-4', prompt: '4. He usually reads', expectedAnswer: 'historical articles online.' },
+            ],
+          },
+        };
+
+        const currentBucketsSlide: any = {
+          id: 'slide-buckets-categorize',
+          title: 'Exercise 3b: Categorize sentences',
+          subtitle: 'Use the sentences in Exercise 3a. Put them into categories (e.g. 1): A FREQUENT ACTIONS B INFREQUENT ACTIONS',
+          _rawExtraction: {
+            answersText: 'A4 B2; 3', // k=1 omitido (es ejemplo), k=2 (B), k=3 (B), k=4 (A)
+          },
+          interaction: {
+            id: 'int-buckets-cat',
+            type: 'buckets_matching',
+            instruction: 'Put sentences from 3a into categories',
+            buckets: [
+              { id: 'bucket-A', label: 'A Frequent actions' },
+              { id: 'bucket-B', label: 'B Infrequent actions' },
+            ],
+            tokens: [],
+          },
+        };
+
+        normalizeBucketsMatchingInteraction(currentBucketsSlide, undefined, previousSlideContext);
+
+        const it = currentBucketsSlide.interaction;
+
+        // 1. Inyección Dinámica del Token de Muestra:
+        // Cardinalidad total exactamente N = 4 (1 muestra + 3 interactivos)
+        expect(it.tokens).toHaveLength(4);
+
+        const sampleToken = it.tokens[0];
+        expect(sampleToken.id).toBe('token-example-1');
+        expect(sampleToken.isExample).toBe(true);
+        expect(sampleToken.correctBucketId).toBe('bucket-A');
+        expect(sampleToken.text).toBe('I always enjoy going camping in the summer.');
+
+        // 2. Mapeo Canónico por Ordinal Absoluto (k vs índice):
+        // k=2: 'She rarely drinks black coffee with breakfast.' -> bucket-B
+        const tok2 = it.tokens.find((t: any) => t.id === 'tok-2');
+        expect(tok2).toBeDefined();
+        expect(tok2.isExample).toBe(false);
+        expect(tok2.correctBucketId).toBe('bucket-B');
+        expect(tok2.text).toBe('She rarely drinks black coffee with breakfast.');
+
+        // k=3: 'We never play tennis on rainy afternoons.' -> bucket-B
+        const tok3 = it.tokens.find((t: any) => t.id === 'tok-3');
+        expect(tok3).toBeDefined();
+        expect(tok3.isExample).toBe(false);
+        expect(tok3.correctBucketId).toBe('bucket-B');
+        expect(tok3.text).toBe('We never play tennis on rainy afternoons.');
+
+        // k=4: 'He usually reads historical articles online.' -> bucket-A
+        const tok4 = it.tokens.find((t: any) => t.id === 'tok-4');
+        expect(tok4).toBeDefined();
+        expect(tok4.isExample).toBe(false);
+        expect(tok4.correctBucketId).toBe('bucket-A');
+        expect(tok4.text).toBe('He usually reads historical articles online.');
+      });
+
+      it('16. Extractor Universal de Oraciones en buckets_matching y Generación Garantizada de sampleToken', () => {
+        // Diapositiva previa de tipo buckets_matching (actividad de matching / mitades de oración)
+        // Bucket 1 (k=1) tiene reactivo de ejemplo preasignado en b.items[0]
+        // Buckets 2 y 3 tienen b.items vacío y tokens interactivos correspondientes
+        const previousMatchingSlide: any = {
+          id: 'slide-matching-prev',
+          interaction: {
+            id: 'int-matching-prev',
+            type: 'buckets_matching',
+            buckets: [
+              {
+                id: 'bucket-2',
+                label: '2 She usually drinks',
+                items: [], // reactivo interactivo
+              },
+              {
+                id: 'bucket-1',
+                label: '1 I always wake up',
+                items: [
+                  { id: 'item-ex-1', text: 'e) at six in the morning.', isExample: true },
+                ], // reactivo de ejemplo preasignado
+              },
+              {
+                id: 'bucket-3',
+                label: '3 They never travel',
+                items: [], // reactivo interactivo
+              },
+            ],
+            tokens: [
+              { id: 'tok-ans-3', text: 'b) during winter months.', correctBucketId: 'bucket-3' },
+              { id: 'tok-ans-2', text: 'a) hot tea with lemon.', correctBucketId: 'bucket-2' },
+            ],
+          },
+        };
+
+        // 1. Validar Extractor Universal de Oraciones:
+        const extracted = extractTwoPartItemsFromSlide(previousMatchingSlide);
+        expect(extracted).toHaveLength(3);
+
+        // Debe ordenar por ordinal natural k: 1, 2, 3 independientemente del orden de buckets
+        expect(extracted[0].prompt).toBe('I always wake up at six in the morning.');
+        expect(extracted[0].expectedAnswer).toBe('at six in the morning.');
+
+        expect(extracted[1].prompt).toBe('She usually drinks hot tea with lemon.');
+        expect(extracted[1].expectedAnswer).toBe('hot tea with lemon.');
+
+        expect(extracted[2].prompt).toBe('They never travel during winter months.');
+        expect(extracted[2].expectedAnswer).toBe('during winter months.');
+
+        // 2. Validar Generación Garantizada de sampleToken en la diapositiva subsiguiente
+        const categorizationSlide: any = {
+          id: 'slide-cat-next',
+          title: 'Exercise 2b: Categorization',
+          subtitle: 'Look at the sentences in 2a. Put them into categories A or B: A HABITS B PLANS',
+          interaction: {
+            id: 'int-cat-next',
+            type: 'buckets_matching',
+            instruction: 'Use the sentences in 2a. Put them into categories.',
+            buckets: [
+              { id: 'bucket-A', label: 'A · HABITS', items: [] },
+              { id: 'bucket-B', label: 'B · PLANS', items: [] },
+            ],
+            tokens: [
+              { id: 'raw-2', text: '2', correctBucketId: 'bucket-A' },
+              { id: 'raw-3', text: '3', correctBucketId: 'bucket-B' },
+            ],
+          },
+        };
+
+        // Spy on console.log to verify [BucketsDistribution] does not log sampleToken: null
+        const consoleSpy = vi.spyOn(console, 'log');
+
+        normalizeBucketsMatchingInteraction(categorizationSlide, undefined, previousMatchingSlide);
+
+        // Verificar el log de [BucketsDistribution]
+        const distributionLogCall = consoleSpy.mock.calls.find((call) =>
+          typeof call[0] === 'string' && call[0].includes('[BucketsDistribution]')
+        );
+        expect(distributionLogCall).toBeDefined();
+        expect(distributionLogCall![1].sampleToken).not.toBeNull();
+        expect(distributionLogCall![1].sampleToken.id).toBe('token-example-1');
+
+        consoleSpy.mockRestore();
+
+        // 3. Consolidar interaction.tokens = [sampleToken, ...interactiveTokens]
+        const tokens = categorizationSlide.interaction.tokens;
+        expect(tokens).toHaveLength(3); // 1 muestra + 2 interactivos
+
+        const sampleToken = tokens[0];
+        expect(sampleToken.id).toBe('token-example-1');
+        expect(sampleToken.isExample).toBe(true);
+        expect(sampleToken.text).toBe('I always wake up at six in the morning.');
+
+        const interactiveToks = tokens.filter((t: any) => !t.isExample);
+        expect(interactiveToks).toHaveLength(2);
+        expect(interactiveToks[0].text).toBe('She usually drinks hot tea with lemon.');
+        expect(interactiveToks[1].text).toBe('They never travel during winter months.');
       });
     });
   });

@@ -9,7 +9,7 @@ import {
   type ExtractedBlock,
   LessonSchema
 } from '../types/schema';
-import { digitizeBook, validateAndParseSlides, createManualBlock, roleToForcedTargetType, type ManualTemplateType } from '../core/ai/digitizeBook';
+import { digitizeBook, validateAndParseSlides, createManualBlock, roleToForcedTargetType, slideToExtractedBlock, type ManualTemplateType } from '../core/ai/digitizeBook';
 import { convertSlideToRole, type PedagogicalRole } from '../core/utils/slideRoleConverter';
 import { compressImageBase64 } from '../core/utils/imageCompressor';
 import { useSessionStore } from './useSessionStore';
@@ -386,7 +386,14 @@ interface LessonState {
   ) => void;
   reExtractBlockWithRole: (blockId: string, role: PedagogicalRole) => Promise<void>;
   reExtractSlideWithRole: (slideId: string, role: PedagogicalRole, clipUrl?: string) => Promise<void>;
-  reprocessActiveSlide: () => boolean;
+  reprocessSlide: (
+    targetSlide?: Slide | null,
+    context?: { previousSlide?: Slide | null; [key: string]: any }
+  ) => boolean;
+  reprocessActiveSlide: (
+    targetSlide?: Slide | null,
+    context?: { previousSlide?: Slide | null; [key: string]: any }
+  ) => boolean;
   regenerateActiveSlideWithAI: () => Promise<boolean>;
 
   // File System Access API & File Portability
@@ -1965,24 +1972,53 @@ export const useLessonStore = create<LessonState>()(
         }
       },
 
-      reprocessActiveSlide: () => {
+      reprocessSlide: (
+        targetSlide?: Slide | null,
+        context?: { previousSlide?: Slide | null; [key: string]: any }
+      ) => {
         const state = get();
-        const activeId = state.activeSlideId || useSessionStore.getState().currentSlideId;
+        const activeId = targetSlide?.id || state.activeSlideId || useSessionStore.getState().currentSlideId;
         const slideIndex = state.lesson.slides.findIndex((s) => s.id === activeId);
-        const activeSlide = slideIndex >= 0 ? state.lesson.slides[slideIndex] : null;
+        const currentSlide = targetSlide || (slideIndex >= 0 ? state.lesson.slides[slideIndex] : null);
 
-        if (!activeSlide || !activeSlide._rawExtraction) {
+        if (!currentSlide || !currentSlide._rawExtraction) {
           return false;
         }
 
         try {
-          const previousSlideContext = slideIndex > 0 ? state.lesson.slides[slideIndex - 1] : null;
+          // 1. Inyección de Contexto Contextual (previousSlide)
+          const previousSlide = context?.previousSlide !== undefined
+            ? context.previousSlide
+            : (slideIndex > 0 ? state.lesson.slides[slideIndex - 1] : null);
+
+          // 2. Persistencia y Rescate del Raw Answer Key ('_rawExtraction')
+          const rawKey = (currentSlide._rawExtraction as any)?.answersText 
+                      || (currentSlide._rawExtraction as any)?.secondaryText
+                      || (currentSlide as any).answerKeyText
+                      || (currentSlide.interaction as any)?.answerKey;
+
+          // Preparar rawPayload preservando textos crudos e inyectando rawKey para re-procesados idempotentes
+          const rawPayload = JSON.parse(JSON.stringify(currentSlide._rawExtraction));
+          if (rawKey) {
+            if (!rawPayload.answersText) rawPayload.answersText = rawKey;
+            if (!rawPayload.answerKeyText) rawPayload.answerKeyText = rawKey;
+          }
+          if (!rawPayload._rawInstructionText && (currentSlide as any)._rawInstructionText) {
+            rawPayload._rawInstructionText = (currentSlide as any)._rawInstructionText;
+          }
+          if (!rawPayload.contextBody && currentSlide.contextBody) {
+            rawPayload.contextBody = currentSlide.contextBody;
+          }
+          if (!rawPayload.subtitle && currentSlide.subtitle) {
+            rawPayload.subtitle = currentSlide.subtitle;
+          }
+
           const reprocessedSlides = validateAndParseSlides(
-            activeSlide._rawExtraction,
-            previousSlideContext,
+            rawPayload,
+            previousSlide,
             {
-              sourceImage: activeSlide._sourceImage || activeSlide.sourceImageSnippetUrl,
-              answerKeyCrop: activeSlide._answerKeyCrop || undefined,
+              sourceImage: currentSlide._sourceImage || currentSlide.sourceImageSnippetUrl,
+              answerKeyCrop: currentSlide._answerKeyCrop || undefined,
             }
           );
 
@@ -1991,14 +2027,25 @@ export const useLessonStore = create<LessonState>()(
           }
 
           const reprocessed = reprocessedSlides[0];
+
+          // 3. Sincronización Inmediata del Store:
+          // Reemplazar íntegramente 'interaction.tokens' en el store con los 9 tokens generados
           const updatedSlide: Slide = {
             ...reprocessed,
-            id: activeSlide.id,
-            _sourceImage: activeSlide._sourceImage || reprocessed._sourceImage,
-            _rawExtraction: activeSlide._rawExtraction, // Maintain original raw extraction without mutation
-            _answerKeyCrop: activeSlide._answerKeyCrop || reprocessed._answerKeyCrop,
-            sourceImageSnippetUrl: activeSlide._sourceImage || activeSlide.sourceImageSnippetUrl || reprocessed.sourceImageSnippetUrl,
+            id: currentSlide.id,
+            _sourceImage: currentSlide._sourceImage || reprocessed._sourceImage,
+            _rawExtraction: currentSlide._rawExtraction, // Maintain original raw extraction without mutation
+            _answerKeyCrop: currentSlide._answerKeyCrop || reprocessed._answerKeyCrop,
+            sourceImageSnippetUrl: currentSlide._sourceImage || currentSlide.sourceImageSnippetUrl || reprocessed.sourceImageSnippetUrl,
           };
+
+          if (reprocessed.interaction && reprocessed.interaction.type === 'buckets_matching') {
+            updatedSlide.interaction = {
+              ...reprocessed.interaction,
+              tokens: [...(reprocessed.interaction.tokens || [])],
+              sourceItems: [...(reprocessed.interaction.sourceItems || [])],
+            };
+          }
 
           set((s) => ({
             ...recordHistory(s),
@@ -2006,17 +2053,27 @@ export const useLessonStore = create<LessonState>()(
               ...s.lesson,
               slides: s.lesson.slides.map((sl) => (sl.id === activeId ? updatedSlide : sl)),
             },
+            extractedBlocks: s.extractedBlocks.map((b) => (b.id === activeId ? slideToExtractedBlock(updatedSlide) : b)),
             saveFeedback: {
               message: 'Diapositiva re-procesada con la lógica actual',
               timestamp: Date.now(),
             },
           }));
 
+          useSessionStore.getState().resetStudentAnswers();
+
           return true;
         } catch (err: any) {
-          console.error('[useLessonStore] Error in reprocessActiveSlide:', err);
+          console.error('[useLessonStore] Error in reprocessSlide:', err);
           return false;
         }
+      },
+
+      reprocessActiveSlide: (
+        targetSlide?: Slide | null,
+        context?: { previousSlide?: Slide | null; [key: string]: any }
+      ) => {
+        return get().reprocessSlide(targetSlide, context);
       },
 
       regenerateActiveSlideWithAI: async () => {

@@ -274,4 +274,192 @@ describe('useLessonStore - Slide Re-processing and AI Regeneration', () => {
       });
     });
   });
+
+  describe('4. Inyección de Contexto Contextual (previousSlide) y Rescate de Raw Answer Key en reprocessSlide', () => {
+    const mockPreviousSlide: Slide = {
+      id: 'slide-prev-matching',
+      title: 'Exercise 5a: Match sentence halves',
+      layout: 'single_column',
+      interaction: {
+        id: 'int-prev',
+        type: 'input_fields',
+        instruction: 'Match the sentence halves',
+        layoutMode: 'list',
+        listItems: [
+          { id: 'item-1', prompt: '1. She decided to go to the party', expectedAnswer: 'although she felt tired.', acceptedAnswers: ['although she felt tired.'] },
+          { id: 'item-2', prompt: '2. He arrived on time', expectedAnswer: 'because he took a taxi.', acceptedAnswers: ['because he took a taxi.'] },
+          { id: 'item-3', prompt: '3. We postponed the match', expectedAnswer: 'since it was raining heavily.', acceptedAnswers: ['since it was raining heavily.'] },
+          { id: 'item-4', prompt: '4. I will call you', expectedAnswer: 'as soon as I arrive at the station.', acceptedAnswers: ['as soon as I arrive at the station.'] },
+          { id: 'item-5', prompt: '5. They went for a walk', expectedAnswer: 'despite the bad weather.', acceptedAnswers: ['despite the bad weather.'] },
+          { id: 'item-6', prompt: '6. Even though he studied hard', expectedAnswer: 'he did not pass the test.', acceptedAnswers: ['he did not pass the test.'] },
+          { id: 'item-7', prompt: '7. Unless you hurry up', expectedAnswer: 'we will miss the train.', acceptedAnswers: ['we will miss the train.'] },
+          { id: 'item-8', prompt: '8. In case of an emergency', expectedAnswer: 'press the red alarm button.', acceptedAnswers: ['press the red alarm button.'] },
+          { id: 'item-9', prompt: '9. While we were waiting', expectedAnswer: 'it started snowing.', acceptedAnswers: ['it started snowing.'] },
+        ],
+        tableHeaders: [],
+        tableRows: [],
+        paragraphTemplate: '',
+        paragraphInputs: {},
+      },
+    };
+
+    it('re-procesa buckets_matching rescatando rawKey desde _rawExtraction.answersText e inyectando previousSlide determinísticamente', () => {
+      const rawBucketsPayload = {
+        title: 'Exercise 5b: Group the sentences',
+        subtitle: 'Put sentences 1-9 from 5a into the correct category',
+        interaction: {
+          type: 'buckets_matching',
+          instruction: 'Put sentences 1-9 into categories',
+          buckets: [
+            { id: 'slot-A', label: 'A · Contrast', _exampleMarker: '1' },
+            { id: 'slot-B', label: 'B · Cause', items: [] },
+            { id: 'slot-C', label: 'C · Time and Condition', items: [] },
+          ],
+          tokens: [],
+        },
+        _rawExtraction: {
+          title: 'Exercise 5b: Group the sentences',
+          answersText: 'A2; 6; 9 B3 C4; 5; 7; 8',
+          interaction: {
+            type: 'buckets_matching',
+            buckets: [
+              { id: 'slot-A', label: 'A · Contrast', _exampleMarker: '1' },
+              { id: 'slot-B', label: 'B · Cause' },
+              { id: 'slot-C', label: 'C · Time and Condition' },
+            ],
+          },
+        },
+      };
+
+      const bucketsSlide: Slide = {
+        id: 'slide-buckets-curr',
+        title: 'Exercise 5b: Group the sentences',
+        layout: 'single_column',
+        interaction: {
+          id: 'int-buckets',
+          type: 'buckets_matching',
+          instruction: 'Put sentences 1-9 into categories',
+          buckets: [
+            { id: 'slot-A', label: 'A · Contrast', items: [] },
+            { id: 'slot-B', label: 'B · Cause', items: [] },
+            { id: 'slot-C', label: 'C · Time and Condition', items: [] },
+          ],
+          tokens: [],
+        },
+        _rawExtraction: rawBucketsPayload._rawExtraction,
+      };
+
+      useLessonStore.setState({
+        lesson: {
+          ...defaultInitialLesson,
+          slides: [mockPreviousSlide, bucketsSlide],
+        },
+        activeSlideId: 'slide-buckets-curr',
+      });
+
+      // 1. Ejecutar reprocessSlide sin argumentos explícitos: debe resolver previousSlide determinísticamente desde idx - 1
+      const success = useLessonStore.getState().reprocessSlide();
+      expect(success).toBe(true);
+
+      const updatedSlide = useLessonStore.getState().lesson.slides[1];
+      expect(updatedSlide.id).toBe('slide-buckets-curr');
+      expect(updatedSlide.interaction?.type).toBe('buckets_matching');
+
+      const tokens = (updatedSlide.interaction as any).tokens;
+      // Exactamente 9 tokens: 1 ejemplo (k=1) + 8 interactivos (k=2..9)
+      expect(tokens).toHaveLength(9);
+
+      // Token ejemplo
+      const exampleToken = tokens.find((t: any) => t.isExample);
+      expect(exampleToken).toBeDefined();
+      expect(exampleToken.correctBucketId).toBe('slot-A');
+      expect(exampleToken.text).toBe('She decided to go to the party although she felt tired.');
+
+      // Tokens interactivos
+      const interactiveTokens = tokens.filter((t: any) => !t.isExample);
+      expect(interactiveTokens).toHaveLength(8);
+
+      const bucketMap: Record<string, string> = {};
+      tokens.forEach((t: any) => {
+        bucketMap[t.text] = t.correctBucketId;
+      });
+
+      // Clave: A2; 6; 9 B3 C4; 5; 7; 8
+      // Ordinal 2 -> slot-A
+      expect(bucketMap['He arrived on time because he took a taxi.']).toBe('slot-A');
+      // Ordinal 3 -> slot-B
+      expect(bucketMap['We postponed the match since it was raining heavily.']).toBe('slot-B');
+      // Ordinal 4 -> slot-C
+      expect(bucketMap['I will call you as soon as I arrive at the station.']).toBe('slot-C');
+      // Ordinal 5 -> slot-C
+      expect(bucketMap['They went for a walk despite the bad weather.']).toBe('slot-C');
+      // Ordinal 6 -> slot-A
+      expect(bucketMap['Even though he studied hard he did not pass the test.']).toBe('slot-A');
+      // Ordinal 7 -> slot-C
+      expect(bucketMap['Unless you hurry up we will miss the train.']).toBe('slot-C');
+      // Ordinal 8 -> slot-C
+      expect(bucketMap['In case of an emergency press the red alarm button.']).toBe('slot-C');
+      // Ordinal 9 -> slot-A
+      expect(bucketMap['While we were waiting it started snowing.']).toBe('slot-A');
+
+      // Idempotencia: Una segunda ejecución de reprocessSlide debe producir exactamente el mismo resultado
+      const secondSuccess = useLessonStore.getState().reprocessSlide();
+      expect(secondSuccess).toBe(true);
+      const reUpdatedSlide = useLessonStore.getState().lesson.slides[1];
+      expect((reUpdatedSlide.interaction as any).tokens).toHaveLength(9);
+    });
+
+    it('rescata rawKey alternativamente desde slide.answerKeyText o interaction.answerKey si no está en _rawExtraction', () => {
+      const rawBucketsPayload = {
+        title: 'Exercise 5b: Classification',
+        subtitle: 'Classify sentences from previous slide',
+        interaction: {
+          type: 'buckets_matching',
+          buckets: [
+            { id: 'b-1', label: 'A · Contrast', _exampleMarker: '1' },
+            { id: 'b-2', label: 'B · Cause' },
+            { id: 'b-3', label: 'C · Time' },
+          ],
+        },
+      };
+
+      const bucketsSlide: Slide = {
+        id: 'slide-buckets-2',
+        title: 'Exercise 5b: Classification',
+        layout: 'single_column',
+        answerKeyText: 'A2; 6; 9 B3 C4; 5; 7; 8',
+        interaction: {
+          id: 'int-b2',
+          type: 'buckets_matching',
+          instruction: 'Classify sentences',
+          buckets: [
+            { id: 'b-1', label: 'A · Contrast' },
+            { id: 'b-2', label: 'B · Cause' },
+            { id: 'b-3', label: 'C · Time' },
+          ],
+          tokens: [],
+        },
+        _rawExtraction: rawBucketsPayload,
+      };
+
+      useLessonStore.setState({
+        lesson: {
+          ...defaultInitialLesson,
+          slides: [mockPreviousSlide, bucketsSlide],
+        },
+        activeSlideId: 'slide-buckets-2',
+      });
+
+      const success = useLessonStore.getState().reprocessSlide(bucketsSlide, { previousSlide: mockPreviousSlide });
+      expect(success).toBe(true);
+
+      const updatedSlide = useLessonStore.getState().lesson.slides[1];
+      const tokens = (updatedSlide.interaction as any).tokens;
+      expect(tokens).toHaveLength(9);
+
+      const token3 = tokens.find((t: any) => t.text.includes('postponed the match'));
+      expect(token3.correctBucketId).toBe('b-2');
+    });
+  });
 });
+

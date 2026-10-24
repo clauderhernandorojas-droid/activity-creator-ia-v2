@@ -1586,7 +1586,7 @@ export function isAnswerKeySlide(slide: any): boolean {
 }
 
 /**
- * Parses bucket categorization answer keys (e.g. 'A2; 6; 9 B3 C4; 5; 7; 8' or 'A: 2, 6, 9; B: 3; C: 4, 5, 7, 8').
+ * Extractor formal agnóstico para claves de categorización con formato Target -> Ordinales.
  * Maps each ordinal number k to its destination bucket identifier.
  */
 export function parseBucketsCategoryAnswerKey(
@@ -1596,40 +1596,57 @@ export function parseBucketsCategoryAnswerKey(
   if (!text || typeof text !== 'string') return null;
 
   const mapping = new Map<number, string>();
-  // Match bucket indicator (e.g. A, B, C, or 1, 2) followed by numbers
-  const bucketKeyRegex = /(?:^|[\s,;|/])([A-Za-z]|\d+)[\.\)\:\s-]*(\d+(?:[\s,;]+\d+)*)/g;
-
-  let match: RegExpExecArray | null;
   const distinctBuckets = new Set<string>();
 
-  while ((match = bucketKeyRegex.exec(text)) !== null) {
-    const rawBucketKey = match[1].trim();
+  // Expresión regular universal de captura (con lookbehind para delimitar sin consumir el separador):
+  const universalKeyRegex = /(?<=^|[;\s])([A-Za-z0-9]+)\s*[:·\-.]?\s*([0-9\s;,–—]*)/g;
+  let match: RegExpExecArray | null;
+
+  while ((match = universalKeyRegex.exec(text)) !== null) {
+    const rawTarget = match[1].trim();
     const numbersStr = match[2].trim();
 
-    let targetBucketId = rawBucketKey;
-    if (buckets && buckets.length > 0) {
-      const found = buckets.find(
-        (b) => b.id.toLowerCase() === rawBucketKey.toLowerCase()
+    if (!rawTarget) continue;
+
+    let targetIdentifier = rawTarget;
+    const initialNumbers: number[] = [];
+
+    // Normalizar targetIdentifier: si viene compactado con el primer ordinal (e.g. 'A2' -> target 'A' y ordinal 2)
+    const splitTargetMatch = rawTarget.match(/^([A-Za-z]+)(\d+)$/);
+    if (splitTargetMatch) {
+      const isDirectBucket = Boolean(
+        buckets && buckets.some((b) => b.id.toLowerCase() === rawTarget.toLowerCase())
       );
-      if (found) {
-        targetBucketId = found.id;
-      } else if (/^[A-Za-z]$/.test(rawBucketKey)) {
-        const letterIdx = rawBucketKey.toUpperCase().charCodeAt(0) - 65;
-        if (letterIdx >= 0 && letterIdx < buckets.length) {
-          targetBucketId = buckets[letterIdx].id;
-        }
+      if (!isDirectBucket) {
+        targetIdentifier = splitTargetMatch[1];
+        initialNumbers.push(parseInt(splitTargetMatch[2], 10));
       }
     }
 
-    const numbers = numbersStr
-      .split(/[\s,;]+/)
-      .map((n) => parseInt(n, 10))
-      .filter((n) => !isNaN(n));
+    let targetBucket: { id: string; label?: string } | undefined;
+    if (buckets && buckets.length > 0) {
+      targetBucket = buckets.find((b) =>
+        b.id.toLowerCase().endsWith(targetIdentifier.toLowerCase()) ||
+        Boolean(b.label && b.label.trim().toLowerCase().startsWith(targetIdentifier.toLowerCase()))
+      );
+      if (!targetBucket) {
+        continue;
+      }
+    }
+
+    const bucketId = targetBucket ? targetBucket.id : targetIdentifier;
+
+    const parsedNumbers = numbersStr
+      .match(/\d+/g)
+      ?.map((n) => parseInt(n, 10))
+      .filter((n) => !isNaN(n)) || [];
+
+    const numbers = [...initialNumbers, ...parsedNumbers];
 
     if (numbers.length > 0) {
-      distinctBuckets.add(targetBucketId);
-      for (const num of numbers) {
-        mapping.set(num, targetBucketId);
+      distinctBuckets.add(bucketId);
+      for (const k of numbers) {
+        mapping.set(k, bucketId);
       }
     }
   }
@@ -2263,11 +2280,101 @@ export function extractTwoPartItemsFromSlide(
         addNormalizedPair(li.id, p, a);
       }
     }
-  } else if (it.type === 'buckets_matching' && Array.isArray(it.tokens)) {
-    for (const tok of it.tokens) {
-      if (tok.text && tok.correctBucketId) {
-        const bucket = it.buckets?.find((b: any) => b.id === tok.correctBucketId);
-        addNormalizedPair(tok.id, tok.text, bucket?.label || tok.correctBucketId);
+  } else if (
+    it.type === 'buckets_matching' ||
+    (Array.isArray(it.buckets) && it.buckets.length > 0) ||
+    (Array.isArray(it.targetSlots) && it.targetSlots.length > 0)
+  ) {
+    const buckets =
+      Array.isArray(it.buckets) && it.buckets.length > 0
+        ? it.buckets
+        : it.targetSlots || [];
+    const tokens = Array.isArray(it.tokens) ? it.tokens : [];
+
+    const matchesBucketHelper = (tokBucketId?: string | null, b?: any): boolean => {
+      if (!tokBucketId || !b) return false;
+      const tid = tokBucketId.toLowerCase().trim();
+      const bid = (b.id || '').toLowerCase().trim();
+      const blabel = (b.label || '').toLowerCase().trim();
+      return (
+        bid === tid ||
+        bid.endsWith(`-${tid}`) ||
+        bid.endsWith(`_${tid}`) ||
+        blabel.startsWith(tid) ||
+        blabel.startsWith(`${tid} `) ||
+        blabel.startsWith(`${tid})`)
+      );
+    };
+
+    const extractedBucketPairs: Array<{
+      id: string;
+      ordinal: number;
+      prompt: string;
+      expectedAnswer: string;
+    }> = [];
+
+    buckets.forEach((b: any, bIdx: number) => {
+      let prompt = b.label || b.title || b.prompt || b.text || '';
+      let answer = '';
+      let pairId = b.id || `pair-${bIdx + 1}`;
+
+      if (Array.isArray(b.items) && b.items.length > 0) {
+        // a) Caso del reactivo de ejemplo preasignado
+        answer = b.items[0].text || '';
+        if (b.items[0].id) pairId = b.items[0].id;
+      } else {
+        // b) Reactivos interactivos
+        const matchingTok = tokens.find((t: any) => matchesBucketHelper(t.correctBucketId, b));
+        answer = matchingTok ? matchingTok.text || '' : '';
+        if (matchingTok?.id) pairId = matchingTok.id;
+      }
+
+      // Limpiar prefijos numéricos de prompt (ej. '1 ') y letras de inciso de answer (ej. 'e) ')
+      const cleanPrompt = prompt.replace(/^\s*\d+[\.\)\-\:\s]+\s*/, '').trim();
+      const cleanAnswer = answer.replace(/^\s*[a-zA-Z]\s*[\.\)\-\:]\s*/, '').trim();
+
+      const finalPrompt = cleanPrompt || prompt;
+      const finalAnswer = cleanAnswer || answer;
+
+      // Unir prompt + answer mediante assembleTwoPartToken
+      const assembledSentence = assembleTwoPartToken(finalPrompt, finalAnswer);
+
+      // Extraer el ordinal numérico del prompt (ej. '1' -> k = 1)
+      let ordinal = bIdx + 1;
+      const ordMatch = String(prompt).match(/(?:^|\b)(\d+)\b/);
+      if (ordMatch) {
+        ordinal = parseInt(ordMatch[1], 10);
+      } else {
+        const idOrdMatch = String(b.id || '').match(/(?:^|\b|_|-)(\d+)\b/);
+        if (idOrdMatch) {
+          ordinal = parseInt(idOrdMatch[1], 10);
+        }
+      }
+
+      extractedBucketPairs.push({
+        id: pairId,
+        ordinal,
+        prompt: assembledSentence,
+        expectedAnswer: finalAnswer,
+      });
+    });
+
+    if (buckets.length === 0 && tokens.length > 0) {
+      for (const tok of tokens) {
+        if (tok.text && tok.correctBucketId) {
+          addNormalizedPair(tok.id, tok.text, tok.correctBucketId);
+        }
+      }
+    } else {
+      // Ordenar el array resultante por dicho ordinal numérico natural
+      extractedBucketPairs.sort((a, b) => a.ordinal - b.ordinal);
+
+      for (const pair of extractedBucketPairs) {
+        items.push({
+          id: pair.id,
+          prompt: pair.prompt,
+          expectedAnswer: pair.expectedAnswer,
+        });
       }
     }
   } else if (it.type === 'selection' && Array.isArray(it.questions)) {
@@ -2312,6 +2419,17 @@ export function assembleTwoPartToken(part1: string, part2: string): string {
 
   const c1 = stripPrefix(raw1) || raw1;
   const c2 = stripPrefix(raw2) || raw2;
+
+  // Si c1 ya contiene o termina con c2 (o su versión sin puntuación), la oración ya está ensamblada
+  if (
+    c2 &&
+    (c1 === c2 ||
+      c1.endsWith(c2) ||
+      c1.endsWith(c2.replace(/[.!?·•…\s]+$/, '')) ||
+      c1.toLowerCase().endsWith(c2.toLowerCase()))
+  ) {
+    return raw1;
+  }
 
   const terminalRegex = /[.!?·•…]$/;
   const isTerm1 = terminalRegex.test(c1) || terminalRegex.test(raw1);
@@ -2414,18 +2532,45 @@ export function normalizeBucketsMatchingInteraction(
   // Detección temprana de clave de respuestas de categorización (e.g. 'A2; 6; 9 B3 C4; 5; 7; 8')
   // ANTES de que los textos sean podados por isolateCanonicalInstruction
   let bucketAnswerKeyMap: Map<number, string> | null = null;
+  const rawExtraction = (rawSlide as any)._rawExtraction || rawSlide;
+  const rawKey = rawExtraction?.answersText 
+              || rawExtraction?.secondaryText
+              || (rawSlide as any).answerKeyText
+              || (rawSlide.interaction as any)?.answerKey
+              || (rawSlide as any)._rawAnswersText
+              || (rawSlide as any)._rawAnswerKey;
+
+  let rawKeyString: string | undefined = typeof rawKey === 'string' ? rawKey : undefined;
+  if (!rawKeyString && rawKey && typeof rawKey === 'object') {
+    try {
+      rawKeyString = Object.entries(rawKey).map(([k, v]) => `${k}: ${v}`).join('; ');
+    } catch {
+      // ignore
+    }
+  }
+
+  if (rawKeyString) {
+    const parsedFromRawKey = parseBucketsCategoryAnswerKey(rawKeyString, it.buckets || parsedBuckets);
+    if (parsedFromRawKey && parsedFromRawKey.size >= 2) {
+      bucketAnswerKeyMap = parsedFromRawKey;
+    }
+  }
+
   const candidateKeySources = [
+    rawKeyString,
     textToScan,
     ...candidateTexts,
     rawSlide.contextBody,
     (rawSlide.referenceContent as any)?.content,
   ].filter(Boolean) as string[];
 
-  for (const txt of candidateKeySources) {
-    const parsedKey = parseBucketsCategoryAnswerKey(txt, it.buckets || parsedBuckets);
-    if (parsedKey && parsedKey.size >= 2) {
-      bucketAnswerKeyMap = parsedKey;
-      break;
+  if (!bucketAnswerKeyMap) {
+    for (const txt of candidateKeySources) {
+      const parsedKey = parseBucketsCategoryAnswerKey(txt, it.buckets || parsedBuckets);
+      if (parsedKey && parsedKey.size >= 2) {
+        bucketAnswerKeyMap = parsedKey;
+        break;
+      }
     }
   }
 
@@ -2457,16 +2602,65 @@ export function normalizeBucketsMatchingInteraction(
     return t.length <= 2 && (/^[A-Za-z0-9][\.\)]?$/.test(t) || !/[a-z]{2,}/i.test(t));
   };
 
+  const resolveBucketCategoryId = (b: any, bIdx: number, parsedB?: any, isHydratingFromParsed: boolean = false): string => {
+    const rawLabel = b?.label || (parsedB ? parsedB.label : '') || '';
+    const bId = b?.id || '';
+    const parsedId = parsedB?.id || '';
+
+    // If hydrating from parsed text extraction (parsedBuckets):
+    if (isHydratingFromParsed) {
+      const catLetter = (/^[A-Za-z]$/.test(bId) ? bId.toUpperCase() : null) ||
+                        (parsedId && /^[A-Za-z]$/.test(parsedId) ? parsedId.toUpperCase() : null) ||
+                        rawLabel.match(/^([A-Za-z])(?:\s*[·:\-\.]|\s)/)?.[1]?.toUpperCase();
+      if (catLetter) {
+        return `bucket-${catLetter}`;
+      }
+      return bId ? (bId.startsWith('bucket-') ? bId : `bucket-${bId}`) : `slot-${bIdx + 1}`;
+    }
+
+    // If existing bucket has generic numeric or empty ID (e.g. 'bucket-1', 'slot-1', '1'):
+    const isGenericId = !bId || /^(?:bucket|slot)[-_]?\d+$/i.test(bId) || /^\d+$/.test(bId);
+    if (isGenericId) {
+      const catLetter = rawLabel.match(/^([A-Za-z])(?:\s*[·:\-\.]|\s)/)?.[1]?.toUpperCase() ||
+                        (parsedB && /^[A-Za-z]$/.test(parsedB.id) ? parsedB.id.toUpperCase() : null);
+      if (catLetter) {
+        return `bucket-${catLetter}`;
+      }
+      return bId || `slot-${bIdx + 1}`;
+    }
+
+    // Preserve existing explicit bucket ID (e.g. 'slot-A', 'A', 'B', 'b-play')
+    return bId;
+  };
+
+  const formatBucketLabelPreservingPrefix = (rawLabel: string, parsedLabel?: string): string => {
+    const labelToUse = rawLabel || parsedLabel || '';
+    if (!labelToUse) return '';
+    const trimmed = labelToUse.trim();
+
+    // Prohibir eliminar la letra identificadora inicial ('A', 'B', 'C'). Conservarla en 'bucket.label'
+    const prefixMatch = trimmed.match(/^([A-Za-z])(?:\s*[·:\-\.]\s*|\s+)(.*)$/);
+    if (prefixMatch) {
+      const letter = prefixMatch[1].toUpperCase();
+      const rest = prefixMatch[2].trim();
+      const cleanRest = toSentenceCase(rest);
+      const capRest = cleanRest ? cleanRest.charAt(0).toUpperCase() + cleanRest.slice(1) : '';
+      return trimmed.includes('·') ? `${letter} · ${capRest}` : `${letter} ${capRest}`;
+    }
+
+    return toSentenceCase(trimmed);
+  };
+
   if (parsedBuckets.length > 0) {
     const hasShortLabels = existingTargets.length === 0 ||
       existingTargets.some((b: any) => isShortOrIndexLabel(b.label));
 
     if (hasShortLabels) {
       const hydratedTargets = parsedBuckets.map((b, bIdx) => {
-        const rawLabel = b.label || '';
-        const cleanLabel = toSentenceCase(rawLabel.replace(/^[A-Za-z0-9]\s*·\s*/, ''));
+        const id = resolveBucketCategoryId(b, bIdx, b, true);
+        const cleanLabel = formatBucketLabelPreservingPrefix(b.label);
         return {
-          id: b.id,
+          id,
           label: cleanLabel || b.label,
           items: (b.items && b.items.length > 0) ? b.items : (existingTargets[bIdx]?.items || []),
           _exampleMarker: b._exampleMarker,
@@ -2481,16 +2675,17 @@ export function normalizeBucketsMatchingInteraction(
     it.targetSlots = existingTargets;
   }
 
-  // 4. Normalización Tipográfica de Buckets
+  // 4. Normalización Tipográfica y Reconciliación de IDs de Buckets
   if (Array.isArray(it.buckets) && it.buckets.length > 0) {
     it.buckets = it.buckets.map((b: any, bIdx: number) => {
-      const id = b.id || (parsedBuckets[bIdx] ? parsedBuckets[bIdx].id : `slot-${bIdx + 1}`);
-      const rawLabel = b.label || b.id || '';
-      const cleanLabel = toSentenceCase(rawLabel.replace(/^[A-Za-z0-9]\s*·\s*/, ''));
+      const parsedB = parsedBuckets[bIdx];
+      const id = resolveBucketCategoryId(b, bIdx, parsedB, false);
+      const rawLabel = b.label || (parsedB ? parsedB.label : '') || b.id || '';
+      const cleanLabel = formatBucketLabelPreservingPrefix(rawLabel, parsedB?.label);
       return {
         ...b,
         id,
-        label: cleanLabel,
+        label: cleanLabel || rawLabel,
         items: Array.isArray(b.items) ? b.items : [],
       };
     });
@@ -2534,6 +2729,7 @@ export function normalizeBucketsMatchingInteraction(
 
   if (!bucketAnswerKeyMap) {
     const candidateAnswerKeySources = [
+      rawKeyString,
       textToScan,
       fallbackRawText,
       (rawSlide as any)._rawInstructionText,
@@ -2617,42 +2813,23 @@ export function normalizeBucketsMatchingInteraction(
     if (prevTwoPartItems.length > 0) {
       const N = prevTwoPartItems.length;
 
-      // 1. Fuente Única de Verdad en 'block.tokens':
-      // Eliminar cualquier mutación o dependencia sobre arrays secundarios como 'bucket.items'.
+      // 1. Fuente Única de Verdad en 'interaction.tokens':
+      // Prohibir el uso de arrays secundarios paralelos (e.g. bucket.items)
       (it.buckets || []).forEach((b: any) => {
         delete b.items;
       });
 
-      let tokenExample: any = null;
-      if (hasExampleIndication) {
-        const prevEx = prevTwoPartItems[0];
-        const tokenExampleText = assembleTwoPartToken(prevEx.prompt, prevEx.expectedAnswer);
-        const targetBucketA =
-          (it.buckets || []).find((b: any) => b.id === 'A' || b.id.toUpperCase() === 'A') ||
-          (it.buckets || []).find((b: any) => b.id === exampleBucketId) ||
-          it.buckets?.[0];
-
-        const bucketAId = targetBucketA ? targetBucketA.id : 'A';
-        tokenExample = {
-          id: 'token-example-1',
-          text: tokenExampleText,
-          correctBucketId: bucketAId,
-          isExample: true,
-        };
-      }
-
       // Mapear TargetId -> lista de ordinales k_i para cada contenedor
-      const ordinalToBucketMap = new Map<number, string>();
+      const ordinalToBucketMap: Record<number, string> = {};
       const ordinalTokenIdMap = new Map<number, string>();
 
       if (bucketAnswerKeyMap) {
         for (const [k, bId] of bucketAnswerKeyMap.entries()) {
-          const matchedBucket =
-            (it.buckets || []).find((b: any) => b.id.toLowerCase() === bId.toLowerCase()) ||
-            (it.buckets || []).find((b: any) => /^[A-Za-z]$/.test(bId) && b.id.toUpperCase().charCodeAt(0) - 65 === bId.toUpperCase().charCodeAt(0) - 65) ||
-            (it.buckets || []).find((b: any) => b.id === bId) ||
-            it.buckets?.[0];
-          ordinalToBucketMap.set(k, matchedBucket ? matchedBucket.id : bId);
+          const targetBucket = (it.buckets || []).find((b: any) =>
+            b.id.toLowerCase().endsWith(bId.toLowerCase()) ||
+            Boolean(b.label && b.label.trim().toLowerCase().startsWith(bId.toLowerCase()))
+          );
+          ordinalToBucketMap[k] = targetBucket ? targetBucket.id : bId;
         }
       }
 
@@ -2660,24 +2837,39 @@ export function normalizeBucketsMatchingInteraction(
         it.tokens.forEach((t: any) => {
           const k = extractOrdinalIndex(t);
           if (k !== null && k >= 1 && k <= N) {
-            if (t.correctBucketId && !ordinalToBucketMap.has(k)) ordinalToBucketMap.set(k, t.correctBucketId);
+            if (t.correctBucketId && !ordinalToBucketMap[k]) {
+              const targetBucket = (it.buckets || []).find((b: any) =>
+                b.id.toLowerCase().endsWith(t.correctBucketId.toLowerCase()) ||
+                Boolean(b.label && b.label.trim().toLowerCase().startsWith(t.correctBucketId.toLowerCase()))
+              );
+              ordinalToBucketMap[k] = targetBucket ? targetBucket.id : t.correctBucketId;
+            }
             if (t.id && !t.isExample) ordinalTokenIdMap.set(k, t.id);
           }
         });
       }
 
-      if (Array.isArray(it.buckets)) {
-        it.buckets.forEach((b: any) => {
-          if (Array.isArray(b.items)) {
-            b.items.forEach((item: any) => {
-              const k = extractOrdinalIndex(item);
-              if (k !== null && k >= 1 && k <= N && !ordinalToBucketMap.has(k)) {
-                ordinalToBucketMap.set(k, b.id);
-              }
-            });
-          }
-        });
-      }
+      const targetSlots = it.targetSlots && it.targetSlots.length > 0 ? it.targetSlots : it.buckets || [];
+      const defaultBucketId = targetSlots[0]?.id || 'slot-1';
+
+      // 2. Generación Garantizada de 'sampleToken':
+      // Al estar disponible el reactivo ordinal k = 1 en previousTwoPartItems[0]:
+      const allBuckets = targetSlots;
+      const targetExampleBucket =
+        (ordinalToBucketMap[1] ? allBuckets.find((b: any) => b.id === ordinalToBucketMap[1]) : null) ||
+        allBuckets.find((b: any) => b.hasExample || b._exampleMarker) ||
+        (exampleBucketId ? allBuckets.find((b: any) => b.id === exampleBucketId) : null) ||
+        allBuckets.find((b: any) => b.id.toLowerCase().endsWith('a') || (b.label && b.label.trim().toLowerCase().startsWith('a'))) ||
+        allBuckets[0];
+
+      const sampleToken = {
+        id: `token-example-1`,
+        text: assembleTwoPartToken(prevTwoPartItems[0].prompt, prevTwoPartItems[0].expectedAnswer),
+        correctBucketId: targetExampleBucket?.id || ordinalToBucketMap[1] || defaultBucketId,
+        isExample: true,
+      };
+
+      hasExampleIndication = true;
 
       // 2. Integración Íntegra de Fichas desde la Clave de Respuestas:
       // Todos los identificadores explícitos presentes en la clave de respuestas (e.g. 'A2; 6; 9 B3 C4; 5; 7; 8')
@@ -2689,7 +2881,7 @@ export function normalizeBucketsMatchingInteraction(
 
       if (bucketAnswerKeyMap && bucketAnswerKeyMap.size >= 2) {
         interactiveOrdinals = Array.from(bucketAnswerKeyMap.keys())
-          .filter((k) => k >= 1 && k <= N && (!hasExampleIndication || k !== 1))
+          .filter((k) => k >= 1 && k <= N && k !== 1)
           .sort((a, b) => a - b);
       } else if (Array.isArray(it.tokens) && it.tokens.length > 0) {
         for (let tIdx = 0; tIdx < it.tokens.length; tIdx++) {
@@ -2697,28 +2889,29 @@ export function normalizeBucketsMatchingInteraction(
           let k = extractOrdinalIndex(t);
           if (k === null && it.tokens.length === N) {
             k = tIdx + 1;
+          } else if (k === null && it.tokens.length === N - 1) {
+            k = tIdx + 2;
           }
-          if (k !== null && k >= 1 && k <= N) {
-            if (hasExampleIndication && k === 1) {
-              continue; // Excluir la muestra preasignada k=1
-            }
+          if (k !== null && k >= 2 && k <= N) {
             if (!interactiveOrdinals.includes(k)) {
               interactiveOrdinals.push(k);
             }
           }
         }
       } else {
-        const startK = hasExampleIndication ? 2 : 1;
-        for (let k = startK; k <= N; k++) {
+        for (let k = 2; k <= N; k++) {
           interactiveOrdinals.push(k);
         }
       }
 
       // Para cada ordinal k interactivo: tokenSource = previousTwoPartItems[k - 1]
+      // correctBucketId = ordinalToBucketMap[k] ?? targetSlots[0].id
+      // Queda estrictamente prohibido usar el índice secuencial i del bucle de fichas interactivas para buscar en la clave:
+      // Cada token interactivo se resuelve determinísticamente mediante el ordinal absoluto k
       const interactiveTokens = interactiveOrdinals.map((k) => {
         const tokenSource = prevTwoPartItems[k - 1];
         const tokenText = assembleTwoPartToken(tokenSource.prompt, tokenSource.expectedAnswer);
-        const correctBucketId = ordinalToBucketMap.get(k) || it.buckets?.[0]?.id || 'slot-1';
+        const correctBucketId = ordinalToBucketMap[k] ?? defaultBucketId;
         const tokenId = ordinalTokenIdMap.get(k) || `tok-${k}`;
         return {
           id: tokenId,
@@ -2728,12 +2921,15 @@ export function normalizeBucketsMatchingInteraction(
         };
       });
 
-      // 'block.tokens' contiene exactamente N elementos (1 token con isExample: true + las N - 1 fichas interactivas)
-      if (tokenExample) {
-        it.tokens = [tokenExample, ...interactiveTokens];
-      } else {
-        it.tokens = interactiveTokens;
-      }
+      // Consolidar en 'interaction.tokens': [sampleToken, ...interactiveTokens]
+      // La cardinalidad total de 'tokens' debe ser exactamente N (1 muestra + M interactivos)
+      it.tokens = [sampleToken, ...interactiveTokens];
+
+      // Comprobar la distribución de correctBucketId en consola
+      console.log('[BucketsDistribution] Distribución de correctBucketId:', {
+        sampleToken: { id: sampleToken.id, correctBucketId: sampleToken.correctBucketId },
+        interactiveTokens: interactiveTokens.map((t) => ({ id: t.id, correctBucketId: t.correctBucketId })),
+      });
 
       it.sourceItems = it.tokens.map((t: any) => ({
         id: t.id,
@@ -2759,7 +2955,19 @@ export function normalizeBucketsMatchingInteraction(
     if (Array.isArray(it.tokens)) {
       for (const t of it.tokens) {
         if (t.isExample && t.correctBucketId) {
-          const destBucket = it.buckets.find((b: any) => b.id === t.correctBucketId);
+          const tid = t.correctBucketId.toLowerCase().trim();
+          const destBucket = it.buckets.find((b: any) => {
+            const bid = (b.id || '').toLowerCase().trim();
+            const blabel = (b.label || '').toLowerCase().trim();
+            return (
+              bid === tid ||
+              bid.endsWith(`-${tid}`) ||
+              bid.endsWith(`_${tid}`) ||
+              blabel.startsWith(tid) ||
+              blabel.startsWith(`${tid} `) ||
+              blabel.startsWith(`${tid})`)
+            );
+          });
           if (destBucket) {
             discountedExampleIds.add(t.id);
             if (!destBucket.items) destBucket.items = [];
@@ -2775,7 +2983,9 @@ export function normalizeBucketsMatchingInteraction(
       }
 
       for (const bucket of it.buckets) {
-        const marker = bucket._exampleMarker || markerMap.get(bucket.id);
+        const catLetter = bucket.id.match(/^bucket-([A-Za-z])$/i)?.[1]?.toUpperCase() ||
+                          (/^[A-Za-z]$/.test(bucket.id) ? bucket.id.toUpperCase() : null);
+        const marker = bucket._exampleMarker || markerMap.get(bucket.id) || (catLetter ? markerMap.get(catLetter) : undefined);
         if (marker) {
           const numMatch = String(marker).match(/\d+/);
           const k = numMatch ? parseInt(numMatch[0], 10) : 1;
@@ -4193,7 +4403,10 @@ export function validateAndParseSlides(
         } else if (rawSlide.interaction.type === 'buckets_matching') {
           const hasTokens = (Array.isArray(rawSlide.interaction.tokens) && rawSlide.interaction.tokens.length > 0) ||
             (Array.isArray(rawSlide.interaction.sourceItems) && rawSlide.interaction.sourceItems.length > 0);
-          if (!hasTokens) isZeroInteractive = true;
+          const canSynthesizeFromContext = Boolean(effectiveContext) ||
+            Boolean(Array.isArray(rawSlide.interaction.buckets) && rawSlide.interaction.buckets.length > 0) ||
+            Boolean(Array.isArray(rawSlide.interaction.targetSlots) && rawSlide.interaction.targetSlots.length > 0);
+          if (!hasTokens && !canSynthesizeFromContext) isZeroInteractive = true;
         } else if (rawSlide.interaction.type === 'sequence') {
           const hasItems = Array.isArray(rawSlide.interaction.items) && rawSlide.interaction.items.length > 0;
           if (!hasItems) isZeroInteractive = true;
@@ -4589,8 +4802,8 @@ export function validateAndParseSlides(
  */
 export function slideToExtractedBlock(
   slide: Slide,
-  primaryImage: string,
-  imageList: string[]
+  primaryImage: string = '',
+  imageList: string[] = []
 ): ExtractedBlock & Slide {
   const interaction = slide.interaction;
   const ref = slide.referenceContent;
@@ -4994,12 +5207,8 @@ export async function digitizeBook(
       const envGeminiModel = import.meta.env.VITE_GEMINI_MODEL?.trim();
       const candidateModels = Array.from(new Set([
         ...(envGeminiModel ? [envGeminiModel] : []),
-        'gemini-2.0-flash',
-        'gemini-1.5-flash-latest',
-        'gemini-1.5-pro',
-        'gemini-2.5-flash',
-        'gemini-2.5-pro',
-        'gemini-2.0-flash-lite',
+        'gemini-3.8-flash',
+        'gemini-3.5-flash-lite',
       ]));
 
       for (const model of candidateModels) {
@@ -5055,9 +5264,8 @@ export async function digitizeBook(
   const envOpenRouterModel = import.meta.env.VITE_OPENROUTER_MODEL?.trim();
   const openRouterCandidates = Array.from(new Set([
     ...(envOpenRouterModel ? [envOpenRouterModel] : []),
-    'google/gemini-2.5-flash',
-    'google/gemini-2.0-flash-001',
-    'google/gemini-1.5-flash',
+    'google/gemini-3.8-flash',
+    'google/gemini-3.5-flash-lite',
   ]));
 
   if (openRouterApiKey && openRouterApiKey.trim() !== '') {

@@ -216,10 +216,8 @@ INSTRUCCIONES CLAVE DE EVALUACIÓN:
   const geminiApiKey = import.meta.env.VITE_GEMINI_API_KEY;
   if (geminiApiKey && geminiApiKey.trim() !== '') {
     const candidateModels = [
-      'gemini-2.5-flash',
-      'gemini-2.0-flash',
-      'gemini-1.5-flash',
-      'gemini-2.5-pro',
+      'gemini-3.8-flash',
+      'gemini-3.5-flash-lite',
     ];
 
     try {
@@ -275,7 +273,7 @@ INSTRUCCIONES CLAVE DE EVALUACIÓN:
   // Strategy 2: OpenRouter API with Structured JSON Schema
   const openRouterApiKey = import.meta.env.VITE_OPENROUTER_API_KEY;
   if (openRouterApiKey && openRouterApiKey.trim() !== '') {
-    const orCandidates = ['google/gemini-2.5-flash', 'google/gemini-2.0-flash-001', 'google/gemini-1.5-flash'];
+    const orCandidates = ['google/gemini-3.8-flash', 'google/gemini-3.5-flash-lite'];
 
     for (const orModel of orCandidates) {
       if (signal?.aborted) {

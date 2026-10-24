@@ -161,4 +161,161 @@ describe('useLessonStore - File System Access API & Quick Save', () => {
     expect(useLessonStore.getState().currentFileHandle).toBeNull();
     expect(useLessonStore.getState().lesson.slides).toHaveLength(0);
   });
+
+  it('migración defensiva retrocompatible: hidrata _rawExtraction, _sourceImage, items en buckets y permite metadatos desconocidos con .passthrough()', () => {
+    const legacyLesson = {
+      id: 'lesson-legacy-99',
+      title: 'Legacy ELT Lesson',
+      level: 'B1',
+      unit: 'Unit 2',
+      customPluginMetadata: { version: '1.0.0', author: 'ELT Publisher' },
+      slides: [
+        {
+          id: 'slide-leg-1',
+          title: 'Classification Activity',
+          layout: 'unknown_old_layout',
+          legacySlideTag: 'review_unit',
+          interaction: {
+            type: 'buckets_matching',
+            id: 'bm-1',
+            instruction: 'Classify words into groups',
+            buckets: [
+              { id: 'b1', label: 'Fruits' }, // missing items: []
+              { id: 'b2', label: 'Vegetables' } // missing items: []
+            ],
+            tokens: [
+              { id: 'tok-1', text: 'Apple', correctBucketId: 'b1' },
+              { id: 'tok-2', text: 'Carrot', correctBucketId: 'b2' }
+            ]
+          }
+        }
+      ]
+    };
+
+    const mockHandle: any = { name: 'Legacy_Unit2.elt.json' };
+    const success = useLessonStore.getState().openLesson(legacyLesson, mockHandle);
+
+    expect(success).toBe(true);
+    const state = useLessonStore.getState();
+
+    // Actualización forzada de estado al abrir
+    expect(state.lessonName).toBe('Legacy ELT Lesson');
+    expect(state.slides).toHaveLength(1);
+    expect(state.activeSlideIndex).toBe(0);
+    expect(state.fileHandle).toBe(mockHandle);
+    expect(state.currentFileHandle).toBe(mockHandle);
+    expect(state.hasUnsavedChanges).toBe(false);
+    expect(state.canUndo).toBe(false);
+    expect(state.saveFeedback?.message).toBe('Abierto: Legacy_Unit2.elt.json');
+
+    // Hidratación defensiva retrocompatible
+    const slide = state.lesson.slides[0];
+    expect(slide.layout).toBe('split_50_50'); // normalized fallback
+    expect(slide._rawExtraction).toBeNull();
+    expect(slide._sourceImage).toBeNull();
+    expect(slide._answerKeyCrop).toBeNull();
+
+    // Passthrough de metadatos antiguos
+    expect((slide as any).legacySlideTag).toBe('review_unit');
+    expect((state.lesson as any).customPluginMetadata).toEqual({ version: '1.0.0', author: 'ELT Publisher' });
+
+    // TargetSlots / buckets hidratados con items: []
+    const interaction = slide.interaction as any;
+    expect(interaction.buckets[0].items).toEqual([]);
+    expect(interaction.buckets[1].items).toEqual([]);
+    expect(interaction.targetSlots[0].items).toEqual([]);
+  });
+
+  it('diagnóstico de error: si safeParse falla, imprime console.error con format() y emite toast visible', () => {
+    const invalidLesson = {
+      id: 'invalid-lesson',
+      slides: [
+        {
+          id: 'slide-fail',
+          title: 'Bad Interaction',
+          interaction: {
+            type: 'completely_unsupported_interaction_type',
+            id: 'bad-1',
+          }
+        }
+      ]
+    };
+
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const success = useLessonStore.getState().openLesson(invalidLesson);
+
+    expect(success).toBe(false);
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      'Error validando lección:',
+      expect.objectContaining({
+        _errors: expect.any(Array),
+      })
+    );
+
+    const feedback = useLessonStore.getState().saveFeedback;
+    expect(feedback?.message).toBe('No se pudo cargar la lección: estructura incompatible');
+
+    consoleErrorSpy.mockRestore();
+  });
+
+  it('loadLessonFromFile procesa un archivo File válido, resetea estado y sincroniza propiedades', async () => {
+    const validJson = {
+      title: 'Grammar in Context',
+      level: 'B2',
+      slides: [
+        {
+          id: 'slide-f1',
+          title: 'Conditionals',
+          layout: 'single_column',
+          isGraded: true,
+        },
+        {
+          id: 'slide-f2',
+          title: 'Practice',
+          layout: 'split_50_50',
+          isGraded: true,
+        }
+      ]
+    };
+
+    const mockFile: any = {
+      name: 'Grammar_B2.elt.json',
+      text: vi.fn().mockResolvedValue(JSON.stringify(validJson)),
+    };
+
+    // Dirty state before load
+    useLessonStore.setState({ hasUnsavedChanges: true });
+
+    const success = await useLessonStore.getState().loadLessonFromFile(mockFile);
+
+    expect(success).toBe(true);
+    const state = useLessonStore.getState();
+    expect(state.lessonName).toBe('Grammar in Context');
+    expect(state.slides).toHaveLength(2);
+    expect(state.activeSlideIndex).toBe(0);
+    expect(state.hasUnsavedChanges).toBe(false);
+    expect(state.canUndo).toBe(false);
+    expect(state.saveFeedback?.message).toBe('Abierto: Grammar_B2.elt.json');
+  });
+
+  it('loadLessonFromFile captura JSON malformado y emite toast de estructura incompatible', async () => {
+    const corruptedFile: any = {
+      name: 'Corrupted.elt.json',
+      text: vi.fn().mockResolvedValue('{ "invalidJson": [ unclosed array'),
+    };
+
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const success = await useLessonStore.getState().loadLessonFromFile(corruptedFile);
+
+    expect(success).toBe(false);
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      'Error validando lección:',
+      expect.anything()
+    );
+    expect(useLessonStore.getState().saveFeedback?.message).toBe('No se pudo cargar la lección: estructura incompatible');
+
+    consoleErrorSpy.mockRestore();
+  });
 });

@@ -16,7 +16,7 @@ export const ReferenceTextBlockSchema = z.object({
   cues: z.array(z.string()).optional(),
   imageUrl: z.string().optional(),
   images: z.array(z.string()).optional(),
-});
+}).passthrough();
 
 export const ReferenceTableBlockSchema = z.object({
   type: z.literal('table_reference'),
@@ -27,12 +27,12 @@ export const ReferenceTableBlockSchema = z.object({
   rows: z.array(z.array(z.string())),
   caption: z.string().optional(),
   body: z.string().optional(),
-});
+}).passthrough();
 
 export const StructuredReferenceColumnSchema = z.object({
   header: z.string(),
   items: z.array(z.string()).default([]),
-});
+}).passthrough();
 
 export const StructuredReferenceBlockSchema = z.object({
   type: z.literal('reference_table'),
@@ -45,7 +45,7 @@ export const StructuredReferenceBlockSchema = z.object({
   verificationAudioUrl: z.string().optional(),
   audioLabel: z.string().optional(),
   followUpPrompt: z.string().optional(),
-});
+}).passthrough();
 
 export const ReferenceMediaBlockSchema = z.object({
   type: z.literal('media'),
@@ -62,7 +62,7 @@ export const ReferenceMediaBlockSchema = z.object({
   url: z.string().default('placeholder:audio-track'),
   title: z.string().optional(),
   transcript: z.string().optional(),
-});
+}).passthrough();
 
 export const ReferenceBlockSchema = z.discriminatedUnion('type', [
   ReferenceTextBlockSchema,
@@ -89,11 +89,11 @@ export const InputFieldListItemSchema = z.object({
   prefix: z.string().optional(),
   suffix: z.string().optional(),
   expectedAnswer: z.string().optional(),
-  acceptedAnswers: z.array(z.string()),
+  acceptedAnswers: z.array(z.string()).default([]),
   hint: z.string().optional(),
   explanation: z.string().optional(),
   isExample: z.boolean().optional(),
-});
+}).passthrough();
 
 export const InputFieldTableCellSchema = z.object({
   text: z.string().default(''),
@@ -103,7 +103,7 @@ export const InputFieldTableCellSchema = z.object({
   expectedAnswer: z.string().optional(),
   isExample: z.boolean().default(false),
   hint: z.string().optional(),
-});
+}).passthrough();
 
 export const InputFieldsBlockSchema = z.object({
   type: z.literal('input_fields'),
@@ -122,7 +122,7 @@ export const InputFieldsBlockSchema = z.object({
   // Para layoutMode: 'inline_paragraph'
   paragraphTemplate: z.string().default(''), // Ej: "Yesterday, Mick {{input_1}} at 8:00 AM and {{input_2}} his coffee."
   paragraphInputs: z.record(z.string(), z.array(z.string())).default({}), // key: input_1 -> ["arrived", "got in"]
-});
+}).passthrough();
 
 export type InputFieldListItem = z.infer<typeof InputFieldListItemSchema>;
 export type InputFieldTableCell = z.infer<typeof InputFieldTableCellSchema>;
@@ -135,7 +135,7 @@ export const SelectionOptionSchema = z.object({
   isCorrect: z.boolean().optional(),
   feedback: z.string().optional(),
   isExample: z.boolean().optional(),
-});
+}).passthrough();
 
 export const SelectionQuestionSchema = z.object({
   id: z.string(),
@@ -146,7 +146,7 @@ export const SelectionQuestionSchema = z.object({
   options: z.array(SelectionOptionSchema),
   isExample: z.boolean().optional(),
   allowMultiple: z.boolean().default(false).optional(),
-});
+}).passthrough();
 
 export const SelectionBlockSchema = z.object({
   type: z.literal('selection'),
@@ -161,7 +161,7 @@ export const SelectionBlockSchema = z.object({
   // b) Flat Selection Mode: flat list of selectable items/cards
   options: z.array(SelectionOptionSchema).optional(),
   allowMultiple: z.boolean().default(false).optional(),
-});
+}).passthrough();
 
 export type SelectionOption = z.infer<typeof SelectionOptionSchema>;
 export type SelectionQuestion = z.infer<typeof SelectionQuestionSchema>;
@@ -175,7 +175,7 @@ export const TargetSlotSchema = z.object({
   description: z.string().optional(),
   color: z.string().optional(),
   items: z.array(z.any()).optional(),
-});
+}).passthrough();
 
 export const SourceItemSchema = z.object({
   id: z.string(),
@@ -183,18 +183,18 @@ export const SourceItemSchema = z.object({
   correctTargetId: z.string().optional(),
   isExample: z.boolean().optional(),
   hint: z.string().optional(),
-});
+}).passthrough();
 
 export const CorrectPairSchema = z.object({
   sourceId: z.string(),
   targetId: z.string(),
-});
+}).passthrough();
 
 export const MatchingPayloadSchema = z.object({
   sourceItems: z.array(SourceItemSchema),
   targetSlots: z.array(TargetSlotSchema),
   correctPairs: z.record(z.string(), z.string()).or(z.array(CorrectPairSchema)).optional(),
-});
+}).passthrough();
 
 // Backward-compatible alias schemas
 export const BucketTargetSchema = TargetSlotSchema;
@@ -204,7 +204,7 @@ export const BucketTokenSchema = z.object({
   correctBucketId: z.string(),
   isExample: z.boolean().optional(),
   hint: z.string().optional(),
-});
+}).passthrough();
 
 export const BucketsMatchingBlockSchema = z.object({
   type: z.literal('buckets_matching'),
@@ -219,7 +219,7 @@ export const BucketsMatchingBlockSchema = z.object({
   targetSlots: z.array(TargetSlotSchema).optional(),
   sourceItems: z.array(SourceItemSchema).optional(),
   correctPairs: z.record(z.string(), z.string()).or(z.array(CorrectPairSchema)).optional(),
-});
+}).passthrough();
 
 export type TargetSlot = z.infer<typeof TargetSlotSchema>;
 export type SourceItem = z.infer<typeof SourceItemSchema>;
@@ -237,7 +237,7 @@ export const SequenceItemSchema = z.object({
   correctOrder: z.number(), // 1-indexed
   speaker: z.string().optional(),
   hint: z.string().optional(),
-});
+}).passthrough();
 
 export const SequenceBlockSchema = z.object({
   type: z.literal('sequence'),
@@ -247,7 +247,7 @@ export const SequenceBlockSchema = z.object({
   audioLabel: z.string().optional(),
   followUpPrompt: z.string().optional(),
   items: z.array(SequenceItemSchema),
-});
+}).passthrough();
 
 export type SequenceItem = z.infer<typeof SequenceItemSchema>;
 export type SequenceBlock = z.infer<typeof SequenceBlockSchema>;
@@ -282,7 +282,7 @@ export const WritingBlockSchema = z.object({
   verificationAudioUrl: z.string().optional(),
   audioLabel: z.string().optional(),
   followUpPrompt: z.string().optional(),
-});
+}).passthrough();
 
 export type WritingBlock = z.infer<typeof WritingBlockSchema>;
 
@@ -309,7 +309,10 @@ export const SlideSchema = z.object({
   id: z.string(),
   title: z.string(),
   subtitle: z.string().optional(),
-  layout: SlideLayoutSchema.default('split_50_50'),
+  layout: z.preprocess(
+    (val) => (val === 'single_column' || val === 'split_50_50' || val === 'header_stacked' ? val : 'split_50_50'),
+    SlideLayoutSchema
+  ).default('split_50_50'),
   referenceContent: ReferenceBlockSchema.nullable().optional(),
   interaction: InteractionBlockSchema.nullable().optional(),
   cachedInteraction: InteractionBlockSchema.nullable().optional(),
@@ -319,10 +322,10 @@ export const SlideSchema = z.object({
   isGraded: z.boolean().default(true).optional(),
   sourceImageSnippetUrl: z.string().optional(),
   metadata: z.record(z.string(), z.any()).optional(),
-  _sourceImage: z.string().optional(),
+  _sourceImage: z.string().nullable().optional(),
   _rawExtraction: z.unknown().optional(),
-  _answerKeyCrop: z.string().optional(),
-});
+  _answerKeyCrop: z.string().nullable().optional(),
+}).passthrough();
 
 export type Slide = z.infer<typeof SlideSchema>;
 
@@ -331,12 +334,15 @@ export type Slide = z.infer<typeof SlideSchema>;
 // ==========================================
 
 export const LessonSchema = z.object({
-  id: z.string(),
-  title: z.string(),
-  level: z.enum(['A1-A2', 'B1', 'B2', 'C1']),
-  unit: z.string(),
-  slides: z.array(SlideSchema),
-});
+  id: z.string().default(() => `lesson-${Date.now()}`),
+  title: z.string().default('Nueva Lección'),
+  level: z.preprocess(
+    (val) => (['A1-A2', 'B1', 'B2', 'C1'].includes(val as any) ? val : 'B1'),
+    z.enum(['A1-A2', 'B1', 'B2', 'C1'])
+  ).default('B1'),
+  unit: z.string().default('Unidad 1'),
+  slides: z.array(SlideSchema).default([]),
+}).passthrough();
 
 export type Lesson = z.infer<typeof LessonSchema>;
 
@@ -351,7 +357,7 @@ export const ExtractedTableCellSchema = z.object({
   acceptedAnswers: z.array(z.string()).default([]),
   isExample: z.boolean().default(false),
   hint: z.string().optional(),
-});
+}).passthrough();
 
 export const ExtractedItemSchema = z.object({
   prompt: z.string(),
@@ -361,7 +367,7 @@ export const ExtractedItemSchema = z.object({
   explanation: z.string().optional().default(''),
   options: z.array(z.string()).optional(),
   prefix: z.string().optional(),
-});
+}).passthrough();
 
 export const ExtractedStructuredPayloadSchema = z.object({
   title: z.string(),
@@ -387,7 +393,7 @@ export const ExtractedStructuredPayloadSchema = z.object({
   isGraded: z.boolean().default(true).optional(),
   visualImageIndices: z.array(z.number()).optional(),
   allowMultiple: z.boolean().default(false).optional(),
-});
+}).passthrough();
 
 export type ExtractedTableCell = z.infer<typeof ExtractedTableCellSchema>;
 export type ExtractedItem = z.infer<typeof ExtractedItemSchema>;
@@ -403,10 +409,10 @@ export const ExtractedBlockSchema = z.object({
   contextBody: z.string().optional(),
   parsedData: z.record(z.string(), z.any()).optional(),
   metadata: z.record(z.string(), z.any()).optional(),
-  _sourceImage: z.string().optional(),
+  _sourceImage: z.string().nullable().optional(),
   _rawExtraction: z.unknown().optional(),
-  _answerKeyCrop: z.string().optional(),
-});
+  _answerKeyCrop: z.string().nullable().optional(),
+}).passthrough();
 
 export type ExtractedBlock = z.infer<typeof ExtractedBlockSchema>;
 
