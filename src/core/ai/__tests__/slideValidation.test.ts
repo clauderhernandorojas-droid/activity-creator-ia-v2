@@ -1,5 +1,12 @@
 import { describe, it, expect, vi } from 'vitest';
-import { SlideSchema, SelectionBlockSchema, type Slide } from '../../../types/schema';
+import {
+  SlideSchema,
+  SelectionBlockSchema,
+  ClozeMultichoiceBlockSchema,
+  ClozeMultichoiceGapSchema,
+  ClozeMultichoiceOptionSchema,
+  type Slide,
+} from '../../../types/schema';
 import { evaluateSelection } from '../../evaluators/evaluateSelection';
 import {
   validateAndParseSlides,
@@ -18,7 +25,20 @@ import {
   extractTwoPartItemsFromSlide,
   assembleTwoPartToken,
   parseBucketsCategoryAnswerKey,
+  cleanOptionText,
+  isClozeMultichoiceActivity,
+  normalizeClozeMultichoiceInteraction,
+  extractRealOptionsForOrdinal,
+  parseOptionsFromOrdinalBlock,
+  areGapOptionsPlaceholderOrEmpty,
+  parseClozeOptionsFromText,
+  STRUCTURED_SLIDE_SCHEMA,
+  getStructuredSlideSchema,
+  CANDIDATE_TIMEOUT_MS,
+  DEFAULT_GEMINI_CANDIDATE_MODELS,
+  DEFAULT_OPENROUTER_CANDIDATE_MODELS,
 } from '../digitizeBook';
+import { evaluateClozeMultichoice } from '../../evaluators/evaluateClozeMultichoice';
 
 describe('slideValidation - Direct Schema & Architectural Invariant Tests', () => {
 
@@ -4866,6 +4886,679 @@ describe('slideValidation - Direct Schema & Architectural Invariant Tests', () =
         expect(interactiveToks[0].text).toBe('She usually drinks hot tea with lemon.');
         expect(interactiveToks[1].text).toBe('They never travel during winter months.');
       });
+    });
+  });
+
+  // =========================================================================
+  // CASO W: Soporte Universal Agnóstico para Actividades 'cloze_multichoice'
+  // =========================================================================
+  describe('Caso W: Soporte Universal Agnóstico para Actividades cloze_multichoice (Texto con Gaps y Banco de Opciones Inferior)', () => {
+    it('cleanOptionText limpia prefijos de letras (a), b., c- y etiquetas de ejemplo preservando palabras', () => {
+      expect(cleanOptionText('a) travel')).toBe('travel');
+      expect(cleanOptionText('(b) traveled (example)')).toBe('traveled');
+      expect(cleanOptionText('c. travelling *')).toBe('travelling');
+      expect(cleanOptionText('d - stayed [sample]')).toBe('stayed');
+      expect(cleanOptionText('a car')).toBe('a car');
+      expect(cleanOptionText('a) a big car')).toBe('a big car');
+    });
+
+    it('detecta y transforma obligatoriamente una lectura pasiva con gaps y banco inferior a cloze_multichoice', () => {
+      // Simulación de OCR donde el pasaje y las opciones inferiores fueron erróneamente clasificados como lectura pasiva
+      const rawSlideObj = {
+        id: 'slide-cloze-1',
+        title: 'Marco Polo: The Silk Road',
+        subtitle: 'Read the article and choose the correct options.',
+        layout: 'single_column',
+        isGraded: false,
+        referenceContent: {
+          id: 'ref-text-1',
+          type: 'text',
+          category: 'reading',
+          title: 'Marco Polo',
+          content: `Marco Polo was born in Venice in 1254. When he was 17, he 1 _____ to China with his father. They 2 _____ for three years. In China, he 3 _____ for the Emperor Kublai Khan. He 4 _____ in China for 17 years before returning home.
+
+1 a) travel b) *traveled* (example) c) travelling
+2 a) journeyed b) went c) visited
+3 a) worked b) works c) working
+4 a) stayed b) stay c) staying`
+        },
+        interaction: null
+      };
+
+      // Verificación directa de funciones de detección y normalización
+      expect(isClozeMultichoiceActivity(rawSlideObj)).toBe(true);
+      const cloned = JSON.parse(JSON.stringify(rawSlideObj));
+      normalizeClozeMultichoiceInteraction(cloned);
+      expect(cloned.interaction?.type).toBe('cloze_multichoice');
+
+      const rawPassiveClozeSlide = JSON.stringify({
+        slides: [rawSlideObj]
+      });
+
+      const slides = validateAndParseSlides(rawPassiveClozeSlide);
+      expect(slides).toHaveLength(1);
+
+      const slide = slides[0];
+      // Queda estrictamente prohibido clasificarlo como 'Lectura' (referenceContent debe ser null)
+      expect(slide.referenceContent).toBeNull();
+      expect(slide.layout).toBe('single_column');
+      expect(slide.isGraded).toBe(true);
+
+      // Interacción debe ser 'cloze_multichoice'
+      expect(slide.interaction).toBeDefined();
+      expect(slide.interaction?.type).toBe('cloze_multichoice');
+
+      const interaction = slide.interaction as any;
+      // passageText debe tener los marcadores canónicos {{gap-k}}
+      expect(interaction.passageText).toContain('{{gap-1}}');
+      expect(interaction.passageText).toContain('{{gap-2}}');
+      expect(interaction.passageText).toContain('{{gap-3}}');
+      expect(interaction.passageText).toContain('{{gap-4}}');
+      expect(interaction.passageText).not.toContain('1 a) travel');
+
+      // Gaps deben tener 4 reactivos
+      expect(interaction.gaps).toHaveLength(4);
+
+      // Reactivo 1 (Ejemplo resuelto)
+      const gap1 = interaction.gaps[0];
+      expect(gap1.id).toBe('gap-1');
+      expect(gap1.ordinal).toBe(1);
+      expect(gap1.isExample).toBe(true);
+      expect(gap1.correctOptionId).toBe('b');
+      expect(gap1.options).toEqual([
+        { id: 'a', text: 'travel' },
+        { id: 'b', text: 'traveled' },
+        { id: 'c', text: 'travelling' }
+      ]);
+
+      // Reactivo 2
+      const gap2 = interaction.gaps[1];
+      expect(gap2.id).toBe('gap-2');
+      expect(gap2.ordinal).toBe(2);
+      expect(gap2.options).toEqual([
+        { id: 'a', text: 'journeyed' },
+        { id: 'b', text: 'went' },
+        { id: 'c', text: 'visited' }
+      ]);
+      expect(gap2.isExample).toBeUndefined();
+    });
+
+    it('convierte un arquetipo selection degradado con preguntas ordinales a cloze_multichoice', () => {
+      const rawDegradedSelectionSlide = JSON.stringify({
+        slides: [
+          {
+            id: 'slide-degraded-selection',
+            title: 'Past Simple Cloze',
+            subtitle: 'Choose the correct form of the verbs.',
+            layout: 'split_50_50',
+            referenceContent: {
+              id: 'ref-text-2',
+              type: 'text',
+              category: 'reading',
+              content: 'Yesterday, Sarah [ 1 ] up at 7:00. She [ 2 ] breakfast and [ 3 ] to work.'
+            },
+            interaction: {
+              id: 'int-selection-degraded',
+              type: 'selection',
+              instruction: 'Choose the correct option:',
+              questions: [
+                {
+                  id: 'q-1',
+                  prompt: '1',
+                  mode: 'single_choice',
+                  isExample: true,
+                  options: [
+                    { id: 'a', text: 'woke', isCorrect: true, isExample: true },
+                    { id: 'b', text: 'wake', isCorrect: false },
+                    { id: 'c', text: 'waking', isCorrect: false }
+                  ]
+                },
+                {
+                  id: 'q-2',
+                  prompt: '2',
+                  mode: 'single_choice',
+                  options: [
+                    { id: 'a', text: 'eat', isCorrect: false },
+                    { id: 'b', text: 'ate', isCorrect: true },
+                    { id: 'c', text: 'eaten', isCorrect: false }
+                  ]
+                },
+                {
+                  id: 'q-3',
+                  prompt: '3',
+                  mode: 'single_choice',
+                  options: [
+                    { id: 'a', text: 'went', isCorrect: true },
+                    { id: 'b', text: 'go', isCorrect: false },
+                    { id: 'c', text: 'gone', isCorrect: false }
+                  ]
+                }
+              ]
+            }
+          }
+        ]
+      });
+
+      const slides = validateAndParseSlides(rawDegradedSelectionSlide);
+      expect(slides).toHaveLength(1);
+
+      const slide = slides[0];
+      expect(slide.referenceContent).toBeNull();
+      expect(slide.layout).toBe('single_column');
+      expect(slide.interaction?.type).toBe('cloze_multichoice');
+
+      const interaction = slide.interaction as any;
+      expect(interaction.passageText).toBe('Yesterday, Sarah {{gap-1}} up at 7:00. She {{gap-2}} breakfast and {{gap-3}} to work.');
+      expect(interaction.gaps).toHaveLength(3);
+      expect(interaction.gaps[0].isExample).toBe(true);
+      expect(interaction.gaps[0].correctOptionId).toBe('a');
+      expect(interaction.gaps[1].correctOptionId).toBe('b');
+      expect(interaction.gaps[2].correctOptionId).toBe('a');
+    });
+
+    it('aplica solucionario cosechado (harvestedAnswerKeys) para calibrar correctOptionId en cloze_multichoice', () => {
+      const rawWithKey = JSON.stringify({
+        slides: [
+          {
+            id: 'slide-cloze-with-key',
+            title: 'Unit 4 Exercise 2a',
+            subtitle: 'Read and complete',
+            referenceContent: {
+              id: 'ref-text-3',
+              type: 'text',
+              content: `Ancient Rome was a bustling metropolis. The Colosseum [ 1 ] built in 70 AD.
+Romans [ 2 ] chariot races and theatrical performances.
+
+1 a) was b) were c) is
+2 a) liked b) enjoyed c) hated`
+            },
+            interaction: null
+          },
+          // Solucionario / Answer key
+          {
+            id: 'slide-key',
+            title: 'Answer Key',
+            subtitle: 'Exercise 2a Answers: 1 a 2 b',
+            referenceContent: null,
+            interaction: null
+          }
+        ]
+      });
+
+      const slides = validateAndParseSlides(rawWithKey);
+      expect(slides).toHaveLength(1);
+      const slide = slides[0];
+      expect(slide.interaction?.type).toBe('cloze_multichoice');
+      const interaction = slide.interaction as any;
+      expect(interaction.gaps[0].correctOptionId).toBe('a');
+      expect(interaction.gaps[1].correctOptionId).toBe('b');
+    });
+
+    it('evaluateClozeMultichoice califica correctamente omitiendo reactivos de ejemplo', () => {
+      const mockBlock = {
+        id: 'block-1',
+        type: 'cloze_multichoice',
+        instruction: 'Choose options',
+        passageText: 'Text {{gap-1}} and {{gap-2}} and {{gap-3}}',
+        gaps: [
+          {
+            id: 'gap-1',
+            ordinal: 1,
+            isExample: true,
+            options: [{ id: 'a', text: 'optA' }, { id: 'b', text: 'optB' }],
+            correctOptionId: 'a',
+          },
+          {
+            id: 'gap-2',
+            ordinal: 2,
+            options: [{ id: 'a', text: 'optA' }, { id: 'b', text: 'optB' }],
+            correctOptionId: 'b',
+          },
+          {
+            id: 'gap-3',
+            ordinal: 3,
+            options: [{ id: 'a', text: 'optA' }, { id: 'b', text: 'optB' }],
+            correctOptionId: 'a',
+          },
+        ]
+      } as any;
+
+      // Student answers: gap-2 is correct ('b'), gap-3 is incorrect ('b')
+      const result = evaluateClozeMultichoice(mockBlock, {
+        'gap-1': 'a',
+        'gap-2': 'b',
+        'gap-3': 'b',
+      });
+
+      expect(result.maxScore).toBe(2); // gap-1 omitted because isExample: true
+      expect(result.score).toBe(1); // only gap-2 correct
+      expect(result.isCorrect).toBe(false);
+      expect(result.details['gap-1']).toBe(true);
+      expect(result.details['gap-2']).toBe(true);
+      expect(result.details['gap-3']).toBe(false);
+
+      // Student answers all non-examples correctly:
+      const perfectResult = evaluateClozeMultichoice(mockBlock, {
+        'gap-2': 'b',
+        'gap-3': 'a',
+      });
+      expect(perfectResult.score).toBe(2);
+      expect(perfectResult.maxScore).toBe(2);
+      expect(perfectResult.isCorrect).toBe(true);
+    });
+
+    it('aplica invariantes canónicas: layout single_column, referenceContent null, contextBody eliminado, format y id interaction-${slide.id}', () => {
+      const rawSlideObj = {
+        id: 'slide-invariants-test',
+        title: 'The Great Expedition',
+        subtitle: 'Read and select',
+        layout: 'split_50_50',
+        contextBody: 'This should be removed from static body',
+        referenceContent: {
+          type: 'text',
+          content: 'The explorers {{gap-1}} early and {{gap-2}} the river.\n1 a) left (example) b) leave\n2 a) cross b) crossed',
+        },
+        interaction: null,
+      };
+
+      const slides = validateAndParseSlides(JSON.stringify({ slides: [rawSlideObj] }));
+      expect(slides).toHaveLength(1);
+      const slide = slides[0];
+
+      // Invariantes estrictas
+      expect(slide.layout).toBe('single_column');
+      expect(slide.referenceContent).toBeNull();
+      expect((slide as any).contextBody).toBeUndefined();
+      expect(slide.format).toBe('cloze_multichoice');
+      expect(slide.interaction).toBeDefined();
+      expect(slide.interaction?.type).toBe('cloze_multichoice');
+      expect(slide.interaction?.id).toBe(`interaction-${slide.id}`);
+      expect(slide.interaction?.instruction).toBe('Read and select');
+    });
+
+    it('parser abstracto extrae dinámicamente banco inferior con marcas visuales (asterisco, círculo, resaltado, example) y harvestedAnswerKeys', () => {
+      const rawSlideWithMixedMarkers = {
+        id: 'slide-abstract-parser-test',
+        title: 'Ancient Wonders',
+        subtitle: 'Choose the best options for each gap.',
+        layout: 'split_50_50',
+        interaction: {
+          id: 'int-existing',
+          type: 'cloze_multichoice',
+          passageText: `In ancient times, builders 1 _____ pyramids. They 2 _____ enormous stone blocks. Workers 3 _____ along the Nile. Architects 4 _____ plans carefully. Many monuments 5 _____ today.
+1 a) constructed (example) b) construct c) constructing
+2 a) moved b) *transported* c) carry
+3 a) [circled] travelled b) walk c) run
+4 a) drew b) drawn c) ==designed==
+5 a) remain b) remains c) remaining`,
+          gaps: [], // Array vacío: fuerza extracción abstracta dinámica
+        },
+      };
+
+      const slides = validateAndParseSlides(
+        JSON.stringify({
+          slides: [
+            rawSlideWithMixedMarkers,
+            {
+              id: 'slide-key',
+              title: 'Answer Key',
+              subtitle: 'Ancient Answers: 5 a',
+              referenceContent: null,
+              interaction: null,
+            },
+          ],
+        })
+      );
+      expect(slides).toHaveLength(1);
+      const slide = slides[0];
+      const interaction = slide.interaction as any;
+
+      expect(slide.layout).toBe('single_column');
+      expect(slide.referenceContent).toBeNull();
+      expect(slide.format).toBe('cloze_multichoice');
+
+      // passageText debe tener los marcadores canónicos y NO contener el banco de opciones inferior
+      expect(interaction.passageText).toContain('{{gap-1}}');
+      expect(interaction.passageText).toContain('{{gap-2}}');
+      expect(interaction.passageText).toContain('{{gap-3}}');
+      expect(interaction.passageText).toContain('{{gap-4}}');
+      expect(interaction.passageText).toContain('{{gap-5}}');
+      expect(interaction.passageText).not.toContain('1 a) constructed');
+      expect(interaction.passageText).not.toContain('5 a) remain');
+
+      expect(interaction.gaps).toHaveLength(5);
+
+      // Reactivo 1: Sufijo (example) -> isExample: true, correctOptionId: 'a'
+      expect(interaction.gaps[0].id).toBe('gap-1');
+      expect(interaction.gaps[0].isExample).toBe(true);
+      expect(interaction.gaps[0].correctOptionId).toBe('a');
+      expect(interaction.gaps[0].options[0].text).toBe('constructed');
+
+      // Reactivo 2: Asterisco *transported* -> correctOptionId: 'b'
+      expect(interaction.gaps[1].id).toBe('gap-2');
+      expect(interaction.gaps[1].correctOptionId).toBe('b');
+      expect(interaction.gaps[1].options[1].text).toBe('transported');
+
+      // Reactivo 3: Círculo [circled] -> correctOptionId: 'a'
+      expect(interaction.gaps[2].id).toBe('gap-3');
+      expect(interaction.gaps[2].correctOptionId).toBe('a');
+      expect(interaction.gaps[2].options[0].text).toBe('travelled');
+
+      // Reactivo 4: Resaltado ==designed== -> correctOptionId: 'c'
+      expect(interaction.gaps[3].id).toBe('gap-4');
+      expect(interaction.gaps[3].correctOptionId).toBe('c');
+      expect(interaction.gaps[3].options[2].text).toBe('designed');
+
+      // Reactivo 5: Resuelto contra harvestedAnswerKeys -> correctOptionId: 'a'
+      expect(interaction.gaps[4].id).toBe('gap-5');
+      expect(interaction.gaps[4].correctOptionId).toBe('a');
+      expect(interaction.gaps[4].options[0].text).toBe('remain');
+    });
+
+    it('prohibe estrictamente interaction: null cuando el cuerpo contiene marcadores {{gap-', () => {
+      const rawSlideWithGapsOnly = {
+        id: 'slide-gaps-no-interaction',
+        title: 'Story of Invention',
+        subtitle: 'Fill the blanks',
+        referenceContent: {
+          type: 'text',
+          content: 'Thomas Edison {{gap-1}} the phonograph in 1877. He {{gap-2}} many other devices.',
+        },
+        interaction: null, // Prohibido que permanezca null
+      };
+
+      const slides = validateAndParseSlides(JSON.stringify({ slides: [rawSlideWithGapsOnly] }));
+      expect(slides).toHaveLength(1);
+      const slide = slides[0];
+
+      expect(slide.interaction).not.toBeNull();
+      expect(slide.interaction?.type).toBe('cloze_multichoice');
+      expect(slide.layout).toBe('single_column');
+      expect(slide.referenceContent).toBeNull();
+      expect((slide as any).contextBody).toBeUndefined();
+      expect(slide.format).toBe('cloze_multichoice');
+
+      const interaction = slide.interaction as any;
+      expect(interaction.passageText).toBe('Thomas Edison {{gap-1}} the phonograph in 1877. He {{gap-2}} many other devices.');
+      expect(interaction.gaps).toHaveLength(2);
+      expect(interaction.gaps[0].id).toBe('gap-1');
+      expect(interaction.gaps[1].id).toBe('gap-2');
+    });
+
+    it('extrae opciones reales de 3 alternativas cuando las opciones parsed coinciden con Option A/B o vienen vacías', () => {
+      const rawOcrText = `Read the text and choose the correct option for each gap.
+Many people think Marco Polo was the first European to travel to China. However, other merchants had {{gap-1}} there before him. During his journeys, he {{gap-2}} many astonishing customs.
+
+1 a) arrived b) gone c) reached
+2 a) witnessed b) was c) saw`;
+
+      // Simular diapositiva donde el modelo devolvió placeholders por defecto
+      const slideWithPlaceholders: any = {
+        id: 'slide-cloze-placeholder-test',
+        title: 'Marco Polo Expedition',
+        subtitle: 'Read and choose',
+        interaction: {
+          id: 'int-placeholder',
+          type: 'cloze_multichoice',
+          passageText: 'Many people think Marco Polo was the first European to travel to China. However, other merchants had {{gap-1}} there before him. During his journeys, he {{gap-2}} many astonishing customs.',
+          gaps: [
+            {
+              id: 'gap-1',
+              ordinal: 1,
+              options: [
+                { id: 'a', text: 'Option A' },
+                { id: 'b', text: 'Option B' },
+              ],
+              correctOptionId: 'a',
+            },
+            {
+              id: 'gap-2',
+              ordinal: 2,
+              options: [], // Vienen vacías
+              correctOptionId: 'a',
+            },
+          ],
+        },
+        _rawExtraction: {
+          ocrText: rawOcrText,
+        },
+      };
+
+      const normalized = normalizeClozeMultichoiceInteraction(slideWithPlaceholders);
+      expect(normalized).toBe(true);
+
+      const gaps = slideWithPlaceholders.interaction.gaps;
+      expect(gaps).toHaveLength(2);
+
+      // Gap 1: Reemplazó 'Option A' / 'Option B' por las 3 alternativas reales
+      expect(gaps[0].options).toHaveLength(3);
+      expect(gaps[0].options[0]).toEqual({ id: 'a', text: 'arrived' });
+      expect(gaps[0].options[1]).toEqual({ id: 'b', text: 'gone' });
+      expect(gaps[0].options[2]).toEqual({ id: 'c', text: 'reached' });
+
+      // Gap 2: Reemplazó el array vacío por las 3 alternativas reales
+      expect(gaps[1].options).toHaveLength(3);
+      expect(gaps[1].options[0]).toEqual({ id: 'a', text: 'witnessed' });
+      expect(gaps[1].options[1]).toEqual({ id: 'b', text: 'was' });
+      expect(gaps[1].options[2]).toEqual({ id: 'c', text: 'saw' });
+    });
+
+    it('extractRealOptionsForOrdinal parsea líneas con ordinal k e incisos a, b, c multilínea o en una sola línea', () => {
+      // 1. Una sola línea
+      const singleLine = `1 a) travel b) went c) gone\n2 a) was b) were c) be`;
+      const opts1 = extractRealOptionsForOrdinal(singleLine, 1);
+      expect(opts1).toEqual([
+        { id: 'a', text: 'travel' },
+        { id: 'b', text: 'went' },
+        { id: 'c', text: 'gone' },
+      ]);
+
+      // 2. Multilínea con saltos
+      const multiLine = `1\n a) first\n b) second\n c) third\n2\n a) stop`;
+      const optsMulti = extractRealOptionsForOrdinal(multiLine, 1);
+      expect(optsMulti).toEqual([
+        { id: 'a', text: 'first' },
+        { id: 'b', text: 'second' },
+        { id: 'c', text: 'third' },
+      ]);
+
+      // 3. Incisos con mayúsculas y puntos: 1. A. big B. bigger C. biggest
+      const dotFormat = `1. A. big B. bigger C. biggest`;
+      const optsDot = extractRealOptionsForOrdinal(dotFormat, 1);
+      expect(optsDot).toEqual([
+        { id: 'a', text: 'big' },
+        { id: 'b', text: 'bigger' },
+        { id: 'c', text: 'biggest' },
+      ]);
+
+      // 4. Test parseOptionsFromOrdinalBlock y areGapOptionsPlaceholderOrEmpty
+      const parsedBlock = parseOptionsFromOrdinalBlock('a) travel b) went c) gone');
+      expect(parsedBlock).toHaveLength(3);
+      expect(areGapOptionsPlaceholderOrEmpty([{ id: 'a', text: 'Option A' }, { id: 'b', text: 'Option B' }])).toBe(true);
+      expect(areGapOptionsPlaceholderOrEmpty([{ id: 'a', text: 'travel' }, { id: 'b', text: 'went' }])).toBe(false);
+
+      // 5. Test parseClozeOptionsFromText
+      const { gaps: parsedGaps } = parseClozeOptionsFromText('1 a) travel b) went c) gone');
+      expect(parsedGaps).toHaveLength(1);
+      expect(parsedGaps[0].options).toHaveLength(3);
+    });
+
+    it('buildExtractionPrompt contiene la directiva crítica prohibiendo split_50_50 y exigiendo cloze_multichoice cuando forcedTargetType es cloze_multichoice o currentSlide es cloze', () => {
+      const prompt = buildExtractionPrompt(1, 'cloze_multichoice');
+      expect(prompt).toContain('CRITICAL DIRECTIVE FOR "cloze_multichoice"');
+      expect(prompt).toContain("IT IS STRICTLY FORBIDDEN to format or regenerate this slide as a split reading layout ('split_50_50', 'split_60_40', 'split_40_60') or lecture template ('lecture')");
+      expect(prompt).toContain('"referenceContent" MUST BE STRICTLY NULL and "layout" MUST BE "single_column"');
+      expect(prompt).toContain('interaction.type MUST BE "cloze_multichoice"');
+
+      // Test con currentSlide
+      const mockCurrentSlide: any = {
+        format: 'cloze_multichoice',
+        interaction: {
+          type: 'cloze_multichoice',
+          passageText: 'The discovery {{gap-1}} new evidence.',
+        },
+      };
+      const promptWithSlide = buildExtractionPrompt(1, undefined, null, mockCurrentSlide);
+      expect(promptWithSlide).toContain('CRITICAL DIRECTIVE FOR "cloze_multichoice"');
+      expect(promptWithSlide).toContain('The discovery {{gap-1}} new evidence.');
+    });
+
+    it('validateAndParseSlides prohibe degradación a split_50_50 / lecture y extrae opciones reales (3 alternativas a, b, c)', () => {
+      const rawAiResponse = JSON.stringify({
+        slides: [
+          {
+            id: 'slide-test-regen',
+            title: 'Ancient Egypt',
+            layout: 'split_50_50',
+            format: 'lecture',
+            referenceContent: {
+              id: 'ref-1',
+              type: 'text',
+              content: 'The Egyptians {{gap-1}} pyramids.\n1 a) built b) build c) building',
+            },
+            interaction: {
+              type: 'cloze_multichoice',
+              passageText: 'The Egyptians {{gap-1}} pyramids.',
+              gaps: [
+                {
+                  id: 'gap-1',
+                  ordinal: 1,
+                  options: [
+                    { id: 'a', text: 'Option A' },
+                    { id: 'b', text: 'Option B' },
+                  ],
+                },
+              ],
+            },
+          },
+        ],
+      });
+
+      const parsed = validateAndParseSlides(rawAiResponse, null, {
+        forcedTargetType: 'cloze_multichoice',
+      });
+
+      expect(parsed).toHaveLength(1);
+      const slide = parsed[0];
+      expect(slide.layout).toBe('single_column');
+      expect(slide.referenceContent).toBeNull();
+      expect(slide.format).toBe('cloze_multichoice');
+      expect(slide.interaction?.type).toBe('cloze_multichoice');
+
+      const gaps = (slide.interaction as any).gaps;
+      expect(gaps).toHaveLength(1);
+      expect(gaps[0].options).toHaveLength(3);
+      expect(gaps[0].options[0]).toEqual({ id: 'a', text: 'built' });
+      expect(gaps[0].options[1]).toEqual({ id: 'b', text: 'build' });
+      expect(gaps[0].options[2]).toEqual({ id: 'c', text: 'building' });
+    });
+
+    it('STRUCTURED_SLIDE_SCHEMA y getStructuredSlideSchema definen gaps requerido con schema exacto', () => {
+      const interactionProps = (STRUCTURED_SLIDE_SCHEMA.properties.slides.items as any).properties.interaction.properties;
+      expect(interactionProps.gaps.type).toBe('array');
+      expect(interactionProps.gaps.description).toBe('List of multiple choice options for each gap number present in the passage text');
+      expect(interactionProps.gaps.items.properties.ordinal.type).toBe('number');
+      expect(interactionProps.gaps.items.properties.options.items.properties.id.description).toBe('Letter of option: a, b, c...');
+      expect(interactionProps.gaps.items.properties.options.items.properties.text.description).toBe('Literal text of the option without letter prefix');
+      expect(interactionProps.gaps.items.required).toEqual(['id', 'ordinal', 'options']);
+
+      const forcedSchema = getStructuredSlideSchema('cloze_multichoice');
+      const forcedInteraction = forcedSchema.properties.slides.items.properties.interaction;
+      expect(forcedInteraction.required).toContain('gaps');
+      expect(forcedInteraction.required).toContain('passageText');
+      expect(forcedInteraction.properties.type.enum).toEqual(['cloze_multichoice']);
+    });
+
+    it('Zod schema rechaza cloze_multichoice sin gaps y valida ordinal numérico', () => {
+      const validOption = ClozeMultichoiceOptionSchema.safeParse({ id: 'a', text: 'choice' });
+      expect(validOption.success).toBe(true);
+
+      const blockParse = ClozeMultichoiceBlockSchema.safeParse({
+        type: 'cloze_multichoice',
+        id: 'block-1',
+        instruction: 'Choose',
+        passageText: 'Passage {{gap-1}}',
+        gaps: [
+          {
+            id: 'gap-1',
+            ordinal: 1,
+            options: [{ id: 'a', text: 'option' }],
+          },
+        ],
+      });
+      expect(blockParse.success).toBe(true);
+
+      const validGap = ClozeMultichoiceGapSchema.safeParse({
+        id: 'gap-1',
+        ordinal: 1,
+        options: [{ id: 'a', text: 'option' }],
+      });
+      expect(validGap.success).toBe(true);
+
+      const invalidGapWithoutOrdinal = ClozeMultichoiceGapSchema.safeParse({
+        id: 'gap-1',
+        options: [{ id: 'a', text: 'option' }],
+      });
+      expect(invalidGapWithoutOrdinal.success).toBe(false);
+
+      const invalidSlideWithoutGaps = SlideSchema.safeParse({
+        id: 'slide-1',
+        title: 'Title',
+        layout: 'single_column',
+        format: 'cloze_multichoice',
+        interaction: {
+          id: 'int-1',
+          type: 'cloze_multichoice',
+          instruction: 'Choose',
+          passageText: 'Passage {{gap-1}}',
+        },
+      });
+      expect(invalidSlideWithoutGaps.success).toBe(false);
+    });
+
+    it('System prompt de extracción incluye la regla crítica de extracción obligatoria de gaps y opciones literales', () => {
+      const prompt = buildExtractionPrompt(1);
+      expect(prompt).toContain("When a text has gaps (1..N) and there is a table or rows of options below (e.g., '1 a) ... b) ... c) ...'):");
+      expect(prompt).toContain('* You MUST extract EVERY option letter and literal phrase from that lower block for each gap.');
+      expect(prompt).toContain("* Under NO circumstance should you omit the 'gaps' array or return empty/placeholder options.");
+      expect(prompt).toContain("* If a secondary crop contains an answer key (e.g., '2a) says 3c) have used...'), assign those letters to 'correctOptionId'.");
+    });
+
+    it('normalizeClozeMultichoiceInteraction NO genera fallback dummy Option A / Option B cuando no hay opciones reales y emite advertencia', () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      const slideWithoutOptions: any = {
+        id: 'slide-no-options',
+        title: 'No Options Exercise',
+        interaction: {
+          id: 'int-no-opts',
+          type: 'cloze_multichoice',
+          passageText: 'Yesterday I {{gap-1}} to the park. She {{gap-2}} a book.',
+          gaps: [],
+        },
+      };
+
+      const result = normalizeClozeMultichoiceInteraction(slideWithoutOptions);
+      expect(result).toBe(true);
+      expect(slideWithoutOptions.interaction.gaps).toHaveLength(2);
+      expect(slideWithoutOptions.interaction.gaps[0].options).toEqual([]);
+      expect(slideWithoutOptions.interaction.gaps[1].options).toEqual([]);
+      expect(warnSpy).toHaveBeenCalled();
+
+      warnSpy.mockRestore();
+    });
+
+    it('Estabilización: candidateModels prioriza gemini-2.5-flash, elimina gemini-3.8-flash y limita timeout a 15s', () => {
+      expect(DEFAULT_GEMINI_CANDIDATE_MODELS[0]).toBe('gemini-2.5-flash');
+      expect(DEFAULT_GEMINI_CANDIDATE_MODELS).not.toContain('gemini-3.8-flash');
+      expect(DEFAULT_OPENROUTER_CANDIDATE_MODELS[0]).toBe('google/gemini-2.5-flash');
+      expect(DEFAULT_OPENROUTER_CANDIDATE_MODELS).not.toContain('google/gemini-3.8-flash');
+      expect(CANDIDATE_TIMEOUT_MS).toBe(15000);
+    });
+
+    it('Prevención de truncamiento masivo: buildExtractionPrompt prohibe re-emitir datos base64 o texto repetitivo', () => {
+      const prompt = buildExtractionPrompt(1);
+      expect(prompt).toContain('Do NOT echo image data, base64 strings, or repetitive tokens. Output ONLY the compact JSON slide.');
     });
   });
 });

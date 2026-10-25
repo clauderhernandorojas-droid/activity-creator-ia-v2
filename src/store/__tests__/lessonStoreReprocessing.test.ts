@@ -461,5 +461,314 @@ describe('useLessonStore - Slide Re-processing and AI Regeneration', () => {
       expect(token3.correctBucketId).toBe('b-2');
     });
   });
+
+  describe('8. Protección de Hidratación de cloze_multichoice en useLessonStore', () => {
+    it('mantiene layout single_column, referenceContent null y format al hidratar diapositiva cloze_multichoice', () => {
+      const clozeSlide: Slide = {
+        id: 'slide-cloze-hydr',
+        title: 'Cloze Test',
+        subtitle: 'Fill options',
+        layout: 'split_50_50', // Erróneamente configurado como split
+        contextBody: 'Old context body to be stripped',
+        referenceContent: {
+          id: 'ref-1',
+          type: 'text',
+          category: 'reading',
+          content: 'Old ref',
+        },
+        interaction: {
+          id: 'interaction-slide-cloze-hydr',
+          type: 'cloze_multichoice',
+          instruction: 'Fill options',
+          passageText: 'He {{gap-1}} home and {{gap-2}} asleep.\n1 a) went (example) b) gone\n2 a) fell b) fall',
+          gaps: [],
+        },
+      };
+
+      const opened = useLessonStore.getState().openLesson({
+        id: 'lesson-cloze-test',
+        title: 'Cloze Lesson',
+        slides: [clozeSlide],
+      });
+      expect(opened).toBe(true);
+
+      const loadedSlide = useLessonStore.getState().lesson.slides[0];
+      expect(loadedSlide.layout).toBe('single_column');
+      expect(loadedSlide.referenceContent).toBeNull();
+      expect((loadedSlide as any).contextBody).toBeUndefined();
+      expect(loadedSlide.format).toBe('cloze_multichoice');
+      expect(loadedSlide.interaction).toBeDefined();
+      expect(loadedSlide.interaction?.type).toBe('cloze_multichoice');
+      expect((loadedSlide.interaction as any).gaps).toHaveLength(2);
+    });
+
+    it('impide degradar cloze_multichoice a split_50_50 en updateSlideLayout y updateReferenceBlock', () => {
+      const clozeSlide: Slide = {
+        id: 'slide-cloze-protect',
+        title: 'Cloze Guard',
+        layout: 'single_column',
+        interaction: {
+          id: 'interaction-slide-cloze-protect',
+          type: 'cloze_multichoice',
+          instruction: 'Choose',
+          passageText: 'Text {{gap-1}}',
+          gaps: [{ id: 'gap-1', ordinal: 1, options: [{ id: 'a', text: 'opt' }], correctOptionId: 'a' }],
+        },
+      };
+
+      useLessonStore.getState().openLesson({
+        id: 'lesson-guard',
+        title: 'Guard Lesson',
+        slides: [clozeSlide],
+      });
+
+      // Intento de forzar layout split_50_50
+      useLessonStore.getState().updateSlideLayout('slide-cloze-protect', 'split_50_50');
+      let currentSlide = useLessonStore.getState().lesson.slides[0];
+      expect(currentSlide.layout).toBe('single_column');
+
+      // Intento de asignar reference block
+      useLessonStore.getState().updateReferenceBlock('slide-cloze-protect', {
+        id: 'ref-block-1',
+        type: 'text',
+        content: 'Some reference',
+      } as any);
+      currentSlide = useLessonStore.getState().lesson.slides[0];
+      expect(currentSlide.layout).toBe('single_column');
+      expect(currentSlide.referenceContent).toBeNull();
+
+      // Intento de sobreescribir interaction a null
+      useLessonStore.getState().updateInteractionBlock('slide-cloze-protect', null as any);
+      currentSlide = useLessonStore.getState().lesson.slides[0];
+      expect(currentSlide.interaction).not.toBeNull();
+      expect(currentSlide.interaction?.type).toBe('cloze_multichoice');
+    });
+
+    it('reconstituye interacción cloze_multichoice si una lección con marcadores {{gap- tiene interaction null', () => {
+      const rawSlideWithGapsOnly = {
+        id: 'slide-reconstitute-test',
+        title: 'Inventions Cloze',
+        subtitle: 'Select the right word',
+        referenceContent: {
+          id: 'ref-inv',
+          type: 'text',
+          content: 'Alexander Bell {{gap-1}} the telephone.\n1 a) invented (example) b) invent',
+        },
+        interaction: null,
+      };
+
+      const opened = useLessonStore.getState().openLesson({
+        id: 'lesson-reconstitute',
+        title: 'Reconstitute Lesson',
+        slides: [rawSlideWithGapsOnly],
+      });
+      expect(opened).toBe(true);
+
+      const slide = useLessonStore.getState().lesson.slides[0];
+      expect(slide.interaction).not.toBeNull();
+      expect(slide.interaction?.type).toBe('cloze_multichoice');
+      expect(slide.layout).toBe('single_column');
+      expect(slide.referenceContent).toBeNull();
+      expect((slide as any).contextBody).toBeUndefined();
+      expect(slide.format).toBe('cloze_multichoice');
+    });
+
+    it('blindaje en regenerateActiveSlideWithAI / regenerateSlideWithAI: fuerza forcedTargetType cloze_multichoice y prohibe degradar a split_50_50', async () => {
+      const clozeSlide: Slide = {
+        id: 'slide-cloze-regen-test',
+        title: 'Ancient Egypt Cloze',
+        subtitle: 'Fill in the blanks',
+        layout: 'single_column',
+        format: 'cloze_multichoice',
+        _sourceImage: 'data:image/png;base64,mockClozeImage',
+        referenceContent: null,
+        interaction: {
+          id: 'interaction-slide-cloze-regen-test',
+          type: 'cloze_multichoice',
+          instruction: 'Fill in the blanks',
+          passageText: 'The Egyptians {{gap-1}} the pyramids along the Nile.',
+          gaps: [
+            {
+              id: 'gap-1',
+              ordinal: 1,
+              options: [
+                { id: 'a', text: 'built' },
+                { id: 'b', text: 'build' },
+                { id: 'c', text: 'building' },
+              ],
+              correctOptionId: 'a',
+            },
+          ],
+        },
+      };
+
+      useLessonStore.getState().openLesson({
+        id: 'lesson-cloze-regen',
+        title: 'Regen Test Lesson',
+        slides: [clozeSlide],
+      });
+      useLessonStore.setState({ activeSlideId: 'slide-cloze-regen-test' });
+
+      // Mock AI trying to return a degraded slide with split_50_50 layout and referenceContent
+      const degradedFromAi: any = [
+        {
+          id: 'temp-ai-id',
+          title: 'Egypt Lecture',
+          layout: 'split_50_50',
+          format: 'lecture',
+          referenceContent: {
+            id: 'ref-egypt',
+            type: 'text',
+            category: 'reading',
+            content: 'The Egyptians {{gap-1}} the pyramids.\n1 a) built b) build c) building',
+          },
+          interaction: null,
+        },
+      ];
+
+      const digitizeSpy = vi.spyOn(digitizeBookModule, 'digitizeBook').mockResolvedValue(degradedFromAi);
+
+      const success = await useLessonStore.getState().regenerateSlideWithAI('slide-cloze-regen-test');
+      expect(success).toBe(true);
+
+      // Verify digitizeBook was called with forcedTargetType: 'cloze_multichoice'
+      expect(digitizeSpy).toHaveBeenCalledWith(
+        ['data:image/png;base64,mockClozeImage'],
+        expect.any(AbortSignal),
+        expect.objectContaining({
+          forcedTargetType: 'cloze_multichoice',
+        })
+      );
+
+      // Verify the resulting slide is strictly protected against split_50_50 degradation
+      const finalSlide = useLessonStore.getState().lesson.slides[0];
+      expect(finalSlide.id).toBe('slide-cloze-regen-test');
+      expect(finalSlide.layout).toBe('single_column');
+      expect(finalSlide.referenceContent).toBeNull();
+      expect((finalSlide as any).contextBody).toBeUndefined();
+      expect(finalSlide.format).toBe('cloze_multichoice');
+      expect(finalSlide.interaction).not.toBeNull();
+      expect(finalSlide.interaction?.type).toBe('cloze_multichoice');
+      expect((finalSlide.interaction as any)?.passageText).toContain('{{gap-1}}');
+
+      // Verify gaps have 3 real alternatives parsed from the raw text instead of default placeholders
+      const gaps = (finalSlide.interaction as any)?.gaps;
+      expect(gaps).toHaveLength(1);
+      expect(gaps[0].options).toHaveLength(3);
+      expect(gaps[0].options[0]).toEqual({ id: 'a', text: 'built' });
+      expect(gaps[0].options[1]).toEqual({ id: 'b', text: 'build' });
+      expect(gaps[0].options[2]).toEqual({ id: 'c', text: 'building' });
+
+      digitizeSpy.mockRestore();
+    });
+
+    it('regenerateSlideWithAI extrae opciones reales (3 alternativas a, b, c) frente a placeholders de AI', async () => {
+      const clozeSlideWithPlaceholders: Slide = {
+        id: 'slide-cloze-placeholders',
+        title: 'Past Simple Exercise',
+        subtitle: 'Complete the story',
+        layout: 'single_column',
+        format: 'cloze_multichoice',
+        _sourceImage: 'data:image/png;base64,mockClozeImage2',
+        referenceContent: null,
+        interaction: {
+          id: 'interaction-slide-cloze-placeholders',
+          type: 'cloze_multichoice',
+          instruction: 'Complete the story',
+          passageText: 'Yesterday I {{gap-1}} to the market and {{gap-2}} some apples.',
+          gaps: [
+            {
+              id: 'gap-1',
+              ordinal: 1,
+              options: [
+                { id: 'a', text: 'Option A' },
+                { id: 'b', text: 'Option B' },
+              ],
+              correctOptionId: 'a',
+            },
+            {
+              id: 'gap-2',
+              ordinal: 2,
+              options: [],
+              correctOptionId: 'b',
+            },
+          ],
+        },
+        _rawExtraction: {
+          ocrText: '1 a) went b) go c) gone\n2 a) buy b) bought c) buying',
+        },
+      };
+
+      useLessonStore.getState().openLesson({
+        id: 'lesson-cloze-placeholders',
+        title: 'Placeholder Test Lesson',
+        slides: [clozeSlideWithPlaceholders],
+      });
+      useLessonStore.setState({ activeSlideId: 'slide-cloze-placeholders' });
+
+      // Mock AI returning placeholder options
+      const aiResponseWithPlaceholders: any = [
+        {
+          id: 'temp-ai-id-2',
+          title: 'Past Simple Exercise',
+          layout: 'single_column',
+          format: 'cloze_multichoice',
+          referenceContent: null,
+          interaction: {
+            id: 'int-temp-2',
+            type: 'cloze_multichoice',
+            instruction: 'Complete the story',
+            passageText: 'Yesterday I {{gap-1}} to the market and {{gap-2}} some apples.',
+            gaps: [
+              {
+                id: 'gap-1',
+                ordinal: 1,
+                options: [
+                  { id: 'a', text: 'Option A' },
+                  { id: 'b', text: 'Option B' },
+                ],
+                correctOptionId: 'a',
+              },
+              {
+                id: 'gap-2',
+                ordinal: 2,
+                options: [],
+                correctOptionId: 'b',
+              },
+            ],
+          },
+          _rawExtraction: {
+            ocrText: '1 a) went b) go c) gone\n2 a) buy b) bought c) buying',
+          },
+        },
+      ];
+
+      const digitizeSpy = vi.spyOn(digitizeBookModule, 'digitizeBook').mockResolvedValue(aiResponseWithPlaceholders);
+
+      const success = await useLessonStore.getState().regenerateSlideWithAI('slide-cloze-placeholders');
+      expect(success).toBe(true);
+
+      const regeneratedSlide = useLessonStore.getState().lesson.slides[0];
+      expect(regeneratedSlide.format).toBe('cloze_multichoice');
+      expect(regeneratedSlide.layout).toBe('single_column');
+
+      const gaps = (regeneratedSlide.interaction as any)?.gaps;
+      expect(gaps).toHaveLength(2);
+
+      // Gap 1: Replaced Option A, Option B with 3 real alternatives: went, go, gone
+      expect(gaps[0].options).toHaveLength(3);
+      expect(gaps[0].options[0]).toEqual({ id: 'a', text: 'went' });
+      expect(gaps[0].options[1]).toEqual({ id: 'b', text: 'go' });
+      expect(gaps[0].options[2]).toEqual({ id: 'c', text: 'gone' });
+
+      // Gap 2: Replaced empty options with 3 real alternatives: buy, bought, buying
+      expect(gaps[1].options).toHaveLength(3);
+      expect(gaps[1].options[0]).toEqual({ id: 'a', text: 'buy' });
+      expect(gaps[1].options[1]).toEqual({ id: 'b', text: 'bought' });
+      expect(gaps[1].options[2]).toEqual({ id: 'c', text: 'buying' });
+
+      digitizeSpy.mockRestore();
+    });
+  });
 });
 

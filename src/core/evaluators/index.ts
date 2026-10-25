@@ -2,6 +2,7 @@ export * from './evaluateInput';
 export * from './evaluateSelection';
 export * from './evaluateBuckets';
 export * from './evaluateSequence';
+export * from './evaluateClozeMultichoice';
 export * from './fillBlankValidator';
 
 import type { InteractionBlock } from '../../types/schema';
@@ -10,6 +11,7 @@ import { evaluateInput } from './evaluateInput';
 import { evaluateSelection } from './evaluateSelection';
 import { evaluateBuckets } from './evaluateBuckets';
 import { evaluateSequence } from './evaluateSequence';
+import { evaluateClozeMultichoice } from './evaluateClozeMultichoice';
 
 /**
  * Dispatcher function to evaluate any InteractionBlock using pure evaluators.
@@ -31,6 +33,8 @@ export function evaluateInteraction(
       return evaluateBuckets(interaction, studentAnswers);
     case 'sequence':
       return evaluateSequence(interaction, studentAnswers);
+    case 'cloze_multichoice':
+      return evaluateClozeMultichoice(interaction, studentAnswers);
     case 'writing':
       return { score: 0, maxScore: 0, details: {} };
     default:

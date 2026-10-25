@@ -41,6 +41,8 @@ export function getCurrentRole(slide: Slide): PedagogicalRole {
         return 'interaction_sequence';
       case 'writing':
         return 'interaction_writing';
+      case 'cloze_multichoice':
+        return 'interaction_selection';
     }
   }
   if (slide.referenceContent) {

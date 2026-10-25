@@ -266,7 +266,8 @@ export type BlockType =
   | 'selection'
   | 'buckets_matching'
   | 'sequence'
-  | 'writing';
+  | 'writing'
+  | 'cloze_multichoice';
 
 // 5. WRITING (Producción escrita y feedback formativo)
 export const WritingBlockSchema = z.object({
@@ -286,6 +287,38 @@ export const WritingBlockSchema = z.object({
 
 export type WritingBlock = z.infer<typeof WritingBlockSchema>;
 
+// 6. CLOZE MULTICHOICE (Texto con Gaps y Opciones Múltiples)
+export const ClozeMultichoiceOptionSchema = z.object({
+  id: z.string().describe("Letter of option: a, b, c..."),
+  text: z.string().describe("Literal text of the option without letter prefix"),
+  isCorrect: z.boolean().optional(),
+}).passthrough();
+
+export const ClozeMultichoiceGapSchema = z.object({
+  id: z.string(),
+  ordinal: z.number(),
+  options: z.array(ClozeMultichoiceOptionSchema),
+  correctOptionId: z.string().optional(),
+  isExample: z.boolean().optional(),
+  hint: z.string().optional(),
+  explanation: z.string().optional(),
+}).passthrough();
+
+export const ClozeMultichoiceBlockSchema = z.object({
+  type: z.literal('cloze_multichoice'),
+  id: z.string(),
+  instruction: z.string(),
+  verificationAudioUrl: z.string().optional(),
+  audioLabel: z.string().optional(),
+  followUpPrompt: z.string().optional(),
+  passageText: z.string(),
+  gaps: z.array(ClozeMultichoiceGapSchema).describe("List of multiple choice options for each gap number present in the passage text"),
+}).passthrough();
+
+export type ClozeMultichoiceOption = z.infer<typeof ClozeMultichoiceOptionSchema>;
+export type ClozeMultichoiceGap = z.infer<typeof ClozeMultichoiceGapSchema>;
+export type ClozeMultichoiceBlock = z.infer<typeof ClozeMultichoiceBlockSchema>;
+
 // UNIÓN DE INTERACCIONES EVALUABLES
 export const InteractionBlockSchema = z.discriminatedUnion('type', [
   InputFieldsBlockSchema,
@@ -293,6 +326,7 @@ export const InteractionBlockSchema = z.discriminatedUnion('type', [
   BucketsMatchingBlockSchema,
   SequenceBlockSchema,
   WritingBlockSchema,
+  ClozeMultichoiceBlockSchema,
 ]);
 
 export type InteractionBlock = z.infer<typeof InteractionBlockSchema>;
@@ -322,10 +356,21 @@ export const SlideSchema = z.object({
   isGraded: z.boolean().default(true).optional(),
   sourceImageSnippetUrl: z.string().optional(),
   metadata: z.record(z.string(), z.any()).optional(),
+  format: z.string().optional(),
   _sourceImage: z.string().nullable().optional(),
   _rawExtraction: z.unknown().optional(),
   _answerKeyCrop: z.string().nullable().optional(),
-}).passthrough();
+}).passthrough().superRefine((slide, ctx) => {
+  if (slide.format === 'cloze_multichoice' || (slide.interaction && (slide.interaction as any).type === 'cloze_multichoice')) {
+    if (!slide.interaction || (slide.interaction as any).type !== 'cloze_multichoice' || !Array.isArray((slide.interaction as any).gaps)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "When archetype is 'cloze_multichoice', 'gaps' array is required on interaction",
+        path: ['interaction', 'gaps'],
+      });
+    }
+  }
+});
 
 export type Slide = z.infer<typeof SlideSchema>;
 

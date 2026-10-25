@@ -15,3 +15,4 @@
    - Toda extracción OCR debe ajustarse estrictamente a `ExtractedStructuredPayloadSchema`.
    - Si el ejercicio incluye un conjunto de opciones disponibles, van en `wordBank: string[]` (sean cadenas simples o compuestas por varios términos).
    - Si el ejercicio tiene ítems ya resueltos en el material original como muestra o guía, se marcan con `isExample: true` y su respuesta canónica prellenada.
+                                                                                                                                                                                                                                                  

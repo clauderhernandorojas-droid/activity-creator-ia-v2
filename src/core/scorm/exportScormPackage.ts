@@ -620,6 +620,31 @@ function buildStandaloneStudentHtml(lesson: Lesson): string {
           row.appendChild(optionsWrap);
           container.appendChild(row);
         });
+      } else if (interaction.type === 'cloze_multichoice' && Array.isArray(interaction.gaps)) {
+        const wrap = document.createElement('div');
+        wrap.className = 'item-row';
+        let passageHtml = interaction.passageText || '';
+        interaction.gaps.forEach((gap, idx) => {
+          const gapKey = 'gap-' + (gap.id || idx);
+          const isEvaluated = evalState && evalState.submitted;
+          const isCorrect = isEvaluated && evalState.details[gapKey];
+          if (gap.isExample) {
+            const exOpt = (gap.options || []).find(o => o.id === gap.correctOptionId);
+            const exHtml = '<span class="example-badge" style="display:inline-block; margin: 0 4px; padding: 2px 6px; background: #e0e7ff; color: #4338ca; border-radius: 4px; font-weight: 600;">✓ ' + (exOpt ? exOpt.text : gap.correctOptionId) + '</span>';
+            passageHtml = passageHtml.replace('{{' + gap.id + '}}', exHtml);
+          } else {
+            let selectHtml = '<select class="blank-input ' + (isEvaluated ? (isCorrect ? 'correct' : 'incorrect') : '') + '" data-key="' + gapKey + '" onchange="handleInput(this, \\'' + slideId + '\\')">';
+            selectHtml += '<option value="">-- (' + (gap.ordinal || idx + 1) + ') --</option>';
+            (gap.options || []).forEach(opt => {
+              const selected = answers[gapKey] === opt.id ? 'selected' : '';
+              selectHtml += '<option value="' + opt.id + '" ' + selected + '>' + opt.id + ') ' + opt.text + '</option>';
+            });
+            selectHtml += '</select>';
+            passageHtml = passageHtml.replace('{{' + gap.id + '}}', selectHtml);
+          }
+        });
+        wrap.innerHTML = '<div style="line-height: 2;">' + passageHtml + '</div>';
+        container.appendChild(wrap);
       }
     }
 
@@ -661,6 +686,16 @@ function buildStandaloneStudentHtml(lesson: Lesson): string {
           const isOk = (chosen === correctVal);
           if (isOk) score++;
           details[key] = isOk;
+        });
+      } else if (inter.type === 'cloze_multichoice' && Array.isArray(inter.gaps)) {
+        inter.gaps.forEach((gap, idx) => {
+          if (gap.isExample) return;
+          maxScore++;
+          const key = 'gap-' + (gap.id || idx);
+          const chosen = answers[key];
+          const isOk = chosen && chosen.toLowerCase() === (gap.correctOptionId || '').toLowerCase();
+          if (isOk) score++;
+          details[key] = Boolean(isOk);
         });
       }
 

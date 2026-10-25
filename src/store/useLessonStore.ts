@@ -9,7 +9,7 @@ import {
   type ExtractedBlock,
   LessonSchema
 } from '../types/schema';
-import { digitizeBook, validateAndParseSlides, createManualBlock, roleToForcedTargetType, slideToExtractedBlock, type ManualTemplateType } from '../core/ai/digitizeBook';
+import { digitizeBook, validateAndParseSlides, createManualBlock, roleToForcedTargetType, slideToExtractedBlock, parseClozeOptionsFromText, normalizeClozeMultichoiceInteraction, extractRealOptionsForOrdinal, areGapOptionsPlaceholderOrEmpty, collectRawTextSources, type ManualTemplateType, type ForcedTargetArchetype } from '../core/ai/digitizeBook';
 import { convertSlideToRole, type PedagogicalRole } from '../core/utils/slideRoleConverter';
 import { compressImageBase64 } from '../core/utils/imageCompressor';
 import { useSessionStore } from './useSessionStore';
@@ -187,7 +187,54 @@ export function migrateAndSanitizeLesson(
       const s = { ...slide };
       s.id = s.id || `slide-${index + 1}-${Date.now()}`;
       s.title = s.title || `Diapositiva ${index + 1}`;
-      if (!['single_column', 'split_50_50', 'header_stacked'].includes(s.layout)) {
+
+      // Invariante de Reconstitución: Si interaction es null/inválido pero el cuerpo contiene {{gap-, reconstituir cloze_multichoice
+      const textCandidates = [
+        s.referenceContent?.content,
+        s.referenceContent?.body,
+        s.contextBody,
+        s.notes,
+        s.title,
+        s.subtitle,
+      ].filter((t): t is string => typeof t === 'string' && t.trim().length > 0);
+      const hasGapMarker = textCandidates.some((t) => /\{\{\s*gap-/i.test(t));
+
+      if ((!s.interaction || s.interaction.type !== 'cloze_multichoice') && hasGapMarker) {
+        const rawText = textCandidates.join('\n\n');
+        const { gaps, optionsStartIndex } = parseClozeOptionsFromText(rawText);
+        let passageText = optionsStartIndex > 0 ? rawText.slice(0, optionsStartIndex).trim() : rawText;
+        if (gaps.length === 0) {
+          const gapMatches = [...passageText.matchAll(/\{\{\s*gap-(\d+)\s*\}\}/gi)];
+          const ordinals = Array.from(new Set(gapMatches.map((m) => parseInt(m[1], 10)))).sort((a, b) => a - b);
+          console.warn(`[useLessonStore] cloze_multichoice slide "${s.id}" has empty gaps; preserving raw passage text without dummy options.`);
+          ordinals.forEach((k) => {
+            gaps.push({
+              id: `gap-${k}`,
+              ordinal: k,
+              options: [],
+              correctOptionId: 'a',
+            });
+          });
+        }
+        s.interaction = {
+          id: `interaction-${s.id}`,
+          type: 'cloze_multichoice',
+          instruction: s.subtitle || s.title || 'Choose the correct option for each gap.',
+          passageText,
+          gaps,
+        };
+        s.layout = 'single_column';
+        s.referenceContent = null;
+        delete s.contextBody;
+        s.format = 'cloze_multichoice';
+      }
+
+      if (s.interaction?.type === 'cloze_multichoice') {
+        s.layout = 'single_column';
+        s.referenceContent = null;
+        delete s.contextBody;
+        s.format = 'cloze_multichoice';
+      } else if (!['single_column', 'split_50_50', 'header_stacked'].includes(s.layout)) {
         s.layout = 'split_50_50';
       }
       s._sourceImage = s._sourceImage !== undefined ? s._sourceImage : (s.sourceImageSnippetUrl || null);
@@ -279,6 +326,38 @@ export function migrateAndSanitizeLesson(
           }
         } else if (interaction.type === 'sequence') {
           if (!Array.isArray(interaction.items)) interaction.items = [];
+        } else if (interaction.type === 'cloze_multichoice') {
+          if (typeof interaction.passageText !== 'string') {
+            interaction.passageText = '';
+          }
+          if (!Array.isArray(interaction.gaps)) {
+            interaction.gaps = [];
+          }
+          if (interaction.gaps.length === 0 && /\{\{\s*gap-/i.test(interaction.passageText)) {
+            const { gaps, optionsStartIndex } = parseClozeOptionsFromText(interaction.passageText);
+            if (gaps.length > 0) {
+              interaction.gaps = gaps;
+              if (optionsStartIndex > 0) {
+                interaction.passageText = interaction.passageText.slice(0, optionsStartIndex).trim();
+              }
+            } else {
+              const gapMatches = [...interaction.passageText.matchAll(/\{\{\s*gap-(\d+)\s*\}\}/gi)];
+              const ordinals = Array.from(new Set(gapMatches.map((m) => parseInt(m[1], 10)))).sort((a, b) => a - b);
+              console.warn(`[useLessonStore] cloze_multichoice slide "${s.id}" has empty gaps; preserving raw passage text without dummy options.`);
+              ordinals.forEach((k) => {
+                interaction.gaps.push({
+                  id: `gap-${k}`,
+                  ordinal: k,
+                  options: [],
+                  correctOptionId: 'a',
+                });
+              });
+            }
+          }
+          s.layout = 'single_column';
+          s.referenceContent = null;
+          delete s.contextBody;
+          s.format = 'cloze_multichoice';
         }
 
         s.interaction = interaction;
@@ -394,7 +473,8 @@ interface LessonState {
     targetSlide?: Slide | null,
     context?: { previousSlide?: Slide | null; [key: string]: any }
   ) => boolean;
-  regenerateActiveSlideWithAI: () => Promise<boolean>;
+  regenerateActiveSlideWithAI: (targetSlideId?: string) => Promise<boolean>;
+  regenerateSlideWithAI: (targetSlideId?: string) => Promise<boolean>;
 
   // File System Access API & File Portability
   currentFileHandle: FileSystemFileHandle | null;
@@ -1216,22 +1296,27 @@ export const useLessonStore = create<LessonState>()(
             refContent = { ...(refContent as any), body: contextBody };
           }
 
+          const isCloze = interaction?.type === 'cloze_multichoice';
           const newSlide: Slide = {
             id: newId,
             title,
             subtitle,
-            layout: isTargetReference ? 'single_column' : (block.layout || (refContent && interaction ? 'split_50_50' : 'single_column')),
-            referenceContent: refContent,
+            layout: isCloze ? 'single_column' : (isTargetReference ? 'single_column' : (block.layout || (refContent && interaction ? 'split_50_50' : 'single_column'))),
+            referenceContent: isCloze ? null : refContent,
             interaction,
             cachedInteraction: interaction || block.cachedInteraction || null,
-            contextBody,
+            contextBody: isCloze ? undefined : contextBody,
             notes: block.notes || '',
             isGraded,
+            format: isCloze ? 'cloze_multichoice' : (block as any).format,
             sourceImageSnippetUrl,
             _sourceImage: block._sourceImage || sourceImageSnippetUrl || undefined,
             _rawExtraction: block._rawExtraction,
             _answerKeyCrop: block._answerKeyCrop,
           };
+          if (isCloze) {
+            delete (newSlide as any).contextBody;
+          }
 
           const isInitialEmptySlide = (lesson: Lesson) => {
             if (lesson.slides.length !== 1) return false;
@@ -1293,22 +1378,28 @@ export const useLessonStore = create<LessonState>()(
               refContent = { ...(refContent as any), body: contextBody };
             }
 
-            return {
+            const isCloze = block.interaction?.type === 'cloze_multichoice';
+            const s: Slide = {
               id: slideId,
               title,
               subtitle,
-              layout: block.layout || (refContent ? 'split_50_50' : 'single_column'),
-              referenceContent: refContent,
+              layout: isCloze ? 'single_column' : (block.layout || (refContent ? 'split_50_50' : 'single_column')),
+              referenceContent: isCloze ? null : refContent,
               interaction: block.interaction || null,
               cachedInteraction: block.interaction || null,
-              contextBody,
+              contextBody: isCloze ? undefined : contextBody,
               notes: block.notes || '',
               isGraded,
+              format: isCloze ? 'cloze_multichoice' : (block as any).format,
               ...(sourceImageSnippetUrl ? { sourceImageSnippetUrl } : {}),
               _sourceImage: block._sourceImage || sourceImageSnippetUrl || undefined,
               _rawExtraction: block._rawExtraction,
               _answerKeyCrop: block._answerKeyCrop,
             };
+            if (isCloze) {
+              delete (s as any).contextBody;
+            }
+            return s;
           });
 
           const isInitialEmptySlide = (lesson: Lesson) => {
@@ -1419,7 +1510,11 @@ export const useLessonStore = create<LessonState>()(
           ...recordHistory(state),
           lesson: {
             ...state.lesson,
-            slides: state.lesson.slides.map((s) => (s.id === id ? { ...s, layout } : s)),
+            slides: state.lesson.slides.map((s) => {
+              if (s.id !== id) return s;
+              const safeLayout = s.interaction?.type === 'cloze_multichoice' ? 'single_column' : layout;
+              return { ...s, layout: safeLayout };
+            }),
           },
         }));
       },
@@ -1451,6 +1546,13 @@ export const useLessonStore = create<LessonState>()(
             ...state.lesson,
             slides: state.lesson.slides.map((s) => {
               if (s.id !== slideId) return s;
+              if (s.interaction?.type === 'cloze_multichoice') {
+                return {
+                  ...s,
+                  referenceContent: null,
+                  layout: 'single_column',
+                };
+              }
               const hasRef = Boolean(block);
               return {
                 ...s,
@@ -1467,9 +1569,25 @@ export const useLessonStore = create<LessonState>()(
           ...recordHistory(state),
           lesson: {
             ...state.lesson,
-            slides: state.lesson.slides.map((s) =>
-              s.id === slideId ? { ...s, interaction: block, cachedInteraction: block } : s
-            ),
+            slides: state.lesson.slides.map((s) => {
+              if (s.id !== slideId) return s;
+              if (s.interaction?.type === 'cloze_multichoice' && !block) {
+                return s;
+              }
+              if (block?.type === 'cloze_multichoice') {
+                const updated = {
+                  ...s,
+                  interaction: block,
+                  cachedInteraction: block,
+                  layout: 'single_column' as const,
+                  referenceContent: null,
+                  format: 'cloze_multichoice',
+                };
+                delete (updated as any).contextBody;
+                return updated;
+              }
+              return { ...s, interaction: block, cachedInteraction: block };
+            }),
           },
         }));
       },
@@ -1832,20 +1950,28 @@ export const useLessonStore = create<LessonState>()(
                   } as any;
                 }
 
-                const nextLayout = isTargetReference ? 'single_column' : (refContent && interaction ? 'split_50_50' : 'single_column');
+                const isCloze = interaction?.type === 'cloze_multichoice';
+                const nextLayout: SlideLayout = isCloze ? 'single_column' : (isTargetReference ? 'single_column' : (refContent && interaction ? 'split_50_50' : 'single_column'));
+                const nextRef = isCloze ? null : refContent;
+                const nextContext = isCloze ? undefined : (source.contextBody || source.parsedData?.contextBody || slide.contextBody);
 
-                return {
+                const updated = {
                   ...slide,
                   layout: nextLayout,
                   ...(source.title ? { title: source.title } : {}),
                   ...(source.subtitle ? { subtitle: source.subtitle } : {}),
                   isGraded: isTargetReference ? false : (source.isGraded !== undefined ? source.isGraded : slide.isGraded),
-                  referenceContent: refContent,
+                  referenceContent: nextRef,
                   interaction,
                   cachedInteraction: interaction || slide.cachedInteraction || null,
-                  contextBody: source.contextBody || source.parsedData?.contextBody || slide.contextBody,
+                  contextBody: nextContext,
+                  format: isCloze ? 'cloze_multichoice' : (source as any).format || slide.format,
                   ...(sourceImageSnippetUrl ? { sourceImageSnippetUrl } : {}),
                 };
+                if (isCloze) {
+                  delete (updated as any).contextBody;
+                }
+                return updated;
               }),
             },
           }));
@@ -1935,21 +2061,29 @@ export const useLessonStore = create<LessonState>()(
                     } else if (regSlide.interaction) {
                       nextRoleCache[role] = regSlide.interaction;
                     }
-                    return {
+                    const isCloze = regSlide.interaction?.type === 'cloze_multichoice';
+                    const nextLayout: SlideLayout = isCloze ? 'single_column' : (isTargetReference ? 'single_column' : (regSlide.layout || (regSlide.referenceContent && regSlide.interaction ? 'split_50_50' : 'single_column')));
+                    const nextRef = isCloze ? null : (regSlide.referenceContent || null);
+                    const updated = {
                       ...sl,
                       title: regSlide.title || sl.title,
                       subtitle: regSlide.subtitle || sl.subtitle,
-                      layout: isTargetReference ? 'single_column' : (regSlide.layout || (regSlide.referenceContent && regSlide.interaction ? 'split_50_50' : 'single_column')),
-                      referenceContent: regSlide.referenceContent || null,
+                      layout: nextLayout,
+                      referenceContent: nextRef,
                       interaction: isTargetReference ? null : (regSlide.interaction || null),
                       cachedInteraction: regSlide.interaction || sl.cachedInteraction || null,
                       rolePayloadCache: nextRoleCache,
                       isGraded: isTargetReference ? false : (regSlide.isGraded !== undefined ? regSlide.isGraded : sl.isGraded),
+                      format: isCloze ? 'cloze_multichoice' : (regSlide as any).format || sl.format,
                       sourceImageSnippetUrl: clip,
                       _sourceImage: clip,
                       _rawExtraction: regSlide._rawExtraction || sl._rawExtraction,
                       _answerKeyCrop: regSlide._answerKeyCrop || sl._answerKeyCrop,
                     };
+                    if (isCloze) {
+                      delete (updated as any).contextBody;
+                    }
+                    return updated;
                 }),
               },
             }));
@@ -2076,9 +2210,9 @@ export const useLessonStore = create<LessonState>()(
         return get().reprocessSlide(targetSlide, context);
       },
 
-      regenerateActiveSlideWithAI: async () => {
+      regenerateActiveSlideWithAI: async (targetSlideId?: string) => {
         const state = get();
-        const activeId = state.activeSlideId || useSessionStore.getState().currentSlideId;
+        const activeId = targetSlideId || state.activeSlideId || useSessionStore.getState().currentSlideId;
         const slideIndex = state.lesson.slides.findIndex((s) => s.id === activeId);
         const activeSlide = slideIndex >= 0 ? state.lesson.slides[slideIndex] : null;
 
@@ -2101,11 +2235,38 @@ export const useLessonStore = create<LessonState>()(
             imagesToDigitize.push(activeSlide._answerKeyCrop);
           }
 
+          // Blindaje en 'regenerateSlideWithAI':
+          // Si la diapositiva actual es de formato 'cloze_multichoice' o su texto contiene marcadores '{{gap-':
+          // - Queda prohibido regenerarla como plantilla de lectura dividida ('split_50_50' / 'lecture').
+          // - El prompt de regeneración debe mantener estrictamente el contrato 'cloze_multichoice':
+          //   preservar el pasaje con '{{gap-k}}' y un array 'gaps' con sus opciones respectivas.
+          const slideAllText = [
+            activeSlide.title,
+            activeSlide.subtitle,
+            (activeSlide.interaction as any)?.passageText,
+            (activeSlide.interaction as any)?.prompt,
+            (activeSlide.interaction as any)?.instruction,
+            (activeSlide.referenceContent as any)?.content,
+            (activeSlide.referenceContent as any)?.body,
+            activeSlide.contextBody,
+            activeSlide.notes,
+          ].filter((t): t is string => typeof t === 'string' && t.trim().length > 0).join('\n');
+
+          const hasGapMarker = /\{\{\s*gap-/i.test(slideAllText);
+          const isCloze =
+            activeSlide.format === 'cloze_multichoice' ||
+            activeSlide.interaction?.type === 'cloze_multichoice' ||
+            hasGapMarker;
+
+          const forcedTargetType: ForcedTargetArchetype | undefined = isCloze ? 'cloze_multichoice' : undefined;
+
           const regeneratedBlocks = await digitizeBook(
             imagesToDigitize,
             controller.signal,
             {
+              forcedTargetType,
               previousSlideContext,
+              currentSlide: activeSlide,
               answerKeyCrop: activeSlide._answerKeyCrop || undefined,
             }
           );
@@ -2120,6 +2281,70 @@ export const useLessonStore = create<LessonState>()(
               _rawExtraction: regSlide._rawExtraction || activeSlide._rawExtraction,
               sourceImageSnippetUrl: sourceImage,
             };
+
+            const isResultCloze =
+              isCloze ||
+              regSlide.format === 'cloze_multichoice' ||
+              regSlide.interaction?.type === 'cloze_multichoice' ||
+              /\{\{\s*gap-/i.test(
+                `${regSlide.title || ''} ${regSlide.subtitle || ''} ${(regSlide.interaction as any)?.passageText || ''} ${(regSlide.referenceContent as any)?.content || ''} ${regSlide.contextBody || ''} ${regSlide.notes || ''}`
+              );
+
+            if (isResultCloze) {
+              normalizeClozeMultichoiceInteraction(updatedSlide);
+              updatedSlide.layout = 'single_column';
+              updatedSlide.referenceContent = null;
+              delete (updatedSlide as any).contextBody;
+              updatedSlide.format = 'cloze_multichoice';
+
+              // Preservación estricta del contrato cloze: si el modelo degradó o vació interacción/pasaje/gaps
+              if (
+                !updatedSlide.interaction ||
+                updatedSlide.interaction.type !== 'cloze_multichoice' ||
+                !Array.isArray((updatedSlide.interaction as any).gaps) ||
+                (updatedSlide.interaction as any).gaps.length === 0
+              ) {
+                if (activeSlide.interaction?.type === 'cloze_multichoice') {
+                  updatedSlide.interaction = {
+                    ...activeSlide.interaction,
+                    id: `interaction-${activeSlide.id}`,
+                  };
+                }
+              }
+
+              // Extracción de opciones reales vs placeholders en gaps
+              if (updatedSlide.interaction?.type === 'cloze_multichoice' && Array.isArray(updatedSlide.interaction.gaps)) {
+                const rawSources = [
+                  (updatedSlide.interaction as any).passageText,
+                  ...collectRawTextSources(updatedSlide),
+                  ...collectRawTextSources(activeSlide),
+                ];
+                updatedSlide.interaction.gaps.forEach((gap, idx) => {
+                  const k = typeof gap.ordinal === 'number' ? gap.ordinal : idx + 1;
+                  if (areGapOptionsPlaceholderOrEmpty(gap.options)) {
+                    for (const src of rawSources) {
+                      const realOpts = extractRealOptionsForOrdinal(src, k);
+                      if (realOpts && realOpts.length >= 2) {
+                        gap.options = realOpts;
+                        break;
+                      }
+                    }
+                  } else if (Array.isArray(gap.options) && gap.options.length < 3) {
+                    for (const src of rawSources) {
+                      const realOpts = extractRealOptionsForOrdinal(src, k);
+                      if (realOpts && realOpts.length >= 3) {
+                        gap.options = realOpts;
+                        break;
+                      }
+                    }
+                  }
+                });
+              }
+
+              if (updatedSlide.interaction) {
+                updatedSlide.interaction.id = `interaction-${activeSlide.id}`;
+              }
+            }
 
             set((s) => ({
               ...recordHistory(s),
@@ -2154,6 +2379,10 @@ export const useLessonStore = create<LessonState>()(
           });
           return false;
         }
+      },
+
+      regenerateSlideWithAI: async (targetSlideId?: string) => {
+        return get().regenerateActiveSlideWithAI(targetSlideId);
       },
     }),
     {

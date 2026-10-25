@@ -23,7 +23,8 @@ export type ForcedTargetArchetype =
   | 'writing' 
   | 'reference_text' 
   | 'reference_table'
-  | 'grammar_reference';
+  | 'grammar_reference'
+  | 'cloze_multichoice';
 
 export function roleToForcedTargetType(role: string): ForcedTargetArchetype {
   switch (role) {
@@ -39,6 +40,9 @@ export function roleToForcedTargetType(role: string): ForcedTargetArchetype {
       return 'writing';
     case 'reference_table':
       return 'reference_table';
+    case 'cloze_multichoice':
+    case 'interaction_cloze_multichoice':
+      return 'cloze_multichoice';
     case 'reference_text':
     default:
       return 'reference_text';
@@ -514,7 +518,7 @@ export const STRUCTURED_SLIDE_SCHEMA = {
             properties: {
               type: {
                 type: 'string',
-                enum: ['input_fields', 'selection', 'buckets_matching', 'sequence', 'writing'],
+                enum: ['input_fields', 'selection', 'buckets_matching', 'sequence', 'writing', 'cloze_multichoice'],
                 description: 'Discriminator for the interaction primitive.'
               },
               id: { type: 'string', description: 'Unique ID (e.g. "int-1")' },
@@ -706,7 +710,37 @@ export const STRUCTURED_SLIDE_SCHEMA = {
               minWords: { type: 'integer', description: 'ONLY include if an explicit minimum word count target is visibly printed in the clipping (e.g. "Write at least 100 words"). NEVER invent arbitrary word counts!' },
               maxWords: { type: 'integer', description: 'ONLY include if an explicit maximum word count is visibly printed in the clipping. NEVER invent arbitrary word counts!' },
               placeholder: { type: 'string' },
-              evaluationRubric: { type: 'string' }
+              evaluationRubric: { type: 'string' },
+              // cloze_multichoice
+              passageText: {
+                type: 'string',
+                description: 'Full body of the passage text with gaps formatted as {{gap-1}}, {{gap-2}}, etc.'
+              },
+              gaps: {
+                type: 'array',
+                description: 'List of multiple choice options for each gap number present in the passage text',
+                items: {
+                  type: 'object',
+                  properties: {
+                    id: { type: 'string' },
+                    ordinal: { type: 'number' },
+                    options: {
+                      type: 'array',
+                      items: {
+                        type: 'object',
+                        properties: {
+                          id: { type: 'string', description: 'Letter of option: a, b, c...' },
+                          text: { type: 'string', description: 'Literal text of the option without letter prefix' }
+                        },
+                        required: ['id', 'text']
+                      }
+                    },
+                    correctOptionId: { type: 'string' },
+                    isExample: { type: 'boolean' }
+                  },
+                  required: ['id', 'ordinal', 'options']
+                }
+              }
             },
             required: ['type', 'id', 'instruction']
           },
@@ -724,6 +758,25 @@ export const STRUCTURED_SLIDE_SCHEMA = {
 
 /** Backward compatibility alias */
 export const STRUCTURED_EXTRACTION_SCHEMA = STRUCTURED_SLIDE_SCHEMA;
+
+/**
+ * Returns the structured JSON schema for extraction.
+ * When forcedTargetType is 'cloze_multichoice', the 'gaps' property is REQUIRED (not optional).
+ */
+export function getStructuredSlideSchema(forcedTargetType?: string) {
+  if (forcedTargetType === 'cloze_multichoice') {
+    const schema = JSON.parse(JSON.stringify(STRUCTURED_SLIDE_SCHEMA));
+    const interaction = schema.properties?.slides?.items?.properties?.interaction;
+    if (interaction) {
+      interaction.required = ['type', 'id', 'instruction', 'passageText', 'gaps'];
+      if (interaction.properties?.type) {
+        interaction.properties.type.enum = ['cloze_multichoice'];
+      }
+    }
+    return schema;
+  }
+  return STRUCTURED_SLIDE_SCHEMA;
+}
 
 /**
  * Custom error thrown when Vision API output fails schema validation.
@@ -1885,6 +1938,36 @@ export function applyAnswerKeysToSlide(
   // Apply to buckets_matching
   if (slide.interaction.type === 'buckets_matching' && targetSection) {
     (slide.interaction as any)._answerKeyMap = targetSection;
+  }
+
+  // Apply to cloze_multichoice
+  if (slide.interaction.type === 'cloze_multichoice' && Array.isArray(slide.interaction.gaps) && targetSection) {
+    slide.interaction.gaps.forEach((gap: any, idx: number) => {
+      let numKey = gap.ordinal ? String(gap.ordinal) : null;
+      if (!numKey && gap.id) {
+        const m = String(gap.id).match(/\d+/);
+        if (m) numKey = m[0];
+      }
+      if (!numKey || !targetSection[numKey]) {
+        const seq1 = String(idx + 1);
+        if (targetSection[seq1]) numKey = seq1;
+      }
+      if (numKey && targetSection[numKey]) {
+        const official = targetSection[numKey].trim().toLowerCase();
+        const letterMatch = official.match(/^([a-d])$/i);
+        if (letterMatch) {
+          gap.correctOptionId = letterMatch[1].toLowerCase();
+        } else if (Array.isArray(gap.options)) {
+          const matchOpt = gap.options.find((opt: any) => {
+            const t = (opt.text || '').trim().toLowerCase();
+            return t === official || official.includes(t) || t.includes(official);
+          });
+          if (matchOpt) {
+            gap.correctOptionId = matchOpt.id;
+          }
+        }
+      }
+    });
   }
 }
 
@@ -3571,9 +3654,639 @@ export function extractInteractionItemsForDeduplication(
     for (const s of interaction.items) {
       items.push({ prompt: s.text || s.content || '' });
     }
+  } else if (interaction.type === 'cloze_multichoice' && Array.isArray(interaction.gaps)) {
+    for (const g of interaction.gaps) {
+      const correctOpt = g.options?.find((o: any) => o.id === g.correctOptionId);
+      items.push({ prompt: `gap-${g.ordinal}`, expectedAnswer: correctOpt?.text || g.correctOptionId || '' });
+    }
   }
 
   return items;
+}
+
+/**
+ * Strips prefix indicators (e.g. "a)", "(a)", "1.", "a - ") and annotations from option text.
+ */
+export function cleanOptionText(text: string): string {
+  if (!text || typeof text !== 'string') return '';
+  return text
+    .replace(/^\s*\([a-zA-Z0-9]+\)\s*/g, '')
+    .replace(/^\s*[a-zA-Z0-9]+\s*[\)\].:\-]\s*/g, '')
+    .replace(/\s*[(\[]\s*(?:example|sample|model|ejemplo|ej\.|highlight(?:ed)?|circled?|resaltad[oa]|encerrad[oa])\s*[)\]]/gi, '')
+    .replace(/\b(?:example|sample|model|ejemplo|highlighted|circled)\b/gi, '')
+    .replace(/[*✓✔⭕🔴]/g, '')
+    .replace(/==|<mark>|<\/mark>/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * Detects whether an option text is empty or matches default placeholder patterns
+ * (e.g. 'Option A', 'Option B', 'Opción 1', 'option a', etc.)
+ */
+export function isPlaceholderOrEmptyOption(text: string | undefined): boolean {
+  if (!text || typeof text !== 'string') return true;
+  const trimmed = text.trim();
+  if (trimmed === '') return true;
+  if (/^option\s+[a-z0-9]$/i.test(trimmed)) return true;
+  if (/^(?:opci[oó]n)\s+[a-z0-9]$/i.test(trimmed)) return true;
+  if (/^option$/i.test(trimmed)) return true;
+  if (/^opci[oó]n$/i.test(trimmed)) return true;
+  if (/^placeholder/i.test(trimmed)) return true;
+  if (/^default\s*option/i.test(trimmed)) return true;
+  if (/^[a-d]$/i.test(trimmed)) return true;
+  if (/^\([a-d]\)$/i.test(trimmed) || /^[a-d]\)$/i.test(trimmed)) return true;
+  return false;
+}
+
+/**
+ * Checks whether an options array has placeholder or empty options.
+ */
+export function areGapOptionsPlaceholderOrEmpty(
+  options: Array<{ id: string; text: string }> | undefined
+): boolean {
+  if (!options || !Array.isArray(options) || options.length === 0) return true;
+  if (options.some((o) => isPlaceholderOrEmptyOption(o?.text))) return true;
+  return false;
+}
+
+/**
+ * Parses option incisos (a, b, c, d...) and their real text strings from a line or block of text.
+ * Handles both explicit delimiters (a), a., (a), [a], a:, a -) and space-delimited letters (A text B text C text).
+ */
+export function parseOptionsFromOrdinalBlock(
+  content: string
+): Array<{ id: string; text: string }> {
+  const options: Array<{ id: string; text: string }> = [];
+  if (!content || typeof content !== 'string') return options;
+
+  // Pattern 1: Explicit incisos with delimiter: a) word, a. word, (a) word, [a] word, A: word, a - word
+  const explicitRegex = /(?:^|\s+)(?:\(([a-zA-Z])\)|\[([a-zA-Z])\]|([a-zA-Z])[\)\].:\-])\s*([\s\S]+?)(?=(?:\s+(?:\([a-zA-Z]\)|\[[a-zA-Z]\]|[a-zA-Z][\)\].:\-]))|$)/g;
+  let match: RegExpExecArray | null;
+
+  while ((match = explicitRegex.exec(content)) !== null) {
+    const letter = (match[1] || match[2] || match[3]).toLowerCase();
+    const rawText = match[4] || '';
+    const cleaned = cleanOptionText(rawText);
+    if (cleaned) {
+      options.push({ id: letter, text: cleaned });
+    }
+  }
+
+  if (options.length >= 2) {
+    return options;
+  }
+
+  // Pattern 2: Incisos without punctuation, e.g. "A travel B went C gone"
+  options.length = 0;
+  const letterDelimRegex = /(?:^|\s+)\b([a-zA-Z])\b\s+([\s\S]+?)(?=(?:\s+\b[a-zA-Z]\b\s+)|$)/g;
+  while ((match = letterDelimRegex.exec(content)) !== null) {
+    const letter = match[1].toLowerCase();
+    const rawText = match[2] || '';
+    const cleaned = cleanOptionText(rawText);
+    if (cleaned) {
+      options.push({ id: letter, text: cleaned });
+    }
+  }
+
+  return options;
+}
+
+/**
+ * Extracts real options for ordinal k from raw text / OCR text.
+ * Matches lines starting with ordinal k (e.g. "k a) ... b) ... c) ...")
+ * and extracts all candidate alternatives (e.g. 3 alternatives for a, b, c).
+ */
+export function extractRealOptionsForOrdinal(
+  rawText: string,
+  k: number
+): Array<{ id: string; text: string }> | null {
+  if (!rawText || typeof rawText !== 'string') return null;
+
+  const normalized = rawText.replace(/\r\n/g, '\n');
+
+  // Look for lines beginning with ordinal k
+  // Handles same-line "1 a) was b) were c) be" or multi-line "1\n a) was\n b) were\n c) be"
+  const ordinalPattern = new RegExp(
+    `(?:^|\\n)\\s*(?:(?:\\[|\\()?${k}(?:\\]|\\))?[.)\\s:\\-]+|(?:\\[|\\()?${k}(?:\\]|\\))?\\s*\\n)\\s*([^\\r\\n]+(?:\\n(?!\\s*(?:\\[|\\()?(\\d+)(?:\\]|\\))?[.)\\s:\\-])[^\\r\\n]+)*)`,
+    'gi'
+  );
+
+  let match: RegExpExecArray | null;
+  while ((match = ordinalPattern.exec(normalized)) !== null) {
+    const blockContent = match[1].trim();
+    const options = parseOptionsFromOrdinalBlock(blockContent);
+    if (options.length >= 2) {
+      return options;
+    }
+  }
+
+  // Fallback: search individual lines starting with ordinal k
+  const lines = normalized.split('\n');
+  for (const line of lines) {
+    const lineTrimmed = line.trim();
+    const startMatch = lineTrimmed.match(new RegExp(`^(?:\\[|\\()?${k}(?:\\]|\\))?[.)\\s:\\-]+\\s*(.+)$`, 'i'));
+    if (startMatch) {
+      const lineOpts = parseOptionsFromOrdinalBlock(startMatch[1]);
+      if (lineOpts.length >= 2) {
+        return lineOpts;
+      }
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Collects all candidate raw text sources from a raw slide for OCR scanning.
+ */
+export function collectRawTextSources(rawSlide: any, rawOcrContext?: string): string[] {
+  const sources: string[] = [];
+  if (rawOcrContext && typeof rawOcrContext === 'string') {
+    sources.push(rawOcrContext);
+  }
+  if (rawSlide) {
+    if (typeof (rawSlide as any)._rawJsonText === 'string') {
+      sources.push((rawSlide as any)._rawJsonText);
+    }
+    if (typeof rawSlide._rawExtraction === 'string') {
+      sources.push(rawSlide._rawExtraction);
+    } else if (rawSlide._rawExtraction && typeof rawSlide._rawExtraction === 'object') {
+      try {
+        sources.push(JSON.stringify(rawSlide._rawExtraction));
+      } catch {}
+      if (typeof rawSlide._rawExtraction.rawText === 'string') sources.push(rawSlide._rawExtraction.rawText);
+      if (typeof rawSlide._rawExtraction.text === 'string') sources.push(rawSlide._rawExtraction.text);
+      if (typeof rawSlide._rawExtraction.ocrText === 'string') sources.push(rawSlide._rawExtraction.ocrText);
+      if (rawSlide._rawExtraction.referenceContent?.content) sources.push(rawSlide._rawExtraction.referenceContent.content);
+      if (rawSlide._rawExtraction.referenceContent?.body) sources.push(rawSlide._rawExtraction.referenceContent.body);
+      if (rawSlide._rawExtraction.contextBody) sources.push(rawSlide._rawExtraction.contextBody);
+      if (rawSlide._rawExtraction.notes) sources.push(rawSlide._rawExtraction.notes);
+      if (rawSlide._rawExtraction.interaction?.passageText) sources.push(rawSlide._rawExtraction.interaction.passageText);
+      if (rawSlide._rawExtraction.interaction?.instruction) sources.push(rawSlide._rawExtraction.interaction.instruction);
+    }
+    if (typeof rawSlide.rawText === 'string') sources.push(rawSlide.rawText);
+    if (typeof rawSlide.referenceContent?.content === 'string') sources.push(rawSlide.referenceContent.content);
+    if (typeof rawSlide.referenceContent?.body === 'string') sources.push(rawSlide.referenceContent.body);
+    if (typeof rawSlide.contextBody === 'string') sources.push(rawSlide.contextBody);
+    if (typeof rawSlide.notes === 'string') sources.push(rawSlide.notes);
+    if (typeof rawSlide.interaction?.passageText === 'string') sources.push(rawSlide.interaction.passageText);
+    if (typeof (rawSlide.interaction as any)?.instruction === 'string') sources.push((rawSlide.interaction as any).instruction);
+    if (typeof (rawSlide as any)._rawInstructionText === 'string') sources.push((rawSlide as any)._rawInstructionText);
+    if (typeof rawSlide.subtitle === 'string') sources.push(rawSlide.subtitle);
+    if (typeof rawSlide.title === 'string') sources.push(rawSlide.title);
+  }
+  return sources.filter((s) => typeof s === 'string' && s.trim().length > 0);
+}
+
+/**
+ * Parses options bank lines formatted like:
+ * 1 a) travel b) went c) gone
+ * 2 a) was b) were c) be
+ * Searches dynamically using: /^\s*(\d+)[\.\)\s]+([a-zA-Z][\.\)\s].+)$/gm
+ */
+export function parseClozeOptionsFromText(
+  text: string,
+  targetAnswerKeys?: Record<string, string>
+): { gaps: any[]; optionsStartIndex: number } {
+  const gaps: any[] = [];
+  let firstMatchIndex = -1;
+
+  if (!text || typeof text !== 'string') {
+    return { gaps, optionsStartIndex: -1 };
+  }
+
+  const normalizedText = text.replace(/\r\n/g, '\n');
+  const lineRegex = /^\s*(\d+)[\.\)\s]+([a-zA-Z][\.\)\s].+)$/gm;
+  let match: RegExpExecArray | null;
+
+  while ((match = lineRegex.exec(normalizedText)) !== null) {
+    if (firstMatchIndex === -1) {
+      firstMatchIndex = match.index;
+    }
+    const ordinal = parseInt(match[1], 10);
+    const lineContent = match[2];
+
+    const optRegex = /(?:^|\s+)(?:\(([a-zA-Z])\)|([a-zA-Z])[\)\].:\-]|\b([a-zA-Z])\b(?=\s+[^\s]))\s*(.+?)(?=(?:\s+(?:\([a-zA-Z]\)|[a-zA-Z][\)\].:\-]|\b[a-zA-Z]\b(?=\s+[^\s])))|$)/gi;
+    const options: Array<{ id: string; text: string }> = [];
+    let optMatch: RegExpExecArray | null;
+    let detectedCorrectId: string | undefined = undefined;
+    let isSample = false;
+
+    while ((optMatch = optRegex.exec(lineContent)) !== null) {
+      const letter = (optMatch[1] || optMatch[2] || optMatch[3]).toLowerCase();
+      const rawOptText = optMatch[4] || '';
+      const hasSampleMarker =
+        /\b(?:example|sample|model|ejemplo)\b/i.test(rawOptText) ||
+        /\([^\)]*(?:example|sample|model|ejemplo)[^\)]*\)/i.test(rawOptText) ||
+        /\[[^\]]*(?:example|sample|model|ejemplo)[^\]]*\]/i.test(rawOptText) ||
+        /[*✓✔⭕🔴]/.test(rawOptText) ||
+        /==|<mark>|<\/mark>/i.test(rawOptText) ||
+        /\b(?:circled?|highlight(?:ed)?|encerrad[oa]|resaltad[oa])\b/i.test(rawOptText);
+
+      if (hasSampleMarker && !detectedCorrectId) {
+        detectedCorrectId = letter;
+        isSample = true;
+      }
+
+      options.push({
+        id: letter,
+        text: cleanOptionText(rawOptText),
+      });
+    }
+
+    if (options.length < 2) {
+      const fallbackOptions = parseOptionsFromOrdinalBlock(lineContent);
+      if (fallbackOptions.length >= 2) {
+        options.length = 0;
+        options.push(...fallbackOptions);
+      }
+    }
+
+    // Extracción de opciones reales si son placeholders o vienen vacías
+    if (areGapOptionsPlaceholderOrEmpty(options)) {
+      const realOpts = extractRealOptionsForOrdinal(normalizedText, ordinal);
+      if (realOpts && realOpts.length >= 2) {
+        options.length = 0;
+        options.push(...realOpts);
+      }
+    }
+
+    if (options.length >= 2) {
+      if (ordinal === 1 && (isSample || /\bexample\b/i.test(lineContent))) {
+        isSample = true;
+        if (!detectedCorrectId && options.length > 0) {
+          detectedCorrectId = options[0].id;
+        }
+      }
+
+      // En caso de no existir marca explícita, resolver 'correctOptionId' contra 'harvestedAnswerKeys[k]'
+      if (!detectedCorrectId && targetAnswerKeys) {
+        const keyVal = targetAnswerKeys[String(ordinal)]?.trim().toLowerCase();
+        if (keyVal) {
+          const letterMatch = keyVal.match(/^([a-d])$/i);
+          if (letterMatch) {
+            detectedCorrectId = letterMatch[1].toLowerCase();
+          } else {
+            const found = options.find((opt) => {
+              const t = opt.text.toLowerCase();
+              return t === keyVal || keyVal.includes(t) || t.includes(keyVal);
+            });
+            if (found) detectedCorrectId = found.id;
+          }
+        }
+      }
+
+      gaps.push({
+        id: `gap-${ordinal}`,
+        ordinal,
+        options,
+        correctOptionId: detectedCorrectId || options[0].id,
+        isExample: isSample || undefined,
+      });
+    }
+  }
+
+  // Si algún gap quedó con placeholders o vacío, re-extraer desde el texto normalizado
+  for (const gap of gaps) {
+    if (areGapOptionsPlaceholderOrEmpty(gap.options)) {
+      const realOpts = extractRealOptionsForOrdinal(normalizedText, gap.ordinal);
+      if (realOpts && realOpts.length >= 2) {
+        gap.options = realOpts;
+      }
+    }
+  }
+
+  return { gaps, optionsStartIndex: firstMatchIndex };
+}
+
+/**
+ * Universal detector for cloze_multichoice activities.
+ */
+export function isClozeMultichoiceActivity(rawSlide: any): boolean {
+  if (!rawSlide || typeof rawSlide !== 'object') return false;
+  if (rawSlide.interaction?.type === 'cloze_multichoice') return true;
+  if (rawSlide.format === 'cloze_multichoice') return true;
+
+  // Prohibición ontológica de ignorar gaps: Si cualquier campo contiene marcadores {{gap-, es cloze_multichoice
+  const allTexts = [
+    rawSlide.interaction?.passageText,
+    rawSlide.referenceContent?.content,
+    rawSlide.referenceContent?.body,
+    rawSlide.contextBody,
+    rawSlide.notes,
+    rawSlide.title,
+    rawSlide.subtitle,
+    (rawSlide.interaction as any)?.prompt,
+    (rawSlide.interaction as any)?.instruction,
+  ].filter((t): t is string => typeof t === 'string' && t.trim().length > 0);
+
+  if (allTexts.some((t) => /\{\{\s*gap-/i.test(t))) {
+    return true;
+  }
+
+  const refText = (rawSlide.referenceContent?.content || rawSlide.referenceContent?.body || rawSlide.contextBody || '').trim();
+  if (refText) {
+    const { gaps } = parseClozeOptionsFromText(refText);
+    if (gaps.length >= 2) return true;
+  }
+
+  if (rawSlide.interaction?.type === 'selection' && Array.isArray(rawSlide.interaction.questions) && rawSlide.interaction.questions.length >= 2) {
+    const questions = rawSlide.interaction.questions;
+    const areOrdinalQuestions = questions.every((q: any) => {
+      const prompt = (q.prompt || q.question || '').trim();
+      return /^(?:\(?\d+[.)]?|gap\s*\d+|question\s*\d+|item\s*\d+|\[\s*\d+\s*\]|\{\{\s*blank\s*\}\}|_{2,})$/i.test(prompt);
+    });
+    const haveOptions = questions.every((q: any) => Array.isArray(q.options) && q.options.length >= 2);
+    if (areOrdinalQuestions && haveOptions && refText) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Universal normalizer: converts any cloze with options bank into canonical cloze_multichoice format.
+ */
+export function normalizeClozeMultichoiceInteraction(
+  rawSlide: any,
+  harvestedAnswerKeys?: Record<string, Record<string, string>>
+): boolean {
+  if (!isClozeMultichoiceActivity(rawSlide)) return false;
+
+  rawSlide.id = rawSlide.id || `slide-${Date.now()}`;
+
+  let passage = '';
+  let gaps: any[] = [];
+
+  // Epistemic grounding: resolve targetSection from harvestedAnswerKeys if present
+  let targetSection: Record<string, string> | null = null;
+  if (harvestedAnswerKeys && Object.keys(harvestedAnswerKeys).length > 0) {
+    const fullHeader = `${rawSlide.title || ''} ${rawSlide.subtitle || ''} ${(rawSlide.interaction as any)?.instruction || ''}`.toLowerCase();
+    for (const key of Object.keys(harvestedAnswerKeys)) {
+      if (key === 'default') continue;
+      const keyRegex = new RegExp(`(?:\\b|exercise\\s*|act\\.?\\s*|part\\s*)${key}\\b`, 'i');
+      if (keyRegex.test(fullHeader)) {
+        targetSection = harvestedAnswerKeys[key];
+        break;
+      }
+    }
+    if (!targetSection) {
+      const nonDefault = Object.keys(harvestedAnswerKeys).filter((k) => k !== 'default');
+      targetSection = nonDefault.length > 0 ? harvestedAnswerKeys[nonDefault[0]] : (harvestedAnswerKeys['default'] || null);
+    }
+  }
+
+  // Case 1: Model already returned cloze_multichoice
+  if (rawSlide.interaction?.type === 'cloze_multichoice') {
+    passage = rawSlide.interaction.passageText || rawSlide.referenceContent?.content || rawSlide.contextBody || '';
+    gaps = Array.isArray(rawSlide.interaction.gaps) ? [...rawSlide.interaction.gaps] : [];
+  }
+
+  // Candidate sources
+  const refText = (rawSlide.referenceContent?.content || rawSlide.referenceContent?.body || rawSlide.contextBody || '').trim();
+  const interactionPassage = typeof rawSlide.interaction?.passageText === 'string' ? rawSlide.interaction.passageText.trim() : '';
+
+  if (!passage) {
+    passage = interactionPassage || refText || (rawSlide.interaction as any)?.contextText || (rawSlide.interaction as any)?.prompt || '';
+  }
+
+  // Case 2: Degraded into selection questions with passage in referenceContent
+  if (gaps.length === 0 && rawSlide.interaction?.type === 'selection' && Array.isArray(rawSlide.interaction.questions) && rawSlide.interaction.questions.length > 0) {
+    gaps = rawSlide.interaction.questions.map((q: any, idx: number) => {
+      const m = String(q.prompt || q.question || '').match(/\d+/);
+      const ordinal = m ? parseInt(m[0], 10) : idx + 1;
+      const isSample = Boolean(q.isExample || (q.options || []).some((o: any) => o.isExample));
+      const correctOpt = (q.options || []).find((o: any) => o.isCorrect || o.isExample);
+      const correctOptionId = correctOpt ? (correctOpt.id || 'a').toLowerCase() : 'a';
+      return {
+        id: `gap-${ordinal}`,
+        ordinal,
+        options: (q.options || []).map((o: any, oIdx: number) => {
+          const letter = (o.id && /^[a-d]$/i.test(o.id)) ? o.id.toLowerCase() : String.fromCharCode(97 + oIdx);
+          return {
+            id: letter,
+            text: cleanOptionText(o.text),
+          };
+        }),
+        correctOptionId,
+        isExample: isSample || undefined,
+      };
+    });
+  }
+
+  // Case 3: Dynamic fallback extraction when gaps is empty or null
+  if (gaps.length === 0) {
+    const candidateTexts = [passage, refText, rawSlide.contextBody, rawSlide.notes].filter(Boolean);
+    for (const txt of candidateTexts) {
+      const parsed = parseClozeOptionsFromText(txt, targetSection || undefined);
+      if (parsed.gaps.length > 0) {
+        gaps = parsed.gaps;
+        if (txt === passage && parsed.optionsStartIndex > 0) {
+          passage = passage.slice(0, parsed.optionsStartIndex).trim();
+        } else if (parsed.optionsStartIndex > 0 && !interactionPassage && txt === refText) {
+          passage = refText.slice(0, parsed.optionsStartIndex).trim();
+        }
+        break;
+      }
+    }
+  } else if (passage) {
+    // If passage contains options bank lines at the bottom, strip them
+    const parsed = parseClozeOptionsFromText(passage, targetSection || undefined);
+    if (parsed.optionsStartIndex > 0) {
+      passage = passage.slice(0, parsed.optionsStartIndex).trim();
+    }
+  }
+
+  // Case 4: Guarantee no 'interaction: null' when body contains {{gap- markers
+  const hasGapMarkers = /\{\{\s*gap-/i.test(passage) || /\{\{\s*gap-/i.test(refText);
+  if (gaps.length === 0 && hasGapMarkers) {
+    const textWithGaps = /\{\{\s*gap-/i.test(passage) ? passage : refText;
+    const gapMatches = [...textWithGaps.matchAll(/\{\{\s*gap-(\d+)\s*\}\}/gi)];
+    const ordinals = Array.from(new Set(gapMatches.map((m) => parseInt(m[1], 10)))).sort((a, b) => a - b);
+    if (ordinals.length > 0) {
+      const rawSources = collectRawTextSources(rawSlide);
+      gaps = ordinals.map((k) => {
+        let correctOptionId: string | undefined = undefined;
+        if (targetSection && targetSection[String(k)]) {
+          const keyVal = targetSection[String(k)].trim().toLowerCase();
+          const letterMatch = keyVal.match(/^([a-d])$/i);
+          if (letterMatch) {
+            correctOptionId = letterMatch[1].toLowerCase();
+          }
+        }
+        let realOpts: Array<{ id: string; text: string }> | null = null;
+        for (const src of rawSources) {
+          realOpts = extractRealOptionsForOrdinal(src, k);
+          if (realOpts && realOpts.length >= 2) break;
+        }
+        return {
+          id: `gap-${k}`,
+          ordinal: k,
+          options: (realOpts && realOpts.length >= 2) ? realOpts : [],
+          correctOptionId: correctOptionId || (realOpts && realOpts.length > 0 ? realOpts[0].id : 'a'),
+        };
+      });
+      if (textWithGaps !== passage) {
+        passage = textWithGaps;
+      }
+    }
+  }
+
+  if (gaps.length === 0) {
+    console.warn(`[digitizeBook] cloze_multichoice: gaps array is empty for slide "${rawSlide.id || 'unknown'}"; preserving raw text for manual or answer key completion without dummy data.`);
+    rawSlide.interaction = {
+      id: `interaction-${rawSlide.id}`,
+      type: 'cloze_multichoice',
+      instruction: rawSlide.subtitle || rawSlide.title || 'Choose the correct option for each gap.',
+      passageText: passage || refText || rawSlide.contextBody || '',
+      gaps: [],
+    };
+    rawSlide.referenceContent = null;
+    delete rawSlide.contextBody;
+    rawSlide.layout = 'single_column';
+    rawSlide.format = 'cloze_multichoice';
+    rawSlide.isGraded = true;
+    return true;
+  }
+
+  // Clean option texts and ensure valid IDs
+  gaps.forEach((gap, idx) => {
+    if (!gap.ordinal) gap.ordinal = idx + 1;
+    if (!gap.id) gap.id = `gap-${gap.ordinal}`;
+    if (Array.isArray(gap.options)) {
+      gap.options = gap.options.map((opt: any, oIdx: number) => {
+        const letter = (opt.id && /^[a-d]$/i.test(opt.id)) ? opt.id.toLowerCase() : String.fromCharCode(97 + oIdx);
+        return {
+          id: letter,
+          text: cleanOptionText(opt.text),
+        };
+      });
+    }
+    if (gap.ordinal === 1 && (gap.isExample || gap.options?.some((o: any) => /example/i.test(o.text)))) {
+      gap.isExample = true;
+    }
+  });
+
+  // 2. Extracción de Opciones Reales vs Placeholders:
+  // Al parsear el banco de opciones inferior en digitizeBook.ts:
+  // Si las opciones extraídas coinciden con valores por defecto ('Option A', 'Option B') o vienen vacías:
+  // - Extraer mediante regex sobre el texto crudo del OCR las líneas que inicien con el ordinal k:
+  //   ej: k seguido de incisos a), b), c) con sus cadenas correspondientes.
+  // - Asignar a cada gap sus opciones reales parseadas (con 3 alternativas cuando el ejercicio sea a, b, c).
+  // - Si no se encuentran opciones reales, NO dejar placeholders ficticios; dejar el array vacío y emitir warning.
+  const rawSources = [passage, ...collectRawTextSources(rawSlide)];
+  for (const gap of gaps) {
+    const k = gap.ordinal;
+    if (areGapOptionsPlaceholderOrEmpty(gap.options)) {
+      for (const src of rawSources) {
+        const realOpts = extractRealOptionsForOrdinal(src, k);
+        if (realOpts && realOpts.length >= 2) {
+          gap.options = realOpts;
+          break;
+        }
+      }
+      if (areGapOptionsPlaceholderOrEmpty(gap.options)) {
+        console.warn(`[digitizeBook] cloze_multichoice gap-${k}: no real options found; leaving options empty instead of dummy placeholders.`);
+        gap.options = [];
+      }
+    } else if (Array.isArray(gap.options) && gap.options.length < 3) {
+      for (const src of rawSources) {
+        const realOpts = extractRealOptionsForOrdinal(src, k);
+        if (realOpts && realOpts.length >= 3) {
+          gap.options = realOpts;
+          break;
+        }
+      }
+    }
+  }
+
+  gaps.sort((a, b) => a.ordinal - b.ordinal);
+
+  // Substitute gap markers in passageText with canonical {{gap-k}}
+  gaps.forEach((gap) => {
+    const k = gap.ordinal;
+    const canonicalMarker = `{{gap-${k}}}`;
+    if (passage.includes(canonicalMarker)) return;
+
+    const bracketRegex = new RegExp(`\\[\\s*${k}\\s*\\]|\\(\\s*${k}\\s*\\)`, 'i');
+    if (bracketRegex.test(passage)) {
+      passage = passage.replace(bracketRegex, canonicalMarker);
+      return;
+    }
+
+    const blankRegex = new RegExp(`\\b${k}[.)]?\\s*_{2,}`, 'i');
+    if (blankRegex.test(passage)) {
+      passage = passage.replace(blankRegex, canonicalMarker);
+      return;
+    }
+
+    const blankNumRegex = new RegExp(`_{2,}\\s*\\(?${k}\\)?`, 'i');
+    if (blankNumRegex.test(passage)) {
+      passage = passage.replace(blankNumRegex, canonicalMarker);
+      return;
+    }
+
+    const digitRegex = new RegExp(`(?<=[a-zA-Z,.;:\\s])\\b${k}\\b(?=[a-zA-Z\\s])`, 'i');
+    if (digitRegex.test(passage)) {
+      passage = passage.replace(digitRegex, canonicalMarker);
+      return;
+    }
+
+    const genericBlankRegex = /\{\{\s*blank\s*\}\}|\[\s*(?:\?|blank)\s*\]|_{2,}/i;
+    if (genericBlankRegex.test(passage)) {
+      passage = passage.replace(genericBlankRegex, canonicalMarker);
+      return;
+    }
+  });
+
+  // Epistemic grounding: apply harvested answer keys if available
+  if (targetSection) {
+    gaps.forEach((gap) => {
+      if (gap.isExample) return;
+      const keyVal = targetSection![String(gap.ordinal)]?.trim().toLowerCase();
+      if (keyVal) {
+        const letterMatch = keyVal.match(/^([a-d])$/i);
+        if (letterMatch) {
+          gap.correctOptionId = letterMatch[1].toLowerCase();
+        } else if (Array.isArray(gap.options)) {
+          const found = gap.options.find((opt: any) => {
+            const t = (opt.text || '').toLowerCase();
+            return t === keyVal || keyVal.includes(t) || t.includes(keyVal);
+          });
+          if (found) gap.correctOptionId = found.id;
+        }
+      }
+    });
+  }
+
+  // Ensure every gap has a correctOptionId
+  gaps.forEach((gap) => {
+    if (!gap.correctOptionId && Array.isArray(gap.options) && gap.options.length > 0) {
+      gap.correctOptionId = gap.options[0].id;
+    }
+  });
+
+  // Invariantes de Layout y Asignación de Interacción:
+  // slide.layout = 'single_column'; slide.referenceContent = null; delete slide.contextBody;
+  // slide.interaction = { id: `interaction-${slide.id}`, type: 'cloze_multichoice', instruction: slide.subtitle || slide.title, passageText: passageWithGaps, gaps: parsedGaps };
+  // slide.format = 'cloze_multichoice';
+  rawSlide.interaction = {
+    id: `interaction-${rawSlide.id}`,
+    type: 'cloze_multichoice',
+    instruction: rawSlide.subtitle || rawSlide.title || 'Choose the correct option for each gap.',
+    passageText: passage,
+    gaps,
+  };
+
+  rawSlide.referenceContent = null;
+  delete rawSlide.contextBody;
+  rawSlide.layout = 'single_column';
+  rawSlide.format = 'cloze_multichoice';
+  rawSlide.isGraded = true;
+
+  return true;
 }
 
 /**
@@ -3583,7 +4296,7 @@ export function extractInteractionItemsForDeduplication(
 export function validateAndParseSlides(
   rawJsonText: string | any,
   previousSlideContext?: Slide | null,
-  metadataOptions?: { sourceImage?: string; answerKeyCrop?: string }
+  metadataOptions?: { sourceImage?: string; answerKeyCrop?: string; forcedTargetType?: ForcedTargetArchetype; currentSlide?: Slide | null }
 ): Slide[] {
   let parsedJson: any;
   if (typeof rawJsonText === 'string') {
@@ -3643,6 +4356,11 @@ export function validateAndParseSlides(
     const rawExtractionSnapshot = rawSlide._rawExtraction
       ? JSON.parse(JSON.stringify(rawSlide._rawExtraction))
       : JSON.parse(JSON.stringify(rawSlide));
+
+    rawSlide._rawExtraction = rawExtractionSnapshot;
+    if (typeof rawJsonText === 'string') {
+      (rawSlide as any)._rawJsonText = rawJsonText;
+    }
 
     if (!rawSlide.id) {
       rawSlide.id = `slide-${Date.now()}-${idx}`;
@@ -3777,6 +4495,9 @@ export function validateAndParseSlides(
         }
       }
     }
+
+    // Soporte Universal Agnóstico para Actividades 'cloze_multichoice'
+    normalizeClozeMultichoiceInteraction(rawSlide, harvestedAnswerKeys);
 
     const effectiveContext = (idx > 0 && validatedSlides[idx - 1]) ? validatedSlides[idx - 1] : (previousSlideContext || null);
 
@@ -4614,10 +5335,13 @@ export function validateAndParseSlides(
     //   necesita leer a la izquierda mientras interactúa a la derecha. NUNCA para audio o media.
     // - 'single_column': Es el layout por defecto para cualquier ejercicio de oraciones, listas o
     //   reactivos donde el contenido sea autosuficiente, o cuando no hay interacción activa.
-    if (rawSlide.interaction && rawSlide.interaction.type === 'buckets_matching') {
+    if (rawSlide.interaction && (rawSlide.interaction.type === 'buckets_matching' || rawSlide.interaction.type === 'cloze_multichoice')) {
       rawSlide.layout = 'single_column';
       rawSlide.referenceContent = null;
-      rawSlide.contextBody = undefined;
+      delete rawSlide.contextBody;
+      if (rawSlide.interaction.type === 'cloze_multichoice') {
+        rawSlide.format = 'cloze_multichoice';
+      }
     } else {
       const hasAutonomousReadingOrTable = Boolean(
         rawSlide.referenceContent && (
@@ -4751,6 +5475,37 @@ export function validateAndParseSlides(
         decoupleWordBankTokensAndPreserveContext(rawSlide, effectiveContext);
       } else if (rawSlide.interaction.type === 'buckets_matching') {
         normalizeBucketsMatchingInteraction(rawSlide, (rawSlide as any)._rawInstructionText, effectiveContext);
+      } else if (rawSlide.interaction.type === 'cloze_multichoice') {
+        normalizeClozeMultichoiceInteraction(rawSlide, harvestedAnswerKeys);
+      }
+    }
+
+    // Invariante canónica: Prohibido permitir 'interaction: null' o 'split_50_50' / 'lecture' cuando el cuerpo contenga marcadores {{gap- o forcedTargetType sea cloze_multichoice
+    const rawSlideText = `${rawSlide.title || ''} ${rawSlide.subtitle || ''} ${(rawSlide.referenceContent as any)?.content || ''} ${(rawSlide.referenceContent as any)?.body || ''} ${rawSlide.contextBody || ''} ${rawSlide.notes || ''}`;
+    const isTargetCloze =
+      metadataOptions?.forcedTargetType === 'cloze_multichoice' ||
+      rawSlide.format === 'cloze_multichoice' ||
+      rawSlide.interaction?.type === 'cloze_multichoice' ||
+      (metadataOptions?.currentSlide && (metadataOptions.currentSlide.format === 'cloze_multichoice' || metadataOptions.currentSlide.interaction?.type === 'cloze_multichoice')) ||
+      /\{\{\s*gap-/i.test(rawSlideText);
+
+    if (isTargetCloze) {
+      normalizeClozeMultichoiceInteraction(rawSlide, harvestedAnswerKeys);
+      rawSlide.layout = 'single_column';
+      rawSlide.referenceContent = null;
+      delete rawSlide.contextBody;
+      rawSlide.format = 'cloze_multichoice';
+
+      if (
+        (!rawSlide.interaction || rawSlide.interaction.type !== 'cloze_multichoice' || !Array.isArray(rawSlide.interaction.gaps) || rawSlide.interaction.gaps.length === 0) &&
+        metadataOptions?.currentSlide?.interaction?.type === 'cloze_multichoice'
+      ) {
+        rawSlide.interaction = JSON.parse(JSON.stringify(metadataOptions.currentSlide.interaction));
+        normalizeClozeMultichoiceInteraction(rawSlide, harvestedAnswerKeys);
+      }
+
+      if (rawSlide.interaction) {
+        rawSlide.interaction.id = `interaction-${rawSlide.id}`;
       }
     }
 
@@ -4871,6 +5626,16 @@ export function slideToExtractedBlock(
       });
     }
   }
+  if (interaction?.type === 'cloze_multichoice') {
+    if (interaction.passageText) textParts.push(interaction.passageText);
+    if (Array.isArray(interaction.gaps)) {
+      interaction.gaps.forEach((g) => {
+        if (Array.isArray(g.options)) {
+          textParts.push(g.options.map((o) => `${o.id}) ${o.text}`).join(' '));
+        }
+      });
+    }
+  }
 
   const rawText = Array.from(new Set(textParts)).filter(Boolean).join('\n\n');
 
@@ -4909,10 +5674,12 @@ export function slideToExtractedBlock(
 export function buildExtractionPrompt(
   imageCount: number,
   forcedTargetType?: ForcedTargetArchetype,
-  previousSlideContext?: Slide | null
+  previousSlideContext?: Slide | null,
+  currentSlide?: Slide | null
 ): string {
   return `You are an expert ELT (English Language Teaching) author, textbook editor, and master teacher.
 You must analyze the provided ${imageCount} clipping(s) and emit directly a JSON object containing an array of "slides" matching the canonical ELT Slide schema.
+Do NOT echo image data, base64 strings, or repetitive tokens. Output ONLY the compact JSON slide.
 ${previousSlideContext ? `
 ================================================================================
 PREVIOUS_SLIDE_CONTEXT: Contenido y material léxico pasivo de la diapositiva inmediatamente anterior para resolver referencias cruzadas legítimas.
@@ -5126,6 +5893,31 @@ CANONICAL ARCHETYPES:
        - Alternatively, if modeled as input_fields, it OBLIGATORIAMENTE must include the complete "wordBank" with the exact list of options to match.
        - NEVER emit orphan empty text fields without providing the printed bank of options/headings from the activity.
    - "sequence": For ordering disordered sentences or dialogue lines into chronological sequence.
+   - "cloze_multichoice": For a continuous reading passage with sequential numbered gaps (1..N) accompanied by a bottom or sidebar bank of multiple-choice options (e.g. 1 a) ... b) ... c) ...):
+     * When a text has gaps (1..N) and there is a table or rows of options below (e.g., '1 a) ... b) ... c) ...'):
+       * You MUST extract EVERY option letter and literal phrase from that lower block for each gap.
+       * Under NO circumstance should you omit the 'gaps' array or return empty/placeholder options.
+       * If a secondary crop contains an answer key (e.g., '2a) says 3c) have used...'), assign those letters to 'correctOptionId'.
+     * MANDATORY DETECTION RULE: When an activity contains a passage with sequential numbered gap markers (1..N, [1], (1)) AND an options bank labeled by ordinal and letters:
+       - MANDATORILY identify and emit as interaction.type: "cloze_multichoice".
+       - STRICT PROHIBITION: NEVER classify as passive reading ("referenceContent" / "none") and NEVER ignore the interactive gaps!
+       - referenceContent MUST be strictly null and layout MUST be "single_column".
+     * STRUCTURED DATA CONTRACT:
+       - "passageText": The full intact body of the passage, where each numbered gap is replaced by a canonical marker: {{gap-1}}, {{gap-2}}, etc.
+       - "gaps": Array of gap items corresponding to {{gap-k}} markers:
+         [
+           {
+             "id": "gap-1",
+             "ordinal": 1,
+             "options": [
+               { "id": "a", "text": "cleanOptionText" },
+               { "id": "b", "text": "cleanOptionText" },
+               { "id": "c", "text": "cleanOptionText" }
+             ],
+             "correctOptionId": "b",
+             "isExample": true // true if circled or solved as a model example in the textbook
+           }
+         ]
    - "writing": STRICT RESTRICTION (GENUINELY OPEN WRITTEN TASKS ONLY):
      * Reserve interaction.type: "writing" EXCLUSIVELY for genuinely open-ended written communicative production tasks (personal opinion essays, paragraphs, emails, compositions). Set isGraded: false.
      * PROHIBICIÓN ESTRICTA SOBRE DINÁMICAS ORALES (Speaking / Pairwork): Queda estrictamente prohibido degradar consignas de expresión oral ("Work in pairs", "Speaking", "Ask questions", "Talk to a partner") hacia el arquetipo de redacción escrita ('writing'). En dinámicas orales: NO debe generarse textarea de redacción, ni contador de palabras ('minWords'), ni rúbricas de ensayo. Deben estructurarse como diapositiva comunicativa en 'single_column' con 'interaction: null', 'isGraded: false', y la consigna y preguntas/modelos visibles en 'referenceContent'.
@@ -5141,25 +5933,70 @@ CANONICAL ARCHETYPES:
        - Textual explanations / bullet points / rules: Emit cleanly into "referenceContent.body" and "contextBody".
        - Example tables / matrix (e.g., agree/disagree matrix, paradigm chart): Emit into "referenceContent" (type: "reference_table" or "table_reference"), OR as interaction with layoutMode: "table" and ALL cells marked as static (isInput: false), preserving all explanatory narrative/rules in 'referenceContent.body' and 'contextBody'.
        - Expository slide: Set interaction: null, isGraded: false, and layout: "single_column".
-${forcedTargetType ? `
-4. DIRECTED ARCHETYPE OVERRIDE (FORCED TARGET: "${forcedTargetType}"):
-The user explicitly commands to format and extract the clipping strictly into the archetype "${forcedTargetType}".
+${(forcedTargetType || currentSlide?.format === 'cloze_multichoice' || currentSlide?.interaction?.type === 'cloze_multichoice') ? `
+4. DIRECTED ARCHETYPE OVERRIDE (FORCED TARGET: "${forcedTargetType || 'cloze_multichoice'}"):
+The user explicitly commands to format and extract the clipping strictly into the archetype "${forcedTargetType || 'cloze_multichoice'}".
 - You MUST force the slide structure to match this target archetype:
   * "reference_text" or "grammar_reference": interaction MUST be null, isGraded MUST be false, layout MUST be "single_column", referenceContent MUST be type: "text" (category: "grammar_note").
   * "reference_table": interaction MUST be null, isGraded MUST be false, layout MUST be "single_column", referenceContent MUST be type: "reference_table" or "table_reference".
   * "input_fields": interaction MUST be type: "input_fields" (layoutMode: "table" if a grid, or "list" if fill-in blanks).
   * "selection": interaction MUST be type: "selection" with candidate options.
   * "buckets_matching": interaction MUST be type: "buckets_matching" with buckets and tokens.
+  * "cloze_multichoice": interaction MUST be type: "cloze_multichoice" with passageText and gaps.
   * "sequence": interaction MUST be type: "sequence" with disordered chronological items.
   * "writing": interaction MUST be type: "writing" with prompt and guidelines (isGraded: false).
+${(forcedTargetType === 'cloze_multichoice' || currentSlide?.format === 'cloze_multichoice' || currentSlide?.interaction?.type === 'cloze_multichoice') ? `
+CRITICAL DIRECTIVE FOR "cloze_multichoice" & REGENERATION:
+- IT IS STRICTLY FORBIDDEN to format or regenerate this slide as a split reading layout ('split_50_50', 'split_60_40', 'split_40_60') or lecture template ('lecture').
+- "referenceContent" MUST BE STRICTLY NULL and "layout" MUST BE "single_column".
+- Do NOT place the reading text in "referenceContent" or "contextBody".
+- When a text has gaps (1..N) and there is a table or rows of options below (e.g., '1 a) ... b) ... c) ...'):
+  * You MUST extract EVERY option letter and literal phrase from that lower block for each gap.
+  * Under NO circumstance should you omit the 'gaps' array or return empty/placeholder options.
+  * If a secondary crop contains an answer key (e.g., '2a) says 3c) have used...'), assign those letters to 'correctOptionId'.
+- The interaction contract MUST strictly preserve:
+  * interaction.type MUST BE "cloze_multichoice"
+  * interaction.passageText MUST contain the full reading passage with canonical gap markers "{{gap-1}}", "{{gap-2}}", etc. replacing each blank.
+  * interaction.gaps MUST BE an array where each item contains:
+    - id: "gap-1", "gap-2", etc.
+    - ordinal: the 1-based integer gap number
+    - options: an array of option objects with their real text extracted from the options bank: [{ id: "a", text: "..." }, { id: "b", text: "..." }, { id: "c", text: "..." }] (with 3 alternatives when the exercise has incisos a, b, c).
+    - correctOptionId: the resolved correct option letter ("a", "b", "c", etc.)
+  * format MUST BE "cloze_multichoice"
+${(currentSlide?.interaction as any)?.passageText ? `
+REGENERATION PASSTHROUGH:
+- The slide being regenerated has the following continuous passage text:
+"""
+${(currentSlide?.interaction as any)?.passageText}
+"""
+You MUST preserve this passage with its canonical "{{gap-k}}" markers and extract/assign the real options to each gap in "interaction.gaps".` : ''}
+` : ''}
 ` : ''}
 
 AUTONOMOUS RESOLUTION:
 - Act as an expert ELT teacher: all exercises MUST arrive 100% COMPLETELY SOLVED by default.
 - Every interactive item must have its expectedAnswer resolved according to formal English grammar.
 - Never invent synthetic numeric permutations (e.g. "1, 2"). Preserve full candidate texts.
+- Do NOT echo image data, base64 strings, or repetitive tokens. Output ONLY the compact JSON slide.
 - Output ONLY the valid JSON strictly matching the schema.`;
 }
+
+/** Per-candidate API timeout limit (15 seconds max) to avoid long cascade delays */
+export const CANDIDATE_TIMEOUT_MS = 15000;
+
+export const DEFAULT_GEMINI_CANDIDATE_MODELS = [
+  'gemini-2.5-flash',
+  'gemini-2.0-flash',
+  'gemini-1.5-flash',
+  'gemini-3.5-flash-lite',
+];
+
+export const DEFAULT_OPENROUTER_CANDIDATE_MODELS = [
+  'google/gemini-2.5-flash',
+  'google/gemini-2.0-flash-001',
+  'google/gemini-flash-1.5',
+  'google/gemini-3.5-flash-lite',
+];
 
 /**
  * Universal Digitize Book: Calls Gemini via GoogleGenAI SDK or OpenRouter enforcing strict JSON Schema.
@@ -5167,7 +6004,7 @@ AUTONOMOUS RESOLUTION:
 export async function digitizeBook(
   images: string | string[],
   signal?: AbortSignal,
-  options?: { forcedTargetType?: ForcedTargetArchetype; previousSlideContext?: Slide | null; answerKeyCrop?: string }
+  options?: { forcedTargetType?: ForcedTargetArchetype; previousSlideContext?: Slide | null; answerKeyCrop?: string; currentSlide?: Slide | null }
 ): Promise<(ExtractedBlock & Slide)[]> {
   if (signal?.aborted) {
     const err = new Error('Operación cancelada por el usuario');
@@ -5182,7 +6019,32 @@ export async function digitizeBook(
     return cloneSampleBlocks(primaryImage) as any;
   }
 
-  const promptText = buildExtractionPrompt(imageList.length, options?.forcedTargetType, options?.previousSlideContext);
+  let effectiveForcedTargetType = options?.forcedTargetType;
+  if (!effectiveForcedTargetType && options?.currentSlide) {
+    const cs = options.currentSlide;
+    const csAllText = [
+      cs.title,
+      cs.subtitle,
+      (cs.interaction as any)?.passageText,
+      (cs.interaction as any)?.prompt,
+      (cs.interaction as any)?.instruction,
+      (cs.referenceContent as any)?.content,
+      (cs.referenceContent as any)?.body,
+      cs.contextBody,
+      cs.notes,
+    ].filter((t): t is string => typeof t === 'string' && t.trim().length > 0).join('\n');
+
+    if (cs.format === 'cloze_multichoice' || cs.interaction?.type === 'cloze_multichoice' || /\{\{\s*gap-/i.test(csAllText)) {
+      effectiveForcedTargetType = 'cloze_multichoice';
+    }
+  }
+
+  const promptText = buildExtractionPrompt(
+    imageList.length,
+    effectiveForcedTargetType,
+    options?.previousSlideContext,
+    options?.currentSlide
+  );
 
   // Strategy 1: Google Gemini SDK (@google/genai) if VITE_GEMINI_API_KEY is available
   const geminiApiKey = import.meta.env.VITE_GEMINI_API_KEY;
@@ -5207,8 +6069,7 @@ export async function digitizeBook(
       const envGeminiModel = import.meta.env.VITE_GEMINI_MODEL?.trim();
       const candidateModels = Array.from(new Set([
         ...(envGeminiModel ? [envGeminiModel] : []),
-        'gemini-3.8-flash',
-        'gemini-3.5-flash-lite',
+        ...DEFAULT_GEMINI_CANDIDATE_MODELS,
       ]));
 
       for (const model of candidateModels) {
@@ -5218,15 +6079,30 @@ export async function digitizeBook(
           throw err;
         }
 
+        const candidateController = new AbortController();
+        let isTimedOut = false;
+        const timeoutId = setTimeout(() => {
+          isTimedOut = true;
+          candidateController.abort();
+        }, CANDIDATE_TIMEOUT_MS);
+
+        const onUserAbort = () => {
+          candidateController.abort();
+        };
+        if (signal) {
+          signal.addEventListener('abort', onUserAbort, { once: true });
+        }
+
         try {
           const response = await ai.models.generateContent({
             model,
             contents,
             config: {
               responseMimeType: 'application/json',
-              responseSchema: STRUCTURED_SLIDE_SCHEMA,
+              responseSchema: getStructuredSlideSchema(effectiveForcedTargetType),
               temperature: 0.1,
-              abortSignal: signal,
+              maxOutputTokens: 4096,
+              abortSignal: candidateController.signal,
             },
           });
 
@@ -5241,14 +6117,27 @@ export async function digitizeBook(
             const validatedSlides = validateAndParseSlides(rawText, options?.previousSlideContext, {
               sourceImage: primaryImage,
               answerKeyCrop: options?.answerKeyCrop,
+              forcedTargetType: effectiveForcedTargetType,
+              currentSlide: options?.currentSlide,
             });
             return validatedSlides.map((slide) => slideToExtractedBlock(slide, primaryImage, imageList));
           }
         } catch (modelErr: any) {
-          if (signal?.aborted || modelErr?.name === 'AbortError') {
-            throw modelErr;
+          if (signal?.aborted) {
+            const err = new Error('Operación cancelada por el usuario');
+            err.name = 'AbortError';
+            throw err;
           }
-          console.warn(`[digitizeBook] Gemini SDK model "${model}" failed, trying next candidate:`, modelErr);
+          if (isTimedOut) {
+            console.warn(`[digitizeBook] Gemini SDK model "${model}" excedió el timeout de 15s, intentando siguiente candidato...`);
+          } else {
+            console.warn(`[digitizeBook] Gemini SDK model "${model}" failed, trying next candidate:`, modelErr);
+          }
+        } finally {
+          clearTimeout(timeoutId);
+          if (signal) {
+            signal.removeEventListener('abort', onUserAbort);
+          }
         }
       }
     } catch (geminiErr: any) {
@@ -5264,8 +6153,7 @@ export async function digitizeBook(
   const envOpenRouterModel = import.meta.env.VITE_OPENROUTER_MODEL?.trim();
   const openRouterCandidates = Array.from(new Set([
     ...(envOpenRouterModel ? [envOpenRouterModel] : []),
-    'google/gemini-3.8-flash',
-    'google/gemini-3.5-flash-lite',
+    ...DEFAULT_OPENROUTER_CANDIDATE_MODELS,
   ]));
 
   if (openRouterApiKey && openRouterApiKey.trim() !== '') {
@@ -5276,10 +6164,24 @@ export async function digitizeBook(
         throw err;
       }
 
+      const candidateController = new AbortController();
+      let isTimedOut = false;
+      const timeoutId = setTimeout(() => {
+        isTimedOut = true;
+        candidateController.abort();
+      }, CANDIDATE_TIMEOUT_MS);
+
+      const onUserAbort = () => {
+        candidateController.abort();
+      };
+      if (signal) {
+        signal.addEventListener('abort', onUserAbort, { once: true });
+      }
+
       try {
         const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
           method: 'POST',
-          signal,
+          signal: candidateController.signal,
           headers: {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${openRouterApiKey}`,
@@ -5305,10 +6207,11 @@ export async function digitizeBook(
               json_schema: {
                 name: 'slide_extraction',
                 strict: false,
-                schema: STRUCTURED_SLIDE_SCHEMA,
+                schema: getStructuredSlideSchema(effectiveForcedTargetType),
               },
             },
             temperature: 0.1,
+            max_tokens: 4096,
           }),
         });
 
@@ -5325,6 +6228,8 @@ export async function digitizeBook(
             const validatedSlides = validateAndParseSlides(rawContent, options?.previousSlideContext, {
               sourceImage: primaryImage,
               answerKeyCrop: options?.answerKeyCrop,
+              forcedTargetType: effectiveForcedTargetType,
+              currentSlide: options?.currentSlide,
             });
             return validatedSlides.map((slide) => slideToExtractedBlock(slide, primaryImage, imageList));
           }
@@ -5332,10 +6237,21 @@ export async function digitizeBook(
           console.warn(`[digitizeBook] OpenRouter model "${orModel}" returned HTTP ${response.status}, trying next candidate...`);
         }
       } catch (orErr: any) {
-        if (signal?.aborted || orErr?.name === 'AbortError') {
-          throw orErr;
+        if (signal?.aborted) {
+          const err = new Error('Operación cancelada por el usuario');
+          err.name = 'AbortError';
+          throw err;
         }
-        console.warn(`[digitizeBook] OpenRouter model "${orModel}" failed:`, orErr);
+        if (isTimedOut) {
+          console.warn(`[digitizeBook] OpenRouter model "${orModel}" excedió el timeout de 15s, intentando siguiente candidato...`);
+        } else {
+          console.warn(`[digitizeBook] OpenRouter model "${orModel}" failed:`, orErr);
+        }
+      } finally {
+        clearTimeout(timeoutId);
+        if (signal) {
+          signal.removeEventListener('abort', onUserAbort);
+        }
       }
     }
   }

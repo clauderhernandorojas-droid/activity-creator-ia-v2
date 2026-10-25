@@ -8,6 +8,7 @@ import { SelectionRenderer } from './SelectionRenderer';
 import { BucketsRenderer } from './BucketsRenderer';
 import { SequenceRenderer } from './SequenceRenderer';
 import { WritingRenderer } from './WritingRenderer';
+import { ClozeMultichoiceRenderer } from './ClozeMultichoiceRenderer';
 
 export const REFERENCE_RENDERER_REGISTRY: Record<string, ComponentType<any>> = {
   table_reference: TableReferenceRenderer,
@@ -23,6 +24,7 @@ export const INTERACTION_RENDERER_REGISTRY: Record<string, ComponentType<any>> =
   buckets_matching: BucketsRenderer,
   sequence: SequenceRenderer,
   writing: WritingRenderer,
+  cloze_multichoice: ClozeMultichoiceRenderer,
 };
 
 export function getReferenceRenderer(type: string): ComponentType<any> | null {

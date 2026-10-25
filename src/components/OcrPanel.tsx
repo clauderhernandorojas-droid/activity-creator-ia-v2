@@ -268,6 +268,7 @@ export const OcrPanel: React.FC = () => {
     if (interaction) {
       switch (interaction.type) {
         case 'selection': return 'interaction_selection';
+        case 'cloze_multichoice': return 'interaction_selection';
         case 'buckets_matching': return 'interaction_buckets';
         case 'sequence': return 'interaction_sequence';
         case 'writing': return 'interaction_writing';
