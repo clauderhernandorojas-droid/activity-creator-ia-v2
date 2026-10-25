@@ -29,7 +29,7 @@ export const Header: React.FC = () => {
     setLessonTitle,
     loadLessonFromFile,
     saveLesson,
-    saveLessonAs,
+    saveLessonCopy,
     openLessonWithPicker,
     currentFileHandle,
     saveFeedback,
@@ -103,7 +103,7 @@ export const Header: React.FC = () => {
     if (isSaving) return;
     setIsSaving(true);
     try {
-      await saveLessonAs();
+      await saveLessonCopy();
     } finally {
       setIsSaving(false);
     }

@@ -37,6 +37,10 @@ import {
   CANDIDATE_TIMEOUT_MS,
   DEFAULT_GEMINI_CANDIDATE_MODELS,
   DEFAULT_OPENROUTER_CANDIDATE_MODELS,
+  normalizeSlide,
+  parseMatchingPairsFromText,
+  parseSequentialAnswerKeyFromText,
+  extractNumberedPremises,
 } from '../digitizeBook';
 import { evaluateClozeMultichoice } from '../../evaluators/evaluateClozeMultichoice';
 
@@ -5559,6 +5563,451 @@ Many people think Marco Polo was the first European to travel to China. However,
     it('Prevención de truncamiento masivo: buildExtractionPrompt prohibe re-emitir datos base64 o texto repetitivo', () => {
       const prompt = buildExtractionPrompt(1);
       expect(prompt).toContain('Do NOT echo image data, base64 strings, or repetitive tokens. Output ONLY the compact JSON slide.');
+    });
+  });
+
+  // =========================================================================
+  // Caso X: Extracción Agnóstica del Arquetipo 'buckets_matching' (1-to-1 Matching)
+  // =========================================================================
+  describe('Caso X: Extracción Agnóstica del Arquetipo buckets_matching (1-to-1 Matching)', () => {
+    it('1. STRUCTURED_SLIDE_SCHEMA y getStructuredSlideSchema admiten formalmente buckets_matching con correctPairs, targetSlots y sourceItems', () => {
+      const interactionProps = (STRUCTURED_SLIDE_SCHEMA as any).properties.slides.items.properties.interaction.properties;
+      expect(interactionProps.correctPairs).toBeDefined();
+      expect(interactionProps.targetSlots).toBeDefined();
+      expect(interactionProps.sourceItems).toBeDefined();
+      expect(interactionProps.buckets).toBeDefined();
+      expect(interactionProps.tokens).toBeDefined();
+
+      const forcedSchema = getStructuredSlideSchema('buckets_matching');
+      const forcedInteraction = (forcedSchema as any).properties.slides.items.properties.interaction;
+      expect(forcedInteraction.properties.type.enum).toEqual(['buckets_matching']);
+      expect(forcedInteraction.required).toContain('targetSlots');
+      expect(forcedInteraction.required).toContain('sourceItems');
+    });
+
+    it('2. buildExtractionPrompt incluye la directiva crítica abstracta para ejercicios de correspondencia / matching', () => {
+      const prompt = buildExtractionPrompt(1);
+      expect(prompt).toContain('CRITICAL FOR MATCHING / PAIRING EXERCISES (e.g., Match A with B, opposites, halves, definitions):');
+      expect(prompt).toContain("- NEVER dump items, lists, or solutions into 'subtitle', 'referenceContent', or flat text.");
+      expect(prompt).toContain("- You MUST return an 'interaction' of type 'buckets_matching'.");
+      expect(prompt).toContain("- Extract all primary/left-column items or numbered prompts (1..N) into 'targetSlots' [{ id: 'slot-k', label: '...' }].");
+      expect(prompt).toContain("- Extract all secondary/right-column items, options, or answer-key elements into 'sourceItems' [{ id: 'src-k', text: '...' }].");
+      expect(prompt).toContain("- Build 'correctPairs' mapping the correct 'sourceId' to each 'targetId' according to the visual connection or answer-key crop.");
+      expect(prompt).toContain('- If an item is already solved in the book as an example, designate it as the model item.');
+    });
+
+    it('3. normalizeSlide preserva type buckets_matching, asigna format buckets, layout single_column y genera correctPairs', () => {
+      const rawSlide: any = {
+        id: 'slide-match-1',
+        title: 'Vocabulary: Opposites',
+        layout: 'split_50_50',
+        referenceContent: 'Some text',
+        contextBody: 'Old body',
+        interaction: {
+          type: 'buckets_matching',
+          instruction: 'Match words with their opposites',
+          targetSlots: [
+            { id: 'slot-1', label: 'hot' },
+            { id: 'slot-2', label: 'big' },
+          ],
+          sourceItems: [
+            { id: 'src-a', text: 'cold', correctTargetId: 'slot-1' },
+            { id: 'src-b', text: 'small', correctTargetId: 'slot-2' },
+          ],
+        },
+      };
+
+      const normalized = normalizeSlide(rawSlide);
+      expect(normalized.format).toBe('buckets');
+      expect(normalized.layout).toBe('single_column');
+      expect(normalized.referenceContent).toBeNull();
+      expect(normalized.contextBody).toBeUndefined();
+
+      const interaction = normalized.interaction as any;
+      expect(interaction.type).toBe('buckets_matching');
+      expect(interaction.targetSlots).toHaveLength(2);
+      expect(interaction.sourceItems).toHaveLength(2);
+      expect(interaction.correctPairs).toEqual({
+        'src-a': 'slot-1',
+        'src-b': 'slot-2',
+      });
+      // Sincronización con buckets & tokens para compatibilidad total con renderers
+      expect(interaction.buckets).toHaveLength(2);
+      expect(interaction.tokens).toHaveLength(2);
+    });
+
+    it('4. Mecanismo de contingencia agnóstico: parsea pares concatenados (1 A - B) desde subtitle a targetSlots, sourceItems y correctPairs', () => {
+      const rawText = '1 A - arrive / B - depart\n2 A - huge / B - tiny\n3 A - buy / B - sell';
+      const parsed = parseMatchingPairsFromText(rawText);
+      expect(parsed).not.toBeNull();
+      expect(parsed?.targetSlots).toHaveLength(3);
+      expect(parsed?.sourceItems).toHaveLength(3);
+      expect(parsed?.targetSlots[0].label).toBe('arrive');
+      expect(parsed?.sourceItems[0].text).toBe('depart');
+      expect(parsed?.correctPairs['src-1']).toBe('slot-1');
+      expect(parsed?.correctPairs['src-2']).toBe('slot-2');
+      expect(parsed?.correctPairs['src-3']).toBe('slot-3');
+    });
+
+    it('5. Mecanismo de contingencia agnóstico: parsea pares delimitados con dos puntos (k item : match)', () => {
+      const rawText = 'Match the verbs to the nouns:\n1. take : photos\n2. book : tickets\n3. check : in';
+      const parsed = parseMatchingPairsFromText(rawText);
+      expect(parsed).not.toBeNull();
+      expect(parsed?.targetSlots).toHaveLength(3);
+      expect(parsed?.sourceItems).toHaveLength(3);
+      expect(parsed?.targetSlots[0].label).toBe('take');
+      expect(parsed?.sourceItems[0].text).toBe('photos');
+      expect(parsed?.targetSlots[1].label).toBe('book');
+      expect(parsed?.sourceItems[1].text).toBe('tickets');
+      expect(parsed?.correctPairs['src-1']).toBe('slot-1');
+      expect(parsed?.correctPairs['src-2']).toBe('slot-2');
+    });
+
+    it('6. validateAndParseSlides recupera slide degradado con pares en subtitle mediante contingencia', () => {
+      const rawPayload = JSON.stringify({
+        slides: [
+          {
+            id: 'slide-contingency-match',
+            title: 'Unit 3: Collocations',
+            subtitle: '1 take - a photo\n2 make - a mistake\n3 do - homework\n4 have - lunch',
+            layout: 'single_column',
+            isGraded: true,
+            interaction: null,
+          },
+        ],
+      });
+
+      const slides = validateAndParseSlides(rawPayload);
+      expect(slides).toHaveLength(1);
+      const slide = slides[0];
+      expect(slide.format).toBe('buckets');
+      expect(slide.layout).toBe('single_column');
+      expect(slide.interaction).not.toBeNull();
+      expect(slide.interaction?.type).toBe('buckets_matching');
+
+      const interaction = slide.interaction as any;
+      expect(interaction.targetSlots).toHaveLength(4);
+      expect(interaction.sourceItems).toHaveLength(4);
+      expect(interaction.targetSlots[0].label).toBe('take');
+      expect(interaction.sourceItems[0].text).toBe('a photo');
+      expect(interaction.correctPairs['src-1']).toBe('slot-1');
+      expect(interaction.correctPairs['src-2']).toBe('slot-2');
+      expect(interaction.correctPairs['src-3']).toBe('slot-3');
+      expect(interaction.correctPairs['src-4']).toBe('slot-4');
+    });
+  });
+
+  // =========================================================================
+  // CASO Y: Exigencia Estricta de 'interaction' y Recuperación de Solucionario
+  // =========================================================================
+  describe('Caso Y: Exigencia Estricta de interaction y Recuperación Agnóstica de Solucionario', () => {
+    it('1. STRUCTURED_SLIDE_SCHEMA exige formalmente interaction en slide items', () => {
+      const slideItemRequired = (STRUCTURED_SLIDE_SCHEMA as any).properties.slides.items.required;
+      expect(slideItemRequired).toContain('id');
+      expect(slideItemRequired).toContain('title');
+      expect(slideItemRequired).toContain('layout');
+      expect(slideItemRequired).toContain('interaction');
+    });
+
+    it('2. getStructuredSlideSchema garantiza interaction obligatoria en arquetipos evaluables y la excluye en reference_table/reference_text', () => {
+      const interactiveArchetypes = [
+        'buckets_matching',
+        'fill_blanks',
+        'multiple_choice',
+        'selection',
+        'cloze_multichoice',
+        'sequence',
+      ] as const;
+
+      for (const archetype of interactiveArchetypes) {
+        const schema = getStructuredSlideSchema(archetype as any);
+        const slideItemRequired = (schema as any).properties.slides.items.required;
+        expect(
+          slideItemRequired,
+          `Arquetipo ${archetype} debe exigir 'interaction' en required`,
+        ).toContain('interaction');
+
+        // Y la interacción misma debe tener required mínimo
+        const interactionSchema = (schema as any).properties.slides.items.properties.interaction;
+        expect(interactionSchema.required).toContain('type');
+      }
+
+      // Referencias pasivas no deben forzar interaction
+      const refTableSchema = getStructuredSlideSchema('reference_table');
+      expect((refTableSchema as any).properties.slides.items.required).not.toContain('interaction');
+
+      const refTextSchema = getStructuredSlideSchema('reference_text');
+      expect((refTextSchema as any).properties.slides.items.required).not.toContain('interaction');
+    });
+
+    it('3. buildExtractionPrompt incluye la directiva CRITICAL ENFORCEMENT FOR INTERACTIVE EXERCISES', () => {
+      const prompt = buildExtractionPrompt(1, 'fill_blanks');
+      expect(prompt).toContain('CRITICAL ENFORCEMENT FOR INTERACTIVE EXERCISES:');
+      expect(prompt).toContain("'interaction' is MANDATORY on every graded/practice slide.");
+      expect(prompt).toContain("'referenceContent' is STRICTLY for reading passages or context that the student must read BEFORE solving the exercise.");
+      expect(prompt).toContain("NEVER put answer keys, solutions, or matching pairs inside 'referenceContent'.");
+      expect(prompt).toContain("When an answer key or solution snippet is provided (e.g. '2 item, 3 item...'), you MUST map its values directly into the corresponding interaction items");
+    });
+
+    it('4. parseSequentialAnswerKeyFromText extrae soluciones secuenciales y descarta textos narrativos', () => {
+      // Secuencia limpia compacta
+      const compact = parseSequentialAnswerKeyFromText('2 tidy up 3 look after 4 go out 5 take off');
+      expect(compact).not.toBeNull();
+      expect(compact?.['2']).toBe('tidy up');
+      expect(compact?.['3']).toBe('look after');
+      expect(compact?.['4']).toBe('go out');
+      expect(compact?.['5']).toBe('take off');
+
+      // Secuencia con puntuación y prefijo
+      const withDots = parseSequentialAnswerKeyFromText('Answers: 1. clean 2. bright 3. huge');
+      expect(withDots).not.toBeNull();
+      expect(withDots?.['1']).toBe('clean');
+      expect(withDots?.['2']).toBe('bright');
+      expect(withDots?.['3']).toBe('huge');
+
+      // Texto narrativo largo / lectura normal (debe devolver null para no falsos positivos)
+      const narrative = 'In the year 1999, John had 2 dogs. Then in 2005 he bought 3 cats and traveled around the world.';
+      expect(parseSequentialAnswerKeyFromText(narrative)).toBeNull();
+
+      // Menos de 2 claves
+      const single = 'Exercise 2 is very difficult.';
+      expect(parseSequentialAnswerKeyFromText(single)).toBeNull();
+    });
+
+    it('5. normalizeSlide recupera solucionario secuencial de referenceContent y genera fill_blanks', () => {
+      const rawSlide: any = {
+        id: 'slide-rec-1',
+        title: 'Phrasal Verbs Exercise',
+        subtitle: 'Complete the sentences with the correct phrasal verb',
+        layout: 'single_column',
+        referenceContent: {
+          title: 'Notes',
+          content: '2 tidy up 3 look after 4 go out 5 take off',
+        },
+        interaction: null,
+      };
+
+      const normalized = normalizeSlide(rawSlide);
+      expect(normalized.referenceContent).toBeNull();
+      expect(normalized.format).toBe('fill_blanks');
+      expect(normalized.interaction).not.toBeNull();
+      expect(normalized.interaction?.type).toBe('input_fields');
+
+      const interaction = normalized.interaction as any;
+      const items = interaction.items || interaction.listItems;
+      expect(items).toBeDefined();
+      expect(items.length).toBeGreaterThanOrEqual(4);
+      expect(items[0].acceptedAnswers).toContain('tidy up');
+      expect(interaction.wordBank).toContain('tidy up');
+      expect(interaction.wordBank).toContain('look after');
+    });
+
+    it('6. normalizeSlide recupera solucionario de pares de referenceContent y genera buckets_matching', () => {
+      const rawSlide: any = {
+        id: 'slide-rec-2',
+        title: 'Opposites Matching',
+        subtitle: 'Match the opposites',
+        layout: 'single_column',
+        referenceContent: {
+          title: 'Answer Key',
+          content: '1 A - arrive 2 B - huge 3 C - buy',
+        },
+        interaction: null,
+      };
+
+      const normalized = normalizeSlide(rawSlide);
+      expect(normalized.referenceContent).toBeNull();
+      expect(normalized.format).toBe('buckets');
+      expect(normalized.interaction).not.toBeNull();
+      expect(normalized.interaction?.type).toBe('buckets_matching');
+
+      const interaction = normalized.interaction as any;
+      expect(interaction.targetSlots).toBeDefined();
+      expect(interaction.sourceItems).toBeDefined();
+      expect(interaction.correctPairs).toBeDefined();
+    });
+
+    it('7. validateAndParseSlides valida completamente un payload con solucionario recuperado', () => {
+      const rawPayload = JSON.stringify({
+        slides: [
+          {
+            id: 'slide-e2e-rescue',
+            title: 'Vocabulary Practice',
+            subtitle: 'Fill in each blank with the right word',
+            layout: 'single_column',
+            referenceContent: {
+              title: 'Answers',
+              content: '2 take off 3 put on 4 look up',
+            },
+            interaction: null,
+          },
+        ],
+      });
+
+      const slides = validateAndParseSlides(rawPayload);
+      expect(slides).toHaveLength(1);
+      const slide = slides[0];
+      expect(slide.referenceContent).toBeNull();
+      expect(slide.format).toBe('fill_blanks');
+      expect(slide.interaction?.type).toBe('input_fields');
+      const interaction = slide.interaction as any;
+      const items = interaction.items || interaction.listItems;
+      expect(items).toBeDefined();
+      expect(items[0].acceptedAnswers).toContain('take off');
+    });
+  });
+
+  // =========================================================================
+  // CASO Z: Normalización de 'input_fields' incompletos y Mapeo a 'buckets_matching'
+  // =========================================================================
+  describe('Caso Z: Normalización de input_fields incompletos y Mapeo a buckets_matching', () => {
+    it('1. getStructuredSlideSchema exige listItems en arquetipos input_fields y fill_blanks', () => {
+      const inputSchema = getStructuredSlideSchema('input_fields');
+      const interactionInput = (inputSchema as any).properties.slides.items.properties.interaction;
+      expect(interactionInput.required).toContain('listItems');
+
+      const fillSchema = getStructuredSlideSchema('fill_blanks');
+      const interactionFill = (fillSchema as any).properties.slides.items.properties.interaction;
+      expect(interactionFill.required).toContain('listItems');
+    });
+
+    it('2. extractNumberedPremises extrae premisas multilínea e inline', () => {
+      // Multilínea
+      const multiline = '1 take\n2 make\n3 do\n4 have';
+      const parsedMulti = extractNumberedPremises(multiline);
+      expect(parsedMulti).toHaveLength(4);
+      expect(parsedMulti[0].text).toBe('take');
+      expect(parsedMulti[1].text).toBe('make');
+      expect(parsedMulti[2].text).toBe('do');
+      expect(parsedMulti[3].text).toBe('have');
+
+      // Inline
+      const inline = '1 take 2 make 3 do 4 have';
+      const parsedInline = extractNumberedPremises(inline);
+      expect(parsedInline).toHaveLength(4);
+      expect(parsedInline[0].text).toBe('take');
+      expect(parsedInline[3].text).toBe('have');
+
+      // Oraciones con blanks
+      const sentences = '1 She _____ to school 2 They _____ soccer';
+      const parsedSentences = extractNumberedPremises(sentences);
+      expect(parsedSentences).toHaveLength(2);
+      expect(parsedSentences[0].text).toBe('She _____ to school');
+      expect(parsedSentences[1].text).toBe('They _____ soccer');
+    });
+
+    it('3. normalizeSlide rescata input_fields sin listItems con instrucción de matching y lo transforma a buckets_matching', () => {
+      const rawSlide: any = {
+        id: 'slide-matching-rescue',
+        title: 'Collocations Matching',
+        subtitle: '1 take\n2 make\n3 do\n4 have',
+        interaction: {
+          id: 'int-match-1',
+          type: 'input_fields',
+          instruction: 'Match the verbs with the words to make common collocations:',
+          wordBank: ['a photo', 'a mistake', 'homework', 'lunch'],
+        },
+      };
+
+      const normalized = normalizeSlide(rawSlide);
+      expect(normalized.format).toBe('buckets');
+      expect(normalized.layout).toBe('single_column');
+      expect(normalized.interaction).not.toBeNull();
+      expect(normalized.interaction.type).toBe('buckets_matching');
+
+      const it = normalized.interaction;
+      expect(it.targetSlots).toHaveLength(4);
+      expect(it.sourceItems).toHaveLength(4);
+      expect(it.targetSlots[0].label).toBe('take');
+      expect(it.sourceItems[0].text).toBe('a photo');
+      expect(it.targetSlots[1].label).toBe('make');
+      expect(it.sourceItems[1].text).toBe('a mistake');
+      expect(it.correctPairs['src-1']).toBe('slot-1');
+      expect(it.correctPairs['src-2']).toBe('slot-2');
+    });
+
+    it('4. normalizeSlide rescata input_fields sin listItems en fill_blanks sintetizando listItems desde premisas', () => {
+      const rawSlide: any = {
+        id: 'slide-fill-rescue',
+        title: 'Past Simple Practice',
+        subtitle: '1 She _____ to school yesterday.\n2 They _____ soccer last weekend.',
+        interaction: {
+          id: 'int-fill-1',
+          type: 'input_fields',
+          instruction: 'Complete the sentences with the correct form of the verbs:',
+          wordBank: ['walked', 'played'],
+        },
+      };
+
+      const normalized = normalizeSlide(rawSlide);
+      expect(normalized.format).toBe('fill_blanks');
+      expect(normalized.interaction).not.toBeNull();
+      expect(normalized.interaction.type).toBe('input_fields');
+
+      const it = normalized.interaction;
+      const items = it.listItems || it.items;
+      expect(items).toHaveLength(2);
+      expect(items[0].prompt).toContain('She');
+      expect(items[0].acceptedAnswers).toContain('walked');
+      expect(items[1].prompt).toContain('They');
+      expect(items[1].acceptedAnswers).toContain('played');
+    });
+
+    it('5. normalizeSlide sintetiza listItems desde wordBank cuando no hay premisas numeradas en el subtítulo', () => {
+      const rawSlide: any = {
+        id: 'slide-wb-only-rescue',
+        title: 'Travel Vocabulary',
+        subtitle: 'Complete the gaps',
+        interaction: {
+          id: 'int-fill-wb',
+          type: 'input_fields',
+          instruction: 'Fill in the blanks with the correct words from the box:',
+          wordBank: ['departure', 'arrival', 'boarding'],
+        },
+      };
+
+      const normalized = normalizeSlide(rawSlide);
+      expect(normalized.format).toBe('fill_blanks');
+      expect(normalized.interaction.type).toBe('input_fields');
+
+      const it = normalized.interaction;
+      const items = it.listItems || it.items;
+      expect(items).toHaveLength(3);
+      expect(items[0].acceptedAnswers).toContain('departure');
+      expect(items[1].acceptedAnswers).toContain('arrival');
+      expect(items[2].acceptedAnswers).toContain('boarding');
+    });
+
+    it('6. validateAndParseSlides valida completamente y preserva la interacción rescatada a buckets_matching', () => {
+      const rawPayload = JSON.stringify({
+        slides: [
+          {
+            id: 'slide-e2e-matching-fix',
+            title: 'Verbs & Nouns',
+            subtitle: '1 take\n2 book\n3 check',
+            interaction: {
+              id: 'int-e2e-1',
+              type: 'input_fields',
+              instruction: 'Match the verbs to the nouns:',
+              wordBank: ['photos', 'tickets', 'in'],
+            },
+          },
+        ],
+      });
+
+      const slides = validateAndParseSlides(rawPayload);
+      expect(slides).toHaveLength(1);
+      const slide = slides[0];
+      expect(slide.format).toBe('buckets');
+      expect(slide.layout).toBe('single_column');
+      expect(slide.interaction).not.toBeNull();
+      expect(slide.interaction?.type).toBe('buckets_matching');
+
+      const it = slide.interaction as any;
+      expect(it.targetSlots).toHaveLength(3);
+      expect(it.sourceItems).toHaveLength(3);
+      expect(it.targetSlots[0].label).toBe('take');
+      expect(it.sourceItems[0].text).toBe('photos');
     });
   });
 });

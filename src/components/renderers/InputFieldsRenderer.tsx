@@ -4,6 +4,7 @@ import { useSessionStore, type SessionEvaluation } from '../../store/useSessionS
 import { Plus, Trash2, CheckCircle2, XCircle, HelpCircle, AlertCircle, Sparkles, Headphones } from 'lucide-react';
 import { VerificationAudioPlayer } from '../common/VerificationAudioPlayer';
 import { splitSentenceAtBlank, cleanBlankMarkers } from '../../core/text/clozeTokenizer';
+import { sanitizeEvaluationString } from '../../core/evaluators/fillBlankValidator';
 
 interface Props {
   block: InputFieldsBlock;
@@ -136,16 +137,17 @@ export const InputFieldsRenderer: React.FC<Props> = ({
     const set = new Set<string>();
     // Current input values from the student
     Object.values(studentAnswers || {}).forEach((val) => {
-      if (typeof val === 'string' && val.trim()) {
-        set.add(val.trim().toLowerCase());
+      const sanitized = sanitizeEvaluationString(val);
+      if (sanitized) {
+        set.add(sanitized);
       }
     });
     // Canonical values assigned to items with isExample: true
     block.listItems.forEach((item) => {
       if (item.isExample) {
-        const canonical = item.expectedAnswer?.trim() || item.acceptedAnswers?.[0]?.trim();
+        const canonical = sanitizeEvaluationString(item.expectedAnswer || item.acceptedAnswers?.[0]);
         if (canonical) {
-          set.add(canonical.toLowerCase());
+          set.add(canonical);
         }
       }
     });
@@ -154,9 +156,9 @@ export const InputFieldsRenderer: React.FC<Props> = ({
       block.tableRows.forEach((row) => {
         row.forEach((cell) => {
           if (cell.isInput && cell.isExample) {
-            const canonical = cell.expectedAnswer?.trim() || cell.acceptedAnswers?.[0]?.trim();
+            const canonical = sanitizeEvaluationString(cell.expectedAnswer || cell.acceptedAnswers?.[0]);
             if (canonical) {
-              set.add(canonical.toLowerCase());
+              set.add(canonical);
             }
           }
         });
@@ -382,7 +384,7 @@ export const InputFieldsRenderer: React.FC<Props> = ({
               {block.wordBank!
                 .filter((w) => typeof w === 'string' && w.trim().length > 0)
                 .map((word, wIdx) => {
-                  const isUsed = usedWords.has(word.trim().toLowerCase());
+                  const isUsed = usedWords.has(sanitizeEvaluationString(word));
                   return (
                     <span
                       key={`${word}-${wIdx}`}

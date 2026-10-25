@@ -21,24 +21,42 @@ export interface FlexibleValidationResult {
 const IRRELEVANT_PREFIX_REGEX = /^(?:the|a|an|in|on)\s+/i;
 
 /**
- * Base string cleanup:
- * 1. Normalize Unicode (NFD)
- * 2. Unify curly quotes and apostrophes to standard straight forms
- * 3. Trim whitespace and replace consecutive whitespaces with a single space
- * 4. Lowercase
- * 5. Strip trailing and leading punctuation (. , ! ? ; : -)
+ * Canonical sanitization of invisible characters, non-breaking spaces,
+ * special whitespace tokens, and spacing discrepancy:
+ *
+ * 1. Normalize Unicode: .normalize('NFKC')
+ * 2. Replace all non-breaking spaces and special whitespace/invisible characters by standard space:
+ *    .replace(/[\u00A0\u1680\u180E\u2000-\u200B\u202F\u205F\u3000\uFEFF]/g, ' ')
+ * 3. Collapse multiple contiguous whitespace characters into a single space:
+ *    .replace(/\s+/g, ' ')
+ * 4. Trim leading and trailing whitespace:
+ *    .trim()
+ * 5. Convert to lowercase for case-insensitive comparison:
+ *    .toLowerCase()
  */
-export function cleanBaseAnswer(text: string): string {
+export function sanitizeEvaluationString(text: string | undefined | null): string {
+  if (text === null || text === undefined) return '';
+  return String(text)
+    .normalize('NFKC')
+    .replace(/[\u00A0\u1680\u180E\u2000-\u200B\u202F\u205F\u3000\uFEFF]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+/**
+ * Base string cleanup:
+ * 1. Sanitize invisible characters, non-breaking spaces, Unicode NFKC, whitespace collapsing
+ * 2. Unify curly quotes and apostrophes to standard straight forms
+ * 3. Strip surrounding quotes and edge punctuation
+ */
+export function cleanBaseAnswer(text: string | undefined | null): string {
   if (!text) return '';
 
   return (
-    text
-      .normalize('NFD')
+    sanitizeEvaluationString(text)
       .replace(/[’‘`´]/g, "'")
       .replace(/[“”]/g, '"')
-      .replace(/\s+/g, ' ')
-      .trim()
-      .toLowerCase()
       // Remove surrounding quotes if student wrapped answer in quotes
       .replace(/^["']+|["']+$/g, '')
       .trim()

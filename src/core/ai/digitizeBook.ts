@@ -17,14 +17,27 @@ export type ManualTemplateType = 'input_fields' | 'buckets' | 'selection' | 'ref
 
 export type ForcedTargetArchetype = 
   | 'input_fields' 
+  | 'fill_blanks'
+  | 'multiple_choice'
   | 'selection' 
   | 'buckets_matching' 
+  | 'matching'
   | 'sequence' 
   | 'writing' 
   | 'reference_text' 
   | 'reference_table'
   | 'grammar_reference'
   | 'cloze_multichoice';
+
+export {
+  normalizeSlide,
+  parseMatchingPairsFromText,
+  parseSequentialAnswerKeyFromText,
+  extractNumberedPremises,
+  type ParsedMatchingResult,
+  type NumberedPremise,
+} from './payloadMapper';
+import { normalizeSlide } from './payloadMapper';
 
 export function roleToForcedTargetType(role: string): ForcedTargetArchetype {
   switch (role) {
@@ -33,6 +46,8 @@ export function roleToForcedTargetType(role: string): ForcedTargetArchetype {
     case 'interaction_selection':
       return 'selection';
     case 'interaction_buckets':
+    case 'interaction_matching':
+    case 'matching':
       return 'buckets_matching';
     case 'interaction_sequence':
       return 'sequence';
@@ -689,6 +704,10 @@ export const STRUCTURED_SLIDE_SCHEMA = {
                   required: ['id', 'text']
                 }
               },
+              correctPairs: {
+                type: 'object',
+                description: 'Mapping of sourceId to targetId (e.g. { "src-1": "slot-1" }) or array of CorrectPair { sourceId, targetId }'
+              },
               // sequence
               items: {
                 type: 'array',
@@ -749,7 +768,7 @@ export const STRUCTURED_SLIDE_SCHEMA = {
             description: 'Optional slide metadata or diagnostic notifications (e.g. diagnostics: { unresolvedContextReference: boolean })'
           }
         },
-        required: ['id', 'title', 'layout']
+        required: ['id', 'title', 'layout', 'interaction']
       }
     }
   },
@@ -761,12 +780,32 @@ export const STRUCTURED_EXTRACTION_SCHEMA = STRUCTURED_SLIDE_SCHEMA;
 
 /**
  * Returns the structured JSON schema for extraction.
- * When forcedTargetType is 'cloze_multichoice', the 'gaps' property is REQUIRED (not optional).
+ * Guarantees that 'interaction' is MANDATORY for all interactive/evaluable archetypes.
  */
 export function getStructuredSlideSchema(forcedTargetType?: string) {
+  const schema = JSON.parse(JSON.stringify(STRUCTURED_SLIDE_SCHEMA));
+  const slideItem = schema.properties?.slides?.items;
+  const interaction = slideItem?.properties?.interaction;
+
+  // Si forcedTargetType es un tipo puramente de referencia/consulta (no interactivo)
+  if (forcedTargetType === 'reference_table' || forcedTargetType === 'reference_text') {
+    if (slideItem?.required) {
+      slideItem.required = slideItem.required.filter((r: string) => r !== 'interaction');
+    }
+    return schema;
+  }
+
+  // Para cualquier arquetipo evaluable o interactivo ('buckets_matching', 'fill_blanks', 'multiple_choice', 'selection', 'cloze_multichoice', 'sequence'):
+  // Garantizar que 'interaction' sea OBLIGATORIA en el schema del slide (required incluye 'interaction')
+  if (slideItem) {
+    if (!Array.isArray(slideItem.required)) {
+      slideItem.required = ['id', 'title', 'layout', 'interaction'];
+    } else if (!slideItem.required.includes('interaction')) {
+      slideItem.required.push('interaction');
+    }
+  }
+
   if (forcedTargetType === 'cloze_multichoice') {
-    const schema = JSON.parse(JSON.stringify(STRUCTURED_SLIDE_SCHEMA));
-    const interaction = schema.properties?.slides?.items?.properties?.interaction;
     if (interaction) {
       interaction.required = ['type', 'id', 'instruction', 'passageText', 'gaps'];
       if (interaction.properties?.type) {
@@ -775,7 +814,48 @@ export function getStructuredSlideSchema(forcedTargetType?: string) {
     }
     return schema;
   }
-  return STRUCTURED_SLIDE_SCHEMA;
+
+  if (forcedTargetType === 'buckets_matching' || forcedTargetType === 'matching') {
+    if (interaction) {
+      interaction.required = ['type', 'id', 'instruction', 'targetSlots', 'sourceItems'];
+      if (interaction.properties?.type) {
+        interaction.properties.type.enum = ['buckets_matching'];
+      }
+    }
+    return schema;
+  }
+
+  if (forcedTargetType === 'fill_blanks' || forcedTargetType === 'input_fields') {
+    if (interaction) {
+      interaction.required = ['type', 'id', 'instruction', 'listItems'];
+      if (interaction.properties?.type) {
+        interaction.properties.type.enum = ['input_fields'];
+      }
+    }
+    return schema;
+  }
+
+  if (forcedTargetType === 'multiple_choice' || forcedTargetType === 'selection') {
+    if (interaction) {
+      interaction.required = ['type', 'id', 'instruction'];
+      if (interaction.properties?.type) {
+        interaction.properties.type.enum = ['selection'];
+      }
+    }
+    return schema;
+  }
+
+  if (forcedTargetType === 'sequence') {
+    if (interaction) {
+      interaction.required = ['type', 'id', 'instruction', 'items'];
+      if (interaction.properties?.type) {
+        interaction.properties.type.enum = ['sequence'];
+      }
+    }
+    return schema;
+  }
+
+  return schema;
 }
 
 /**
@@ -2580,6 +2660,7 @@ export function normalizeBucketsMatchingInteraction(
   // 1. Contrato Estricto de Layout para 'buckets_matching':
   // Toda interacción clasificada como 'buckets_matching' DEBE asignar obligatoriamente layout = 'single_column'
   // y consumir el 100% del ancho del viewport disponible sin paneles laterales ni notas auxiliares.
+  rawSlide.format = 'buckets';
   rawSlide.layout = 'single_column';
   rawSlide.referenceContent = null;
   if (rawSlide.contextBody) {
@@ -3128,6 +3209,44 @@ export function normalizeBucketsMatchingInteraction(
 
   it.targetSlots = it.buckets;
   it.targets = it.buckets;
+
+  // Sincronizar sourceItems si faltan o difieren de tokens
+  if (Array.isArray(it.tokens) && it.tokens.length > 0 && (!Array.isArray(it.sourceItems) || it.sourceItems.length === 0)) {
+    it.sourceItems = it.tokens.map((tk: any) => ({
+      id: tk.id,
+      text: tk.text,
+      correctTargetId: tk.correctBucketId,
+      isExample: tk.isExample,
+      hint: tk.hint,
+    }));
+  }
+
+  // Normalizar correctPairs
+  const pairsMap: Record<string, string> = {};
+  if (it.correctPairs && typeof it.correctPairs === 'object' && !Array.isArray(it.correctPairs)) {
+    Object.assign(pairsMap, it.correctPairs);
+  } else if (Array.isArray(it.correctPairs)) {
+    for (const p of it.correctPairs) {
+      if (p && p.sourceId && p.targetId) {
+        pairsMap[p.sourceId] = p.targetId;
+      }
+    }
+  }
+  if (Array.isArray(it.sourceItems)) {
+    for (const si of it.sourceItems) {
+      if (si.id && si.correctTargetId && !pairsMap[si.id]) {
+        pairsMap[si.id] = si.correctTargetId;
+      }
+    }
+  }
+  if (Array.isArray(it.tokens)) {
+    for (const tk of it.tokens) {
+      if (tk.id && tk.correctBucketId && !pairsMap[tk.id]) {
+        pairsMap[tk.id] = tk.correctBucketId;
+      }
+    }
+  }
+  it.correctPairs = pairsMap;
 }
 
 /**
@@ -4366,6 +4485,11 @@ export function validateAndParseSlides(
       rawSlide.id = `slide-${Date.now()}-${idx}`;
     }
 
+    normalizeSlide(rawSlide, {
+      forcedTargetType: metadataOptions?.forcedTargetType,
+      harvestedAnswerKeys,
+    });
+
     rawSlide.referenceContent = sanitizeReferenceContent(rawSlide.referenceContent, idx);
 
     // Harvest / Unify contextual narrative text (contextBody)
@@ -5467,6 +5591,11 @@ export function validateAndParseSlides(
       );
     }
 
+    normalizeSlide(rawSlide, {
+      forcedTargetType: metadataOptions?.forcedTargetType,
+      harvestedAnswerKeys,
+    });
+
     if (rawSlide.interaction && typeof rawSlide.interaction === 'object') {
       if (!rawSlide.interaction.instruction) {
         rawSlide.interaction.instruction = (rawSlide as any).instruction || rawSlide.subtitle || rawSlide.title || 'Complete the exercise.';
@@ -5738,6 +5867,12 @@ MULTI-SLIDE SEGMENTATION & CROSS-REFERENCING DIRECTIVES:
      * CERO DIAPOSITIVAS DE SOLUCIONARIO: Bajo ninguna circunstancia el Solucionario debe transformarse en una diapositiva independiente en el arreglo "slides". Queda estrictamente prohibido emitir diapositivas cuyo contenido sea la clave o solucionario. Su función es puramente resolutiva/epistémica en tiempo de extracción.
      * CERO FILTRACIÓN EN CONTENIDO VISIBLE: El Solucionario NUNCA debe filtrarse como 'referenceContent', 'contextBody' o texto de lectura visible para el estudiante.
 
+   - CRITICAL ENFORCEMENT FOR INTERACTIVE EXERCISES:
+     * 'interaction' is MANDATORY on every graded/practice slide.
+     * 'referenceContent' is STRICTLY for reading passages or context that the student must read BEFORE solving the exercise.
+     * NEVER put answer keys, solutions, or matching pairs inside 'referenceContent'.
+     * When an answer key or solution snippet is provided (e.g. '2 item, 3 item...'), you MUST map its values directly into the corresponding interaction items (e.g. sourceItems/correctPairs for buckets_matching, acceptedAnswers for fill_blanks, correctOptionId for multiple_choice).
+
 CANONICAL ARCHETYPES:
 1. "referenceContent" (Passive consultation material) & STRICT DOCUMENTARY FIDELITY:
    - ASIGNACIÓN ESTRUCTURAL DE CAJAS DE PALABRAS (WORDBANK vs REFERENCECONTENT):
@@ -5885,6 +6020,13 @@ CANONICAL ARCHETYPES:
          * Extract as candidate options exclusively the discrete alternatives delimited by the disjunction (e.g. options: [{ id: "opt-1", text: "agree", isCorrect: true }, { id: "opt-2", text: "disagree", isCorrect: false }], or ['past', 'present']).
          * Infer the correct option ('correctAnswer' / isCorrect: true) analyzing the data, grammar rules, listening transcript, or contextual examples from the lesson clipping.
    - "buckets_matching": For categorization into buckets OR bijective correspondence between TWO differentiated domains (Column A <-> Column B, "Match words with definitions", "Match sentence halves"):
+     * CRITICAL FOR MATCHING / PAIRING EXERCISES (e.g., Match A with B, opposites, halves, definitions):
+       - NEVER dump items, lists, or solutions into 'subtitle', 'referenceContent', or flat text.
+       - You MUST return an 'interaction' of type 'buckets_matching'.
+       - Extract all primary/left-column items or numbered prompts (1..N) into 'targetSlots' [{ id: 'slot-k', label: '...' }].
+       - Extract all secondary/right-column items, options, or answer-key elements into 'sourceItems' [{ id: 'src-k', text: '...' }].
+       - Build 'correctPairs' mapping the correct 'sourceId' to each 'targetId' according to the visual connection or answer-key crop.
+       - If an item is already solved in the book as an example, designate it as the model item.
      * TRANSCRIPCIÓN MANDATORIA DE ETIQUETAS DE BUCKETS (MANDATORY VERBATIM BUCKET LABELS):
        Para cada target en 'targets' o 'buckets', el campo 'label' DEBE transcribir textualmente la descripción de la categoría visible en el recorte (ej. 'A · <descripción>', 'B · <descripción>'), quedando estrictamente prohibido emitir únicamente la letra o número ('A', 'B', '1').
      * PRESERVE VERBATIM VISUAL IDENTIFIERS: Always preserve literal printed visual identifiers from the textbook (letters "a", "b", "c", numbers "1", "2", "3", or verbatim labels) in tokens and buckets/targetSlots. Do NOT omit them and do NOT invent synthetic names.
@@ -5941,10 +6083,20 @@ The user explicitly commands to format and extract the clipping strictly into th
   * "reference_table": interaction MUST be null, isGraded MUST be false, layout MUST be "single_column", referenceContent MUST be type: "reference_table" or "table_reference".
   * "input_fields": interaction MUST be type: "input_fields" (layoutMode: "table" if a grid, or "list" if fill-in blanks).
   * "selection": interaction MUST be type: "selection" with candidate options.
-  * "buckets_matching": interaction MUST be type: "buckets_matching" with buckets and tokens.
+  * "buckets_matching" or "matching": interaction MUST be type: "buckets_matching" with targetSlots, sourceItems, and correctPairs.
   * "cloze_multichoice": interaction MUST be type: "cloze_multichoice" with passageText and gaps.
   * "sequence": interaction MUST be type: "sequence" with disordered chronological items.
   * "writing": interaction MUST be type: "writing" with prompt and guidelines (isGraded: false).
+${(forcedTargetType === 'buckets_matching' || forcedTargetType === 'matching' || currentSlide?.format === 'buckets' || currentSlide?.interaction?.type === 'buckets_matching') ? `
+CRITICAL DIRECTIVE FOR "buckets_matching" (MATCHING / PAIRING):
+- NEVER dump items, lists, or solutions into 'subtitle', 'referenceContent', or flat text.
+- You MUST return an 'interaction' of type 'buckets_matching'.
+- Extract all primary/left-column items or numbered prompts (1..N) into 'targetSlots' [{ id: 'slot-k', label: '...' }].
+- Extract all secondary/right-column items, options, or answer-key elements into 'sourceItems' [{ id: 'src-k', text: '...' }].
+- Build 'correctPairs' mapping the correct 'sourceId' to each 'targetId' according to the visual connection or answer-key crop.
+- If an item is already solved in the book as an example, designate it as the model item.
+- "referenceContent" MUST BE STRICTLY NULL and "layout" MUST BE "single_column".
+` : ''}
 ${(forcedTargetType === 'cloze_multichoice' || currentSlide?.format === 'cloze_multichoice' || currentSlide?.interaction?.type === 'cloze_multichoice') ? `
 CRITICAL DIRECTIVE FOR "cloze_multichoice" & REGENERATION:
 - IT IS STRICTLY FORBIDDEN to format or regenerate this slide as a split reading layout ('split_50_50', 'split_60_40', 'split_40_60') or lecture template ('lecture').

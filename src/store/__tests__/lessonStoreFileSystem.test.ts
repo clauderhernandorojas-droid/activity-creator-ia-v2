@@ -59,6 +59,54 @@ describe('useLessonStore - File System Access API & Quick Save', () => {
     expect(useLessonStore.getState().saveFeedback?.message).toBe('Guardado en MyClass_Unit1.elt.json');
   });
 
+  it('saveLesson solicita requestPermission si queryPermission no está concedido y escribe si se concede', async () => {
+    const writeMock = vi.fn().mockResolvedValue(undefined);
+    const closeMock = vi.fn().mockResolvedValue(undefined);
+    const createWritableMock = vi.fn().mockResolvedValue({
+      write: writeMock,
+      close: closeMock,
+    });
+
+    const mockHandle: any = {
+      name: 'PermissionTest.elt.json',
+      createWritable: createWritableMock,
+      queryPermission: vi.fn().mockResolvedValue('prompt'),
+      requestPermission: vi.fn().mockResolvedValue('granted'),
+    };
+
+    useLessonStore.setState({ currentFileHandle: mockHandle });
+
+    const success = await useLessonStore.getState().saveLesson();
+
+    expect(success).toBe(true);
+    expect(mockHandle.queryPermission).toHaveBeenCalledWith({ mode: 'readwrite' });
+    expect(mockHandle.requestPermission).toHaveBeenCalledWith({ mode: 'readwrite' });
+    expect(createWritableMock).toHaveBeenCalledTimes(1);
+    expect(useLessonStore.getState().saveFeedback?.message).toBe('Guardado en PermissionTest.elt.json');
+  });
+
+  it('saveLesson no abre ventanas del SO y devuelve false si el permiso de escritura es denegado', async () => {
+    window.showSaveFilePicker = vi.fn();
+
+    const mockHandle: any = {
+      name: 'ReadOnly.elt.json',
+      createWritable: vi.fn(),
+      queryPermission: vi.fn().mockResolvedValue('prompt'),
+      requestPermission: vi.fn().mockResolvedValue('denied'),
+    };
+
+    useLessonStore.setState({ currentFileHandle: mockHandle });
+
+    const success = await useLessonStore.getState().saveLesson();
+
+    expect(success).toBe(false);
+    expect(mockHandle.queryPermission).toHaveBeenCalledWith({ mode: 'readwrite' });
+    expect(mockHandle.requestPermission).toHaveBeenCalledWith({ mode: 'readwrite' });
+    expect(mockHandle.createWritable).not.toHaveBeenCalled();
+    expect(window.showSaveFilePicker).not.toHaveBeenCalled();
+    expect(useLessonStore.getState().saveFeedback?.message).toBe('Permiso de escritura denegado');
+  });
+
   it('saveLesson solicita ubicación con showSaveFilePicker si currentFileHandle es null y almacena el handle', async () => {
     const writeMock = vi.fn().mockResolvedValue(undefined);
     const closeMock = vi.fn().mockResolvedValue(undefined);
@@ -126,6 +174,38 @@ describe('useLessonStore - File System Access API & Quick Save', () => {
     expect(useLessonStore.getState().lesson.title).toBe('Vocabulary & Grammar B1');
     expect(useLessonStore.getState().lesson.slides).toHaveLength(1);
     expect(useLessonStore.getState().saveFeedback?.message).toBe('Abierto: Unit4_Tech.elt.json');
+  });
+
+  it('saveLessonCopy fuerza SIEMPRE la apertura de showSaveFilePicker incluso si currentFileHandle ya existe', async () => {
+    const existingHandle: any = {
+      name: 'Original.elt.json',
+      createWritable: vi.fn(),
+    };
+    useLessonStore.setState({ currentFileHandle: existingHandle });
+
+    const writeMock = vi.fn().mockResolvedValue(undefined);
+    const closeMock = vi.fn().mockResolvedValue(undefined);
+    const createWritableMock = vi.fn().mockResolvedValue({
+      write: writeMock,
+      close: closeMock,
+    });
+
+    const mockNewCopyHandle: any = {
+      name: 'Nueva_Copia.elt.json',
+      createWritable: createWritableMock,
+      queryPermission: vi.fn().mockResolvedValue('granted'),
+    };
+
+    window.showSaveFilePicker = vi.fn().mockResolvedValue(mockNewCopyHandle);
+
+    const success = await useLessonStore.getState().saveLessonCopy();
+
+    expect(success).toBe(true);
+    expect(window.showSaveFilePicker).toHaveBeenCalledTimes(1);
+    expect(existingHandle.createWritable).not.toHaveBeenCalled();
+    expect(createWritableMock).toHaveBeenCalledTimes(1);
+    expect(useLessonStore.getState().currentFileHandle).toBe(mockNewCopyHandle);
+    expect(useLessonStore.getState().saveFeedback?.message).toBe('Copia guardada en Nueva_Copia.elt.json');
   });
 
   it('saveLessonAs crea una copia independiente invocando showSaveFilePicker con el nombre sugerido', async () => {

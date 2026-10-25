@@ -1,4 +1,5 @@
 import type { EvaluationResult } from './evaluateInput';
+import { sanitizeEvaluationString } from './fillBlankValidator';
 
 export interface ClozeMultichoiceEvaluationResult extends EvaluationResult {
   isCorrect: boolean;
@@ -26,14 +27,14 @@ export function evaluateClozeMultichoice(
     }
 
     maxScore++;
-    const studentAns = String(studentAnswers[gap.id] || '').trim().toLowerCase();
-    const expectedAns = String(gap.correctOptionId || '').trim().toLowerCase();
+    const studentAns = sanitizeEvaluationString(studentAnswers[gap.id]);
+    const expectedAns = sanitizeEvaluationString(gap.correctOptionId);
 
     // Check matching either by option id ('a', 'b') or literal text
     const matchingOpt = Array.isArray(gap.options)
-      ? gap.options.find((o: any) => o.id?.toLowerCase() === expectedAns)
+      ? gap.options.find((o: any) => sanitizeEvaluationString(o.id) === expectedAns)
       : null;
-    const expectedText = matchingOpt ? String(matchingOpt.text || '').trim().toLowerCase() : '';
+    const expectedText = matchingOpt ? sanitizeEvaluationString(matchingOpt.text) : '';
 
     const isCorrect = Boolean(
       (studentAns && expectedAns && studentAns === expectedAns) ||

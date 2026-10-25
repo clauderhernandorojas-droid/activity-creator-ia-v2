@@ -248,6 +248,8 @@ export function migrateAndSanitizeLesson(
       if (s.interaction && typeof s.interaction === 'object') {
         const interaction = { ...s.interaction };
         if (interaction.type === 'buckets_matching') {
+          s.format = 'buckets';
+
           // Normalize buckets & targetSlots
           let buckets = Array.isArray(interaction.buckets) ? interaction.buckets : [];
           let targetSlots = Array.isArray(interaction.targetSlots) ? interaction.targetSlots : [];
@@ -304,6 +306,31 @@ export function migrateAndSanitizeLesson(
               hint: tk.hint,
             }));
           }
+
+          // Normalize correctPairs
+          const pairsMap: Record<string, string> = {};
+          if (interaction.correctPairs) {
+            if (typeof interaction.correctPairs === 'object' && !Array.isArray(interaction.correctPairs)) {
+              Object.assign(pairsMap, interaction.correctPairs);
+            } else if (Array.isArray(interaction.correctPairs)) {
+              for (const p of interaction.correctPairs) {
+                if (p && p.sourceId && p.targetId) {
+                  pairsMap[p.sourceId] = p.targetId;
+                }
+              }
+            }
+          }
+          for (const si of sourceItems) {
+            if (si.id && si.correctTargetId && !pairsMap[si.id]) {
+              pairsMap[si.id] = si.correctTargetId;
+            }
+          }
+          for (const tk of tokens) {
+            if (tk.id && tk.correctBucketId && !pairsMap[tk.id]) {
+              pairsMap[tk.id] = tk.correctBucketId;
+            }
+          }
+          interaction.correctPairs = pairsMap;
 
           interaction.tokens = tokens;
           interaction.sourceItems = sourceItems;
@@ -482,6 +509,7 @@ interface LessonState {
   saveFeedback: { message: string; timestamp: number } | null;
   clearSaveFeedback: () => void;
   saveLesson: () => Promise<boolean>;
+  saveLessonCopy: () => Promise<boolean>;
   saveLessonAs: () => Promise<boolean>;
   openLessonWithPicker: () => Promise<boolean>;
   loadLessonFromFile: (file: File) => Promise<boolean>;
@@ -705,6 +733,33 @@ function recordHistory(state: LessonState): Partial<LessonState> {
 }
 
 const initialLessonState = getInitialLessonState();
+
+/**
+ * Ensures write permission on a FileSystemFileHandle.
+ * Checks queryPermission({ mode: 'readwrite' }) first; if not granted,
+ * requests permission via requestPermission({ mode: 'readwrite' }).
+ */
+export async function ensureWritePermission(handle: FileSystemFileHandle): Promise<boolean> {
+  const handleAny = handle as any;
+  if (!handleAny) return false;
+  if (typeof handleAny.queryPermission === 'function') {
+    try {
+      const perm = await handleAny.queryPermission({ mode: 'readwrite' });
+      if (perm === 'granted') {
+        return true;
+      }
+      if (typeof handleAny.requestPermission === 'function') {
+        const req = await handleAny.requestPermission({ mode: 'readwrite' });
+        return req === 'granted';
+      }
+      return false;
+    } catch (err) {
+      console.warn('[useLessonStore] Error verificando permisos de archivo:', err);
+      return false;
+    }
+  }
+  return true;
+}
 
 export const useLessonStore = create<LessonState>()(
   persist(
@@ -1028,27 +1083,26 @@ export const useLessonStore = create<LessonState>()(
         const { lesson, currentFileHandle } = get();
         const jsonContent = JSON.stringify(lesson, null, 2);
 
-        // 1. Quick Save: Sobrescritura directa si currentFileHandle existe
+        // 1. Si currentFileHandle existe y tiene permisos de escritura: sobrescritura directa sin abrir ventanas del SO
         if (currentFileHandle) {
           try {
-            const handleAny = currentFileHandle as any;
-            if (typeof handleAny.queryPermission === 'function') {
-              const perm = await handleAny.queryPermission({ mode: 'readwrite' });
-              if (perm !== 'granted') {
-                if (typeof handleAny.requestPermission === 'function') {
-                  const req = await handleAny.requestPermission({ mode: 'readwrite' });
-                  if (req !== 'granted') {
-                    throw new Error('Permiso de escritura denegado');
-                  }
-                }
-              }
+            const hasPermission = await ensureWritePermission(currentFileHandle);
+            if (!hasPermission) {
+              set({
+                saveFeedback: {
+                  message: 'Permiso de escritura denegado',
+                  timestamp: Date.now(),
+                },
+              });
+              return false;
             }
+
             const writable = await currentFileHandle.createWritable();
             await writable.write(jsonContent);
             await writable.close();
 
             set({
-              currentFileHandle: currentFileHandle,
+              currentFileHandle,
               fileHandle: currentFileHandle,
               hasUnsavedChanges: false,
               saveFeedback: {
@@ -1059,11 +1113,18 @@ export const useLessonStore = create<LessonState>()(
             return true;
           } catch (err: any) {
             if (err?.name === 'AbortError') return false;
-            console.warn('[useLessonStore] Error al sobrescribir archivo vinculado, solicitando ubicación:', err);
+            console.error('[useLessonStore] Error al sobrescribir archivo vinculado:', err);
+            set({
+              saveFeedback: {
+                message: `Error al guardar: ${err?.message || 'Fallo de escritura'}`,
+                timestamp: Date.now(),
+              },
+            });
+            return false;
           }
         }
 
-        // 2. Si no hay handle o falló la sobrescritura, invocar showSaveFilePicker
+        // 2. Solo si currentFileHandle es null: llamar a showSaveFilePicker, guardar handle y escribir archivo
         if (typeof window !== 'undefined' && typeof window.showSaveFilePicker === 'function') {
           try {
             const safeTitle = (lesson.title || 'lesson')
@@ -1084,6 +1145,17 @@ export const useLessonStore = create<LessonState>()(
                 },
               ],
             });
+
+            const hasPermission = await ensureWritePermission(handle);
+            if (!hasPermission) {
+              set({
+                saveFeedback: {
+                  message: 'Permiso de escritura denegado',
+                  timestamp: Date.now(),
+                },
+              });
+              return false;
+            }
 
             const writable = await handle.createWritable();
             await writable.write(jsonContent);
@@ -1118,10 +1190,11 @@ export const useLessonStore = create<LessonState>()(
         return true;
       },
 
-      saveLessonAs: async () => {
+      saveLessonCopy: async () => {
         const { lesson } = get();
         const jsonContent = JSON.stringify(lesson, null, 2);
 
+        // Forzar SIEMPRE la apertura de showSaveFilePicker() para seleccionar una nueva ruta o nombre
         if (typeof window !== 'undefined' && typeof window.showSaveFilePicker === 'function') {
           try {
             const safeTitle = (lesson.title || 'lesson')
@@ -1143,10 +1216,22 @@ export const useLessonStore = create<LessonState>()(
               ],
             });
 
+            const hasPermission = await ensureWritePermission(handle);
+            if (!hasPermission) {
+              set({
+                saveFeedback: {
+                  message: 'Permiso de escritura denegado',
+                  timestamp: Date.now(),
+                },
+              });
+              return false;
+            }
+
             const writable = await handle.createWritable();
             await writable.write(jsonContent);
             await writable.close();
 
+            // Guardar el nuevo fileHandle en currentFileHandle
             set({
               currentFileHandle: handle,
               fileHandle: handle,
@@ -1164,7 +1249,7 @@ export const useLessonStore = create<LessonState>()(
           }
         }
 
-        // Fallback
+        // Fallback para navegadores sin File System Access API
         exportLessonToFile(lesson);
         set({
           hasUnsavedChanges: false,
@@ -1174,6 +1259,10 @@ export const useLessonStore = create<LessonState>()(
           },
         });
         return true;
+      },
+
+      saveLessonAs: async () => {
+        return get().saveLessonCopy();
       },
 
       openLessonWithPicker: async () => {
