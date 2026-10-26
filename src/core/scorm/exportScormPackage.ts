@@ -81,6 +81,7 @@ function buildStandaloneStudentHtml(lesson: Lesson): string {
     }
     .slide-title { font-size: 1.35rem; font-weight: 800; color: #1e293b; margin-bottom: 0.25rem; }
     .slide-subtitle { font-size: 0.95rem; font-weight: 500; color: #64748b; margin-bottom: 1.25rem; }
+    .slide-card u { text-decoration: underline; text-decoration-color: #6366f1; text-decoration-thickness: 2px; text-underline-offset: 3px; font-weight: 600; }
     .stage-layout { display: flex; flex-direction: column; gap: 1.5rem; }
     @media (min-width: 900px) {
       .stage-layout.split-50 { display: grid; grid-template-columns: 5fr 7fr; gap: 1.75rem; }
@@ -255,6 +256,126 @@ function buildStandaloneStudentHtml(lesson: Lesson): string {
       pointer-events: none;
       z-index: 9999;
     }
+    /* Buckets Matching Styles */
+    .matching-pool-container {
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      border-radius: 0.85rem;
+      padding: 1rem;
+      margin-bottom: 1.25rem;
+    }
+    .matching-pool-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 0.75rem;
+      font-size: 0.8rem;
+    }
+    .matching-chips-wrap {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      min-height: 40px;
+    }
+    .matching-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      padding: 0.4rem 0.85rem;
+      border-radius: 0.65rem;
+      font-size: 0.85rem;
+      font-weight: 600;
+      background: #ffffff;
+      color: #1e293b;
+      border: 1.5px solid #cbd5e1;
+      box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+      cursor: pointer;
+      user-select: none;
+      transition: all 0.15s;
+    }
+    .matching-chip:hover:not(:disabled) {
+      border-color: #6366f1;
+      background: #f8fafc;
+      transform: translateY(-1px);
+    }
+    .matching-chip.selected {
+      background: #4f46e5;
+      color: #ffffff;
+      border-color: #4338ca;
+      box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.25);
+    }
+    .matching-chip.correct {
+      background: #ecfdf5;
+      color: #065f46;
+      border-color: #10b981;
+    }
+    .matching-chip.incorrect {
+      background: #fff1f2;
+      color: #9f1239;
+      border-color: #f43f5e;
+    }
+    .matching-chip.example {
+      background: #f1f5f9;
+      color: #475569;
+      border-color: #cbd5e1;
+      cursor: default;
+    }
+    .buckets-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 1rem;
+      width: 100%;
+    }
+    .bucket-card {
+      background: #ffffff;
+      border: 1.5px solid #e2e8f0;
+      border-top-width: 4px;
+      border-radius: 0.85rem;
+      padding: 0.85rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+      min-height: 140px;
+      transition: all 0.15s;
+      cursor: pointer;
+    }
+    .bucket-card.droppable-hover {
+      border-color: #6366f1;
+      background: #eef2ff;
+      box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.2);
+    }
+    .bucket-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid #f1f5f9;
+      padding-bottom: 0.4rem;
+    }
+    .bucket-title {
+      font-size: 0.85rem;
+      font-weight: 800;
+      color: #1e293b;
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+    }
+    .bucket-badge {
+      font-size: 0.75rem;
+      font-weight: 700;
+      padding: 0.1rem 0.45rem;
+      border-radius: 0.35rem;
+      background: #f1f5f9;
+      color: #64748b;
+    }
+    .bucket-zone {
+      display: flex;
+      flex-direction: column;
+      gap: 0.4rem;
+      flex: 1;
+      min-height: 50px;
+      padding: 0.25rem;
+      border-radius: 0.5rem;
+    }
   </style>
 </head>
 <body>
@@ -422,8 +543,23 @@ function buildStandaloneStudentHtml(lesson: Lesson): string {
     // Lesson Application State
     let lessonData = window.__LESSON_DATA__;
     let currentSlideIndex = 0;
+    let selectedChipId = null;
     const studentAnswers = {};
     const slideEvaluations = {};
+
+    function formatPromptHtml(text) {
+      if (text === null || text === undefined || text === '') return '';
+      let res = String(text)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/&lt;(\\/)?(u|b|strong|em|i)&gt;/gi, '<$1$2>');
+      res = res.replace(/\\*\\*(.*?)\\*\\*/g, '<strong>$1</strong>');
+      res = res.replace(/__(.*?)__/g, '<strong>$1</strong>');
+      res = res.replace(/\\*(.*?)\\*/g, '<em>$1</em>');
+      res = res.replace(/\\[\\s*(\\d{1,2})\\s*\\]/g, '<span class="ref-badge">[ $1 ]</span>');
+      return res;
+    }
 
     function initLesson() {
       initScorm();
@@ -435,6 +571,7 @@ function buildStandaloneStudentHtml(lesson: Lesson): string {
     function renderSlide(index) {
       if (!lessonData.slides || lessonData.slides.length === 0) return;
       currentSlideIndex = Math.max(0, Math.min(index, lessonData.slides.length - 1));
+      selectedChipId = null;
       const slide = lessonData.slides[currentSlideIndex];
 
       document.getElementById('slide-indicator').textContent = (currentSlideIndex + 1) + ' / ' + lessonData.slides.length;
@@ -442,7 +579,7 @@ function buildStandaloneStudentHtml(lesson: Lesson): string {
       document.getElementById('next-btn').disabled = currentSlideIndex === lessonData.slides.length - 1;
 
       document.getElementById('stage-title').textContent = slide.title || '';
-      document.getElementById('stage-subtitle').textContent = slide.subtitle || (slide.interaction && slide.interaction.instruction) || '';
+      document.getElementById('stage-subtitle').innerHTML = formatPromptHtml(slide.subtitle || (slide.interaction && slide.interaction.instruction) || '');
 
       const stage = document.getElementById('stage-layout');
       stage.innerHTML = '';
@@ -553,7 +690,7 @@ function buildStandaloneStudentHtml(lesson: Lesson): string {
           if (item.isExample) {
             const exDiv = document.createElement('div');
             exDiv.className = 'item-example';
-            exDiv.innerHTML = '<span class="example-badge">✓ Ejemplo</span> <strong>' + (item.prompt || '1.') + '</strong> <span>' + (item.expectedAnswer || '') + '</span>';
+            exDiv.innerHTML = '<span class="example-badge">✓ Ejemplo</span> <strong>' + formatPromptHtml(item.prompt || '1.') + '</strong> <span>' + formatPromptHtml(item.expectedAnswer || '') + '</span>';
             container.appendChild(exDiv);
             return;
           }
@@ -567,24 +704,28 @@ function buildStandaloneStudentHtml(lesson: Lesson): string {
             row.className += isCorrect ? ' correct' : ' incorrect';
           }
 
-          let promptHtml = item.prompt || ('Item ' + (idx + 1));
-          if (promptHtml.includes('{{blank}}')) {
-            const inputHtml = '<input type="text" class="blank-input ' + (isEvaluated ? (isCorrect ? 'correct' : 'incorrect') : '') + '" data-key="' + itemKey + '" value="' + (answers[itemKey] || '') + '" placeholder="escribe aquí..." oninput="handleInput(this, \\'' + slideId + '\\')" />';
-            row.innerHTML = '<div>' + promptHtml.replace('{{blank}}', inputHtml) + '</div>';
+          let promptRaw = item.prompt || ('Item ' + (idx + 1));
+          let formattedPrompt = formatPromptHtml(promptRaw);
+          const ph = item.placeholder ? item.placeholder : (promptRaw.includes('{{blank}}') ? 'escribe aquí...' : 'Tu respuesta...');
+          if (promptRaw.includes('{{blank}}')) {
+            const inputHtml = '<input type="text" class="blank-input ' + (isEvaluated ? (isCorrect ? 'correct' : 'incorrect') : '') + '" data-key="' + itemKey + '" value="' + (answers[itemKey] || '') + '" placeholder="' + ph + '" oninput="handleInput(this, \\'' + slideId + '\\')" />';
+            row.innerHTML = '<div>' + formattedPrompt.replace('{{blank}}', inputHtml) + '</div>';
           } else {
-            row.innerHTML = '<div style="font-weight: 600; margin-bottom: 0.35rem;">' + promptHtml + '</div>' +
-              '<input type="text" class="blank-input ' + (isEvaluated ? (isCorrect ? 'correct' : 'incorrect') : '') + '" data-key="' + itemKey + '" value="' + (answers[itemKey] || '') + '" placeholder="Tu respuesta..." oninput="handleInput(this, \\'' + slideId + '\\')" />';
+            row.innerHTML = '<div style="font-weight: 600; margin-bottom: 0.35rem;">' + formattedPrompt + '</div>' +
+              '<input type="text" class="blank-input ' + (isEvaluated ? (isCorrect ? 'correct' : 'incorrect') : '') + '" data-key="' + itemKey + '" value="' + (answers[itemKey] || '') + '" placeholder="' + ph + '" oninput="handleInput(this, \\'' + slideId + '\\')" />';
           }
 
           if (isEvaluated && !isCorrect) {
             const hint = document.createElement('div');
             hint.className = 'feedback-hint';
-            hint.textContent = 'Respuesta correcta: ' + item.expectedAnswer;
+            hint.innerHTML = 'Respuesta correcta: <strong>' + formatPromptHtml(item.expectedAnswer || '') + '</strong>';
             row.appendChild(hint);
           }
 
           container.appendChild(row);
         });
+      } else if (interaction.type === 'buckets_matching' || interaction.type === 'matching' || (lessonData.slides[currentSlideIndex] && lessonData.slides[currentSlideIndex].format === 'buckets')) {
+        renderBucketsMatching(interaction, container, slideId);
       } else if (interaction.type === 'selection' && Array.isArray(interaction.questions)) {
         interaction.questions.forEach((q, qIdx) => {
           const qKey = 'select-' + (q.id || qIdx);
@@ -648,6 +789,161 @@ function buildStandaloneStudentHtml(lesson: Lesson): string {
       }
     }
 
+    function renderBucketsMatching(interaction, container, slideId) {
+      const targetSlots = (interaction.targetSlots && interaction.targetSlots.length > 0)
+        ? interaction.targetSlots
+        : (interaction.buckets || []);
+      const sourceItems = (interaction.sourceItems && interaction.sourceItems.length > 0)
+        ? interaction.sourceItems
+        : (interaction.tokens || []);
+      const correctPairs = interaction.correctPairs || {};
+      const answers = studentAnswers[slideId] || {};
+      const evalState = slideEvaluations[slideId];
+      const isEvaluated = evalState && evalState.submitted;
+
+      // 1. Unassigned chips pool
+      const unassigned = sourceItems.filter(item => !item.isExample && !answers[item.id]);
+
+      const poolCard = document.createElement('div');
+      poolCard.className = 'matching-pool-container';
+
+      const poolHeader = document.createElement('div');
+      poolHeader.className = 'matching-pool-header';
+      poolHeader.innerHTML = '<strong>Fichas por ubicar (' + unassigned.length + '):</strong>' +
+        '<span style="color: #64748b;">Haz clic en una ficha y luego en un contenedor o arrástrala</span>';
+      poolCard.appendChild(poolHeader);
+
+      const chipsWrap = document.createElement('div');
+      chipsWrap.className = 'matching-chips-wrap';
+
+      if (unassigned.length === 0) {
+        chipsWrap.innerHTML = '<span style="color: #64748b; font-style: italic; font-size: 0.85rem; padding: 0.5rem 0;">¡Todas las fichas han sido ubicadas!</span>';
+      } else {
+        unassigned.forEach(item => {
+          const chip = document.createElement('button');
+          chip.type = 'button';
+          chip.className = 'matching-chip' + (selectedChipId === item.id ? ' selected' : '');
+          chip.innerHTML = formatPromptHtml(item.text || item.label || item.id);
+          chip.disabled = isEvaluated;
+          chip.draggable = !isEvaluated;
+
+          chip.ondragstart = function(e) {
+            e.dataTransfer.setData('text/plain', item.id);
+            selectedChipId = item.id;
+          };
+
+          chip.onclick = function() {
+            if (isEvaluated) return;
+            selectedChipId = (selectedChipId === item.id) ? null : item.id;
+            renderSlide(currentSlideIndex);
+          };
+
+          chipsWrap.appendChild(chip);
+        });
+      }
+      poolCard.appendChild(chipsWrap);
+      container.appendChild(poolCard);
+
+      // 2. Target Slots Grid
+      const grid = document.createElement('div');
+      grid.className = 'buckets-grid';
+
+      targetSlots.forEach((slot, slotIdx) => {
+        const slotCard = document.createElement('div');
+        slotCard.className = 'bucket-card';
+        const slotColor = slot.color || ['#4f46e5', '#0284c7', '#059669', '#d97706', '#db2777'][slotIdx % 5];
+        slotCard.style.borderTopColor = slotColor;
+
+        // Items assigned to this slot
+        const assigned = sourceItems.filter(item => {
+          if (item.isExample) {
+            let expTarget = item.correctTargetId || item.correctBucketId;
+            if (!expTarget && correctPairs) {
+              if (Array.isArray(correctPairs)) {
+                const pair = correctPairs.find(p => p && p.sourceId === item.id);
+                if (pair) expTarget = pair.targetId;
+              } else if (typeof correctPairs === 'object') {
+                expTarget = correctPairs[item.id];
+              }
+            }
+            return expTarget === slot.id || (slot.label && expTarget === slot.label);
+          }
+          return answers[item.id] === slot.id;
+        });
+
+        const header = document.createElement('div');
+        header.className = 'bucket-header';
+        header.innerHTML = '<span class="bucket-title"><span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:' + slotColor + ';"></span>' +
+          formatPromptHtml(slot.label || slot.title || ('Contenedor ' + (slotIdx + 1))) + '</span>' +
+          '<span class="bucket-badge">' + assigned.length + '</span>';
+        slotCard.appendChild(header);
+
+        const dropzone = document.createElement('div');
+        dropzone.className = 'bucket-zone';
+
+        slotCard.ondragover = function(e) {
+          if (isEvaluated) return;
+          e.preventDefault();
+          slotCard.classList.add('droppable-hover');
+        };
+        slotCard.ondragleave = function() {
+          slotCard.classList.remove('droppable-hover');
+        };
+        slotCard.ondrop = function(e) {
+          if (isEvaluated) return;
+          e.preventDefault();
+          slotCard.classList.remove('droppable-hover');
+          const itemId = e.dataTransfer.getData('text/plain') || selectedChipId;
+          if (itemId) {
+            if (!studentAnswers[slideId]) studentAnswers[slideId] = {};
+            studentAnswers[slideId][itemId] = slot.id;
+            selectedChipId = null;
+            renderSlide(currentSlideIndex);
+          }
+        };
+
+        slotCard.onclick = function() {
+          if (isEvaluated) return;
+          if (selectedChipId) {
+            if (!studentAnswers[slideId]) studentAnswers[slideId] = {};
+            studentAnswers[slideId][selectedChipId] = slot.id;
+            selectedChipId = null;
+            renderSlide(currentSlideIndex);
+          }
+        };
+
+        assigned.forEach(item => {
+          const chip = document.createElement('div');
+          chip.className = 'matching-chip';
+          if (item.isExample) {
+            chip.className += ' example';
+            chip.innerHTML = '<span>' + formatPromptHtml(item.text || item.label || item.id) + '</span><span class="example-badge" style="font-size:0.65rem;">✓ Ejemplo</span>';
+          } else {
+            if (isEvaluated) {
+              const isCorrect = evalState && evalState.details && evalState.details[item.id];
+              chip.className += isCorrect ? ' correct' : ' incorrect';
+              chip.innerHTML = '<span>' + formatPromptHtml(item.text || item.label || item.id) + '</span><span>' + (isCorrect ? '✓' : '✗') + '</span>';
+            } else {
+              chip.innerHTML = '<span>' + formatPromptHtml(item.text || item.label || item.id) + '</span><span style="font-size: 0.75rem; color: #94a3b8; margin-left: 0.25rem;">✕</span>';
+              chip.title = 'Haz clic para remover';
+              chip.onclick = function(e) {
+                e.stopPropagation();
+                if (isEvaluated) return;
+                delete studentAnswers[slideId][item.id];
+                renderSlide(currentSlideIndex);
+              };
+            }
+          }
+          dropzone.appendChild(chip);
+        });
+
+        slotCard.appendChild(dropzone);
+        grid.appendChild(slotCard);
+      });
+
+      container.appendChild(grid);
+    }
+
     function handleInput(input, slideId) {
       const key = input.getAttribute('data-key');
       if (!studentAnswers[slideId]) studentAnswers[slideId] = {};
@@ -675,6 +971,50 @@ function buildStandaloneStudentHtml(lesson: Lesson): string {
           const isOk = acceptable.some(ans => ans === userVal);
           if (isOk) score++;
           details[key] = isOk;
+        });
+      } else if (inter.type === 'buckets_matching' || inter.type === 'matching' || (slide && slide.format === 'buckets')) {
+        const sourceItems = (inter.sourceItems && inter.sourceItems.length > 0)
+          ? inter.sourceItems
+          : (inter.tokens || []);
+        const targetSlots = (inter.targetSlots && inter.targetSlots.length > 0)
+          ? inter.targetSlots
+          : (inter.buckets || []);
+        const correctPairs = inter.correctPairs || {};
+
+        sourceItems.forEach((item, idx) => {
+          if (item.isExample) return;
+          maxScore++;
+          const assignedSlotId = answers[item.id];
+
+          let expectedSlotId = null;
+          if (typeof correctPairs === 'object' && !Array.isArray(correctPairs) && correctPairs[item.id]) {
+            expectedSlotId = correctPairs[item.id];
+          } else if (Array.isArray(correctPairs)) {
+            const pair = correctPairs.find(p => p && p.sourceId === item.id);
+            if (pair) expectedSlotId = pair.targetId;
+          }
+          if (!expectedSlotId) {
+            expectedSlotId = item.correctTargetId || item.correctBucketId;
+          }
+
+          let isOk = false;
+          if (assignedSlotId && expectedSlotId) {
+            const aId = String(assignedSlotId).toLowerCase().trim();
+            const eId = String(expectedSlotId).toLowerCase().trim();
+            if (aId === eId) {
+              isOk = true;
+            } else {
+              const target = targetSlots.find(ts => ts.id === assignedSlotId);
+              if (target) {
+                const tId = String(target.id || '').toLowerCase().trim();
+                const tLabel = String(target.label || '').toLowerCase().trim();
+                isOk = (tId === eId || tLabel === eId || tLabel.startsWith(eId));
+              }
+            }
+          }
+
+          if (isOk) score++;
+          details[item.id] = isOk;
         });
       } else if (inter.type === 'selection' && Array.isArray(inter.questions)) {
         inter.questions.forEach((q, idx) => {
@@ -721,6 +1061,7 @@ function buildStandaloneStudentHtml(lesson: Lesson): string {
     function resetCurrentSlide() {
       const slide = lessonData.slides[currentSlideIndex];
       if (!slide) return;
+      selectedChipId = null;
       delete studentAnswers[slide.id];
       delete slideEvaluations[slide.id];
       renderSlide(currentSlideIndex);

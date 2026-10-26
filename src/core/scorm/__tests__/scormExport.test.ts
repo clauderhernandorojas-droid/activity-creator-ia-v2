@@ -180,6 +180,77 @@ describe('SCORM 1.2 Integration Suite', () => {
       expect(htmlText).toContain('cmi.core.score.raw');
       expect(htmlText).toContain('Comprobar Respuestas');
     });
+
+    it('packages lesson containing buckets_matching interaction and renders matching zones, chips and scoring runtime', async () => {
+      const matchingLesson: Lesson = {
+        id: 'lesson-matching-1',
+        title: 'Matching Opposites',
+        level: 'A1-A2',
+        unit: 'Unit 1',
+        slides: [
+          {
+            id: 'slide-match',
+            title: 'Opposites Match',
+            subtitle: 'Match the <u>underlined</u> words with their opposites',
+            format: 'buckets',
+            layout: 'single_column',
+            interaction: {
+              id: 'int-match-1',
+              type: 'buckets_matching',
+              instruction: 'Match each adjective to its opposite:',
+              buckets: [
+                { id: 'slot-1', label: 'Hot' },
+                { id: 'slot-2', label: 'Big' },
+              ],
+              tokens: [
+                { id: 'src-1', text: 'Cold', correctBucketId: 'slot-1' },
+                { id: 'src-2', text: 'Small', correctBucketId: 'slot-2' },
+              ],
+              targetSlots: [
+                { id: 'slot-1', label: 'Hot' },
+                { id: 'slot-2', label: 'Big' },
+              ],
+              sourceItems: [
+                { id: 'src-1', text: 'Cold', correctTargetId: 'slot-1' },
+                { id: 'src-2', text: 'Small', correctTargetId: 'slot-2' },
+              ],
+              correctPairs: {
+                'src-1': 'slot-1',
+                'src-2': 'slot-2',
+              },
+            },
+            isGraded: true,
+          },
+        ],
+      };
+
+      const zipBlob = await exportScormPackage(matchingLesson);
+      const unzipped = await JSZip.loadAsync(zipBlob);
+      const htmlFile = unzipped.file('index.html');
+      expect(htmlFile).not.toBeNull();
+
+      const html = await htmlFile!.async('string');
+      // Verify buckets_matching runtime functions, classes and styles
+      expect(html).toContain('renderBucketsMatching');
+      expect(html).toContain('matching-pool-container');
+      expect(html).toContain('matching-chip');
+      expect(html).toContain('bucket-card');
+      expect(html).toContain('formatPromptHtml');
+      // Serialized lesson JSON safely escapes < and > to prevent script injection
+      expect(html).toContain('\\u003cu\\u003eunderlined\\u003c/u\\u003e');
+
+      // Verify formatPromptHtml function syntax and execution without ReferenceError
+      const fnMatch = html.match(/function formatPromptHtml\(text\)\s*\{[\s\S]*?\n    \}/);
+      expect(fnMatch).not.toBeNull();
+      // Execute the extracted runtime function in test environment
+      const formatPromptFn = new Function('text', `${fnMatch![0]}; return formatPromptHtml(text);`);
+      expect(() => formatPromptFn('test')).not.toThrow();
+      expect(formatPromptFn(null)).toBe('');
+      expect(formatPromptFn(undefined)).toBe('');
+      expect(formatPromptFn('')).toBe('');
+      expect(formatPromptFn('The <u>underlined</u> and **bold** text')).toBe('The <u>underlined</u> and <strong>bold</strong> text');
+      expect(formatPromptFn('Dangerous <script>alert(1)</script>')).toBe('Dangerous &lt;script&gt;alert(1)&lt;/script&gt;');
+    });
   });
 
   describe('4. useLessonStore.exportLessonAsScorm()', () => {

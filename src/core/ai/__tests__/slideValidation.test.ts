@@ -6145,6 +6145,13 @@ Many people think Marco Polo was the first European to travel to China. However,
       // Al ser respuestas de 1 palabra (<= 3 palabras), no se debe forzar reescritura de oraciones
       expect(normalized.interaction.instruction).toBe(originalInstruction);
     });
+
+    it('6. buildExtractionPrompt exige preservar marcado tipográfico (subrayados <u> y negritas **) en reactivos', () => {
+      const prompt = buildExtractionPrompt(1);
+      expect(prompt).toContain('PRESERVACIÓN Y MARCADO TIPOGRÁFICO DE FOCO (SUBRAYADOS Y NEGRITAS)');
+      expect(prompt).toContain('<u>palabra</u>');
+      expect(prompt).toContain('**palabra**');
+    });
   });
 });
 

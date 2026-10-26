@@ -5939,6 +5939,10 @@ CANONICAL ARCHETYPES:
          * Formular la 'instruction' siempre de manera explícita como una tarea de reescritura completa:
            Ejemplo: 'Rewrite each sentence, correcting the mistake.' (o su equivalente según el idioma y contexto del libro).
          * Si el esquema soporta 'placeholder' en los reactivos, establecer un placeholder orientativo como: 'Write the complete corrected sentence...'.
+     * PRESERVACIÓN Y MARCADO TIPOGRÁFICO DE FOCO (SUBRAYADOS Y NEGRITAS):
+       - Cuando el texto impreso del libro contenga palabras subrayadas o destacadas de foco (ej. consignas como 'underlined words', 'words in bold', 'choose the correct form of the underlined verb', etc.):
+         * El modelo DEBE conservar OBLIGATORIAMENTE el marcado tipográfico en los 'prompt' de los reactivos utilizando '<u>palabra</u>' para palabras subrayadas y '**palabra**' para palabras en negrita.
+         * Queda estrictamente PROHIBIDO eliminar las etiquetas o transcribir las palabras de foco como texto plano sin formato, ya que el alumno necesita identificar con precisión el segmento evaluado.
      * STRICT PROHIBITION AGAINST DEGRADING CLOSED SELECTION: It is STRICTLY FORBIDDEN to degrade closed-selection exercises (e.g. options separated by slashes "was / were", bold contrasting words, or instructions like "Circle/Choose the correct word/number") into free-text input fields ("input_fields"). Never fragment sentences artificially or force the student to type what they were only meant to select!
      * MISSING LETTERS / VOWELS EXERCISES (e.g. "Write the vowels", "Fill in the missing letters"):
        - NO MICROSCOPIC LETTER FRAGMENTATION: DO NOT fragment words into multiple tiny single-letter inputs (e.g. NEVER generate separate inputs for each missing letter in "v_ll_yb_ll"). Each interactive input field MUST correspond to the whole completed word that the student writes (expectedAnswer: "volleyball"). The prompt or prefix can show the partial word pattern (e.g. "v_ll_yb_ll").
