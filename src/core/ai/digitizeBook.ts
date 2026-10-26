@@ -31,6 +31,7 @@ export type ForcedTargetArchetype =
 
 export {
   normalizeSlide,
+  normalizeCorrectionToRewriteDirective,
   parseMatchingPairsFromText,
   parseSequentialAnswerKeyFromText,
   extractNumberedPremises,
@@ -568,7 +569,8 @@ export const STRUCTURED_SLIDE_SCHEMA = {
                     acceptedAnswers: { type: 'array', items: { type: 'string' }, description: 'All acceptable variants including contractions' },
                     hint: { type: 'string' },
                     explanation: { type: 'string' },
-                    isExample: { type: 'boolean', description: 'true if item was already solved as a sample in the textbook' }
+                    isExample: { type: 'boolean', description: 'true if item was already solved as a sample in the textbook' },
+                    placeholder: { type: 'string', description: 'Optional orientative placeholder for the input field (e.g. "Write the complete corrected sentence...")' }
                   },
                   required: ['id', 'prompt', 'acceptedAnswers']
                 }
@@ -5932,6 +5934,11 @@ CANONICAL ARCHETYPES:
      * NORMALIZACIÓN DE EJEMPLOS RESUELTOS (isExample: true):
        - Evitar recortar o truncar sintagmas del prompt si la respuesta ya contiene la estructura completa.
        - 'prompt' debe contener únicamente el prefijo u ordinal canónico ('1.') y 'expectedAnswer' la oración completa resuelta, renderizándose como bloque cerrado de lectura de modelo.
+     * EJERCICIOS DE DETECCIÓN Y CORRECCIÓN DE ERRORES (REESCRITURA COMPLETA):
+       - Cuando el ejercicio consista en corregir errores u oraciones ('Correct the mistake...', 'Find and correct...', etc.) y las respuestas esperadas ('acceptedAnswers') sean oraciones completas:
+         * Formular la 'instruction' siempre de manera explícita como una tarea de reescritura completa:
+           Ejemplo: 'Rewrite each sentence, correcting the mistake.' (o su equivalente según el idioma y contexto del libro).
+         * Si el esquema soporta 'placeholder' en los reactivos, establecer un placeholder orientativo como: 'Write the complete corrected sentence...'.
      * STRICT PROHIBITION AGAINST DEGRADING CLOSED SELECTION: It is STRICTLY FORBIDDEN to degrade closed-selection exercises (e.g. options separated by slashes "was / were", bold contrasting words, or instructions like "Circle/Choose the correct word/number") into free-text input fields ("input_fields"). Never fragment sentences artificially or force the student to type what they were only meant to select!
      * MISSING LETTERS / VOWELS EXERCISES (e.g. "Write the vowels", "Fill in the missing letters"):
        - NO MICROSCOPIC LETTER FRAGMENTATION: DO NOT fragment words into multiple tiny single-letter inputs (e.g. NEVER generate separate inputs for each missing letter in "v_ll_yb_ll"). Each interactive input field MUST correspond to the whole completed word that the student writes (expectedAnswer: "volleyball"). The prompt or prefix can show the partial word pattern (e.g. "v_ll_yb_ll").

@@ -888,7 +888,7 @@ export const InputFieldsRenderer: React.FC<Props> = ({
                             type="text"
                             value={item.isExample ? (item.expectedAnswer || userVal) : userVal}
                             disabled={isEvaluated || item.isExample}
-                            placeholder={item.isExample ? '' : (hasRealClueOnRight ? 'Palabra...' : openPlaceholder)}
+                            placeholder={item.isExample ? '' : (item.placeholder || (hasRealClueOnRight ? 'Palabra...' : openPlaceholder))}
                             onChange={(e) => onAnswerChange?.(item.id, e.target.value)}
                             className={`w-full text-sm rounded-xl ${hasRealClueOnRight ? 'px-3.5 py-2' : 'px-4 py-2.5'} outline-none font-semibold transition ${
                               item.isExample
@@ -966,7 +966,7 @@ export const InputFieldsRenderer: React.FC<Props> = ({
                           type="text"
                           value={item.isExample ? (item.expectedAnswer || userVal) : userVal}
                           disabled={isEvaluated || item.isExample}
-                          placeholder={item.isExample ? '' : openPlaceholder}
+                          placeholder={item.isExample ? '' : (item.placeholder || openPlaceholder)}
                           onChange={(e) => onAnswerChange?.(item.id, e.target.value)}
                           className={`w-full text-sm rounded-xl px-4 py-2.5 outline-none font-medium transition ${
                             item.isExample
@@ -1035,7 +1035,7 @@ export const InputFieldsRenderer: React.FC<Props> = ({
                             type="text"
                             value={item.isExample ? (item.expectedAnswer || userVal) : userVal}
                             disabled={isEvaluated || item.isExample}
-                            placeholder={item.isExample ? '' : (item.hint ? item.hint : '...')}
+                            placeholder={item.isExample ? '' : (item.placeholder || (item.hint ? item.hint : '...'))}
                             onChange={(e) => onAnswerChange?.(item.id, e.target.value)}
                             style={{
                               width: `${Math.max(

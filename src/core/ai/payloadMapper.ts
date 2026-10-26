@@ -321,6 +321,90 @@ export function extractNumberedPremises(text?: string | null): NumberedPremise[]
 }
 
 /**
+ * Normalización Defensiva de Consignas de Corrección a Reescritura Completa:
+ * Detecta si 'interaction.type === "input_fields"' y las respuestas de 'listItems' o 'acceptedAnswers'
+ * son predominantemente oraciones completas (longitud promedio > 3 palabras).
+ * Si la 'instruction' o subtítulo contiene patrones de consigna ambigua (/correct the mistake/i, /find and correct/i)
+ * sin mencionar 'rewrite', normaliza la consigna pedagógica a 'Rewrite each sentence, correcting the mistake.'
+ * y establece un placeholder orientativo ('Write the complete corrected sentence...') en los reactivos.
+ */
+export function normalizeCorrectionToRewriteDirective(rawSlide: any): void {
+  if (!rawSlide || !rawSlide.interaction || rawSlide.interaction.type !== 'input_fields') {
+    return;
+  }
+
+  const it = rawSlide.interaction;
+  const listItems = Array.isArray(it.listItems)
+    ? it.listItems
+    : Array.isArray(it.items)
+    ? it.items
+    : [];
+
+  if (listItems.length === 0) return;
+
+  // Recopilar respuestas para calcular promedio de palabras
+  const answers: string[] = [];
+  for (const item of listItems) {
+    if (typeof item?.expectedAnswer === 'string' && item.expectedAnswer.trim()) {
+      answers.push(item.expectedAnswer.trim());
+    } else if (Array.isArray(item?.acceptedAnswers) && item.acceptedAnswers.length > 0) {
+      const first = item.acceptedAnswers[0];
+      if (typeof first === 'string' && first.trim()) {
+        answers.push(first.trim());
+      }
+    }
+  }
+
+  if (answers.length === 0) return;
+
+  const totalWords = answers.reduce((sum, ans) => {
+    return sum + ans.split(/\s+/).filter(Boolean).length;
+  }, 0);
+  const avgWords = totalWords / answers.length;
+
+  // Predominantemente oraciones completas: longitud promedio > 3 palabras
+  if (avgWords <= 3) return;
+
+  // Patrones de consigna ambigua de corrección sin mención de rewrite
+  const mistakeCorrectionRegex =
+    /\b(?:correct\s+(?:the\s+)?mistakes?|find\s+and\s+correct(?:\s+the\s+mistakes?)?|find\s+the\s+mistakes?|corrige\s+(?:el|los)?\s*errores?)\b/i;
+  const mentionsRewrite = /\brewrite\b|\bre-write\b|\breescribe\b/i;
+
+  const inst = it.instruction || '';
+  const sub = rawSlide.subtitle || '';
+  const combined = `${inst} ${sub}`.trim();
+
+  const hasMistakePattern = mistakeCorrectionRegex.test(combined);
+  const alreadyMentionsRewrite = mentionsRewrite.test(combined);
+
+  if (hasMistakePattern && !alreadyMentionsRewrite) {
+    const canonicalRewriteDirective = 'Rewrite each sentence, correcting the mistake.';
+
+    // Normalizar la consigna pedagógica en interaction y slide
+    if (!it.instruction || mistakeCorrectionRegex.test(it.instruction)) {
+      it.instruction = canonicalRewriteDirective;
+    } else if (mistakeCorrectionRegex.test(sub)) {
+      it.instruction = canonicalRewriteDirective;
+    }
+
+    if (rawSlide.subtitle && mistakeCorrectionRegex.test(rawSlide.subtitle)) {
+      rawSlide.subtitle = canonicalRewriteDirective;
+    }
+
+    if ((rawSlide as any).instruction && mistakeCorrectionRegex.test((rawSlide as any).instruction)) {
+      (rawSlide as any).instruction = canonicalRewriteDirective;
+    }
+
+    // Establecer placeholder orientativo en reactivos sin placeholder
+    for (const item of listItems) {
+      if (item && !item.placeholder) {
+        item.placeholder = 'Write the complete corrected sentence...';
+      }
+    }
+  }
+}
+
+/**
  * Normalizes an extracted slide ensuring agnostic support for 'buckets_matching' (1-to-1 matching and categorization).
  * - Preserves type: 'buckets_matching' and sets format: 'buckets' (or 'matching').
  * - Syncs targetSlots, buckets, sourceItems, tokens, and correctPairs.
@@ -671,7 +755,6 @@ export function normalizeSlide(
         ? rawSlide.layout || 'split_50_50'
         : 'single_column';
       rawSlide.isGraded = true;
-      return rawSlide;
     } else {
       // Tiene listItems: asegurar layoutMode e items
       if (!it.items && it.listItems) {
@@ -679,6 +762,10 @@ export function normalizeSlide(
       }
       it.layoutMode = it.layoutMode || 'list';
     }
+
+    // Normalización Defensiva: Consignas de Corrección a Reescritura Completa
+    normalizeCorrectionToRewriteDirective(rawSlide);
+    return rawSlide;
   }
 
   // If slide already has another valid interaction, do not mutate unless forced

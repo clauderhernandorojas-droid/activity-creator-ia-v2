@@ -93,6 +93,7 @@ export const InputFieldListItemSchema = z.object({
   hint: z.string().optional(),
   explanation: z.string().optional(),
   isExample: z.boolean().optional(),
+  placeholder: z.string().optional(),
 }).passthrough();
 
 export const InputFieldTableCellSchema = z.object({

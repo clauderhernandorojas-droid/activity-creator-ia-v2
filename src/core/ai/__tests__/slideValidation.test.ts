@@ -6010,6 +6010,142 @@ Many people think Marco Polo was the first European to travel to China. However,
       expect(it.sourceItems[0].text).toBe('photos');
     });
   });
+
+  describe('Normalización de Consignas de Corrección a Reescritura Completa', () => {
+    it('1. buildExtractionPrompt incluye directiva pedagógica de reescritura completa para corrección de errores', () => {
+      const prompt = buildExtractionPrompt(1);
+      expect(prompt).toContain('EJERCICIOS DE DETECCIÓN Y CORRECCIÓN DE ERRORES (REESCRITURA COMPLETA)');
+      expect(prompt).toContain('Rewrite each sentence, correcting the mistake.');
+      expect(prompt).toContain('Write the complete corrected sentence...');
+    });
+
+    it('2. normalizeSlide normaliza consigna ambigua de corrección a "Rewrite each sentence, correcting the mistake." cuando las respuestas son oraciones completas (> 3 palabras)', () => {
+      const rawSlide: any = {
+        id: 'slide-correction-1',
+        title: 'Grammar Practice',
+        subtitle: 'Correct the mistakes in the sentences.',
+        interaction: {
+          id: 'int-corr-1',
+          type: 'input_fields',
+          instruction: 'Correct the mistake in each sentence.',
+          listItems: [
+            {
+              id: 'item-1',
+              prompt: '1. She didn\'t went to school yesterday.',
+              expectedAnswer: 'She did not go to school yesterday.',
+              acceptedAnswers: ['She did not go to school yesterday.', 'She didn\'t go to school yesterday.'],
+            },
+            {
+              id: 'item-2',
+              prompt: '2. They was playing soccer in the park.',
+              expectedAnswer: 'They were playing soccer in the park.',
+              acceptedAnswers: ['They were playing soccer in the park.'],
+            },
+          ],
+        },
+      };
+
+      const normalized = normalizeSlide(rawSlide);
+      expect(normalized.interaction.instruction).toBe('Rewrite each sentence, correcting the mistake.');
+      expect(normalized.subtitle).toBe('Rewrite each sentence, correcting the mistake.');
+
+      // Verifica que los reactivos recibieron el placeholder orientativo
+      const items = normalized.interaction.listItems;
+      expect(items[0].placeholder).toBe('Write the complete corrected sentence...');
+      expect(items[1].placeholder).toBe('Write the complete corrected sentence...');
+    });
+
+    it('3. normalizeSlide normaliza patrón "find and correct" en subtítulo cuando la instrucción está ausente', () => {
+      const rawSlide: any = {
+        id: 'slide-correction-2',
+        title: 'Past Simple Errors',
+        subtitle: 'Find and correct the mistakes',
+        interaction: {
+          id: 'int-corr-2',
+          type: 'input_fields',
+          listItems: [
+            {
+              id: 'item-1',
+              prompt: '1. I seen a great movie last night.',
+              expectedAnswer: 'I saw a great movie last night.',
+              acceptedAnswers: ['I saw a great movie last night.'],
+            },
+            {
+              id: 'item-2',
+              prompt: '2. He don\'t like the food at all.',
+              expectedAnswer: 'He does not like the food at all.',
+              acceptedAnswers: ['He does not like the food at all.'],
+            },
+          ],
+        },
+      };
+
+      const normalized = normalizeSlide(rawSlide);
+      expect(normalized.interaction.instruction).toBe('Rewrite each sentence, correcting the mistake.');
+      expect(normalized.subtitle).toBe('Rewrite each sentence, correcting the mistake.');
+      expect(normalized.interaction.listItems[0].placeholder).toBe('Write the complete corrected sentence...');
+    });
+
+    it('4. normalizeSlide NO altera consigna si ya menciona explícitamente "rewrite"', () => {
+      const originalInstruction = 'Rewrite each sentence, correcting the grammatical mistake.';
+      const rawSlide: any = {
+        id: 'slide-correction-3',
+        title: 'Grammar Correction',
+        subtitle: 'Rewriting activity',
+        interaction: {
+          id: 'int-corr-3',
+          type: 'input_fields',
+          instruction: originalInstruction,
+          listItems: [
+            {
+              id: 'item-1',
+              prompt: '1. She have two brothers.',
+              expectedAnswer: 'She has two brothers.',
+              acceptedAnswers: ['She has two brothers.'],
+              placeholder: 'Custom placeholder...',
+            },
+          ],
+        },
+      };
+
+      const normalized = normalizeSlide(rawSlide);
+      expect(normalized.interaction.instruction).toBe(originalInstruction);
+      // Preserva el placeholder customizado existente
+      expect(normalized.interaction.listItems[0].placeholder).toBe('Custom placeholder...');
+    });
+
+    it('5. normalizeSlide NO altera consigna si las respuestas esperadas son cortas (<= 3 palabras, e.g. corrección léxica puntual)', () => {
+      const originalInstruction = 'Correct the mistake in bold:';
+      const rawSlide: any = {
+        id: 'slide-correction-4',
+        title: 'Vocabulary Correction',
+        subtitle: 'Single word fixes',
+        interaction: {
+          id: 'int-corr-4',
+          type: 'input_fields',
+          instruction: originalInstruction,
+          listItems: [
+            {
+              id: 'item-1',
+              prompt: '1. She *goed* to the market.',
+              expectedAnswer: 'went',
+              acceptedAnswers: ['went'],
+            },
+            {
+              id: 'item-2',
+              prompt: '2. He is *gooder* than me.',
+              expectedAnswer: 'better',
+              acceptedAnswers: ['better'],
+            },
+          ],
+        },
+      };
+
+      const normalized = normalizeSlide(rawSlide);
+      // Al ser respuestas de 1 palabra (<= 3 palabras), no se debe forzar reescritura de oraciones
+      expect(normalized.interaction.instruction).toBe(originalInstruction);
+    });
+  });
 });
 
 
